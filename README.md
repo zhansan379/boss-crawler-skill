@@ -17,7 +17,7 @@
 在 Claude Code 中输入：
 
 ```
-请帮我安装这个 skill：https://github.com/yourusername/boss-crawler-skills
+请帮我安装这个 skill：https://github.com/zhansan379/boss-crawler-skill.git
 ```
 
 Claude 会自动克隆仓库、安装依赖、注册 skill。完成后输入 `/boss-crawler` 即可使用。
