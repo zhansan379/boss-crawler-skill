@@ -118,9 +118,6 @@ co = ChromiumOptions()
 USER_DATA_DIR = os.path.abspath('./chrome_user_data')
 co.set_argument('--user-data-dir', USER_DATA_DIR)
 
-# 性能优化：禁用图片加载（最大优化项），详情页不需要看公司 Logo/海报
-co.set_argument('--blink-settings=imagesEnabled=false')
-
 # ==================== Sleep 配置 ====================
 
 
