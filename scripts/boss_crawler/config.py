@@ -114,6 +114,9 @@ CSV_FIELDS = [
 co = ChromiumOptions()
 # 不手动指定浏览器路径，让 DrissionPage 自动查找 Chrome
 
+# 显式启用图片加载
+co.no_imgs(False)
+
 # 持久化 Chrome 用户数据目录，使登录状态跨脚本运行保留
 USER_DATA_DIR = os.path.abspath('./chrome_user_data')
 co.set_argument('--user-data-dir', USER_DATA_DIR)
