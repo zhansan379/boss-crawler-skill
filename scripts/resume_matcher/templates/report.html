@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简历匹配分析 - Bauhaus Style</title>
+
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script>
+    // Lucide fallback: emoji when CDN blocked
+    window.addEventListener("DOMContentLoaded", function() {
+        if (typeof lucide === "undefined") {
+            var map = {info:"ℹ️","arrow-down":"↓","refresh-cw":"🔄","x-circle":"❌","alert-triangle":"⚠️","check-circle":"✅","briefcase":"💼","external-link":"🔗","alert-circle":"⚠️","chevron-down":"▼","chevron-up":"▲"};
+            document.querySelectorAll("[data-lucide]").forEach(function(el) { el.textContent = map[el.getAttribute("data-lucide")] || "•"; });
+        }
+    });
+    </script>
+
+<style>
+/* ========================================
+   Bauhaus Design Tokens
+   ======================================== */
+:root {
+    --background: #F0F0F0;
+    --foreground: #121212;
+    --primary-red: #D02020;
+    --primary-blue: #1040C0;
+    --primary-yellow: #F0C020;
+    --border: #121212;
+    --muted: #E0E0E0;
+    --border-width-mobile: 2px;
+    --border-width-desktop: 4px;
+    --shadow-small: 3px 3px 0px 0px var(--foreground);
+    --shadow-medium: 4px 4px 0px 0px var(--foreground);
+    --shadow-large: 6px 6px 0px 0px var(--foreground);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Outfit', -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background-color: var(--background);
+    color: var(--foreground);
+    line-height: 1.6;
+    overflow-x: hidden;
+    padding-top: 60px;
+}
+
+html { scroll-behavior: smooth; }
+section[id] { scroll-margin-top: 80px; }
+
+/* ========================================
+   Typography
+   ======================================== */
+.display-text {
+    font-size: clamp(2.5rem, 8vw, 6rem);
+    font-weight: 900;
+    letter-spacing: -0.05em;
+    text-transform: uppercase;
+    line-height: 0.9;
+}
+
+.subheading {
+    font-size: clamp(1.5rem, 4vw, 3rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+}
+
+.label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+}
+
+/* ========================================
+   Layout
+   ======================================== */
+.container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 1rem;
+}
+
+.section {
+    padding: clamp(2rem, 5vw, 4rem) clamp(1rem, 3vw, 2rem);
+    border-bottom: var(--border-width-desktop) solid var(--border);
+}
+
+.grid-2 { display: grid; grid-template-columns: 1fr; gap: 2rem; }
+.grid-3 { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+.grid-4 { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+
+@media (min-width: 640px) {
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .grid-3 { grid-template-columns: repeat(2, 1fr); }
+    .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1024px) {
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* ========================================
+   Navigation
+   ======================================== */
+nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+    background: white;
+    border-bottom: var(--border-width-desktop) solid var(--border);
+    padding: 1rem 2rem;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.nav-logo { display: flex; gap: 0.5rem; align-items: center; }
+
+.logo-shape { width: 24px; height: 24px; }
+.logo-circle { background: var(--primary-red); border-radius: 50%; }
+.logo-square { background: var(--primary-blue); }
+
+.logo-triangle {
+    width: 0; height: 0;
+    border-left: 12px solid transparent;
+    border-right: 12px solid transparent;
+    border-bottom: 24px solid var(--primary-yellow);
+}
+
+.nav-title {
+    font-size: 1.25rem; font-weight: 900;
+    text-transform: uppercase; letter-spacing: -0.02em;
+}
+
+.nav-links { display: flex; gap: 2rem; }
+
+.nav-link {
+    font-size: 0.875rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    cursor: pointer; text-decoration: none; color: var(--foreground);
+    transition: color 0.2s;
+}
+.nav-link:hover { color: var(--primary-red); }
+
+/* ========================================
+   Hero Section
+   ======================================== */
+.hero {
+    display: grid; grid-template-columns: 1fr; gap: 0; min-height: 400px;
+}
+@media (min-width: 768px) {
+    .hero { grid-template-columns: 60% 40%; min-height: 500px; }
+}
+
+.hero-left {
+    padding: clamp(2rem, 5vw, 4rem);
+    display: flex; flex-direction: column; justify-content: center;
+    border-right: var(--border-width-desktop) solid var(--border);
+}
+
+.hero-right {
+    background: var(--primary-blue); position: relative;
+    min-height: 200px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+}
+
+.geometric-composition { position: relative; width: 200px; height: 200px; }
+
+.geo-circle {
+    position: absolute; width: 120px; height: 120px;
+    border-radius: 50%; background: var(--primary-red);
+    top: 20px; left: 40px; border: 3px solid var(--border);
+}
+
+.geo-square {
+    position: absolute; width: 80px; height: 80px;
+    background: white; top: 60px; left: 20px;
+    border: 3px solid var(--border); transform: rotate(45deg);
+}
+
+.geo-small-square {
+    position: absolute; width: 40px; height: 40px;
+    background: var(--primary-yellow);
+    top: 100px; left: 100px; border: 3px solid var(--border);
+}
+
+.geo-triangle {
+    position: absolute; width: 0; height: 0;
+    border-left: 30px solid transparent;
+    border-right: 30px solid transparent;
+    border-bottom: 50px solid var(--primary-yellow);
+    top: 140px; left: 70px;
+}
+
+/* ========================================
+   Stats Section
+   ======================================== */
+.stats-section {
+    background: var(--primary-yellow);
+    border-bottom: var(--border-width-desktop) solid var(--border);
+}
+
+.stat-item {
+    text-align: center; padding: 2rem 1rem;
+    border-right: var(--border-width-mobile) solid var(--border);
+}
+.stat-item:last-child { border-right: none; }
+
+.stat-number {
+    font-size: clamp(3rem, 8vw, 5rem);
+    font-weight: 900; line-height: 1; margin-bottom: 0.5rem;
+}
+
+.stat-label {
+    font-size: 0.875rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.15em;
+}
+
+.stat-shape {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 60px; height: 60px; margin-bottom: 1rem;
+}
+
+.stat-circle {
+    border-radius: 50%; background: white;
+    border: 3px solid var(--border);
+}
+
+/* ========================================
+   Resume Info Card
+   ======================================== */
+.resume-card {
+    background: white;
+    border: var(--border-width-desktop) solid var(--border);
+    box-shadow: var(--shadow-large);
+    padding: 2rem; margin-bottom: 2rem;
+}
+
+.resume-header {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: var(--border-width-mobile) solid var(--border);
+    padding-bottom: 1rem; margin-bottom: 1.5rem;
+    flex-wrap: wrap; gap: 0.5rem;
+}
+
+.resume-name {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-weight: 900; text-transform: uppercase;
+}
+
+.resume-education {
+    font-size: 1rem; font-weight: 700;
+    padding: 0.5rem 1rem; background: var(--primary-blue);
+    color: white; border: 2px solid var(--border);
+}
+
+.skills-container {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;
+}
+
+.skill-tag {
+    font-size: 0.875rem; font-weight: 700;
+    padding: 0.5rem 1rem; border: 2px solid var(--border);
+    background: white; transition: all 0.2s;
+}
+.skill-tag:hover {
+    transform: translateY(-2px); box-shadow: var(--shadow-small);
+}
+
+.salary-expectation {
+    background: var(--primary-yellow); padding: 1rem;
+    border: 2px solid var(--border); margin-top: 1rem; text-align: center;
+}
+
+.salary-range { font-size: 2rem; font-weight: 900; }
+
+/* ========================================
+   Classification Sections
+   ======================================== */
+.section-red { background: var(--primary-red); color: white; }
+.section-yellow { background: var(--primary-yellow); }
+.section-blue { background: var(--primary-blue); color: white; }
+
+.section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1.5rem 2rem; cursor: pointer;
+    transition: background 0.2s;
+}
+.section-header:hover { background: rgba(0,0,0,0.1); }
+
+.section-title { display: flex; align-items: center; gap: 1rem; }
+
+.section-icon {
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+}
+
+.section-count {
+    font-size: clamp(2rem, 4vw, 3rem); font-weight: 900;
+}
+
+.section-content {
+    padding: 2rem; background: white;
+    border-top: var(--border-width-desktop) solid var(--border);
+    color: var(--foreground); display: none;
+}
+.section-content.active { display: block; }
+
+/* ========================================
+   Job Cards
+   ======================================== */
+.job-card {
+    background: white;
+    border: var(--border-width-mobile) solid var(--border);
+    box-shadow: var(--shadow-medium);
+    padding: 1.5rem; margin-bottom: 1rem;
+    cursor: pointer; transition: all 0.2s; position: relative;
+}
+.job-card:hover {
+    transform: translateY(-2px); box-shadow: var(--shadow-large);
+}
+
+.job-card-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 1rem;
+}
+
+.job-company {
+    font-size: 1.25rem; font-weight: 700; text-transform: uppercase;
+}
+
+.job-position {
+    font-size: 1rem; font-weight: 500; margin-bottom: 0.5rem; color: #666;
+}
+
+.job-meta { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+.job-tag {
+    font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+    padding: 0.25rem 0.75rem; border: 2px solid var(--border);
+}
+
+.tag-difficulty-easy { background: #4CAF50; color: white; }
+.tag-difficulty-medium { background: var(--primary-yellow); }
+.tag-difficulty-hard { background: var(--primary-red); color: white; }
+
+.tag-size-big { background: #FFEBEE; color: #C62828; border-color: #EF5350; }
+.tag-size-medium { background: var(--muted); }
+.tag-size-small { background: #E8F5E9; color: #2E7D32; border-color: #66BB6A; }
+
+.job-match-score {
+    position: absolute; top: 1rem; right: 1rem;
+    width: 50px; height: 50px; border-radius: 50%;
+    background: var(--primary-blue); color: white;
+    border: 3px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; font-size: 1.25rem;
+}
+
+.job-details {
+    margin-top: 1rem; padding: 1rem;
+    background: var(--muted); border: 2px solid var(--border);
+    display: none;
+}
+.job-details.active { display: block; }
+
+.detail-section { margin-bottom: 1rem; }
+
+.detail-title {
+    font-size: 0.875rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.5rem;
+}
+
+.detail-list { list-style: none; padding-left: 1rem; }
+
+.detail-list li {
+    position: relative; padding-left: 1.5rem; margin-bottom: 0.25rem;
+}
+.detail-list li::before {
+    content: '▸'; position: absolute; left: 0;
+    color: var(--primary-blue); font-weight: bold;
+}
+.missing-items li::before { color: var(--primary-red); }
+.optimization-points li::before { color: #B8860B; }
+
+.jd-text {
+    font-size: 0.85rem; line-height: 1.7; color: #444;
+    max-height: 300px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word;
+}
+
+/* ========================================
+   Diff View
+   ======================================== */
+.diff-container {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1.5rem;
+}
+@media (max-width: 768px) { .diff-container { grid-template-columns: 1fr; } }
+
+.diff-panel {
+    background: white;
+    border: var(--border-width-mobile) solid var(--border);
+    padding: 1.5rem; min-height: 400px;
+}
+
+.diff-panel-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 1rem; padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border);
+}
+
+.diff-panel-title {
+    font-size: 0.875rem; font-weight: 700; text-transform: uppercase;
+}
+
+.diff-panel-badge {
+    padding: 0.25rem 0.75rem; font-size: 0.75rem;
+    font-weight: 700; border: 2px solid var(--border);
+}
+.badge-original { background: var(--muted); }
+.badge-optimized { background: var(--primary-yellow); }
+
+.diff-content {
+    font-size: 1rem; line-height: 1.75;
+    white-space: pre-wrap; word-break: break-word; color: var(--foreground);
+}
+
+/* ========================================
+   Buttons
+   ======================================== */
+.btn {
+    font-size: 0.875rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 0.75rem 1.5rem; border: 2px solid var(--border);
+    cursor: pointer; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    background: white; text-decoration: none; color: var(--foreground);
+}
+.btn-primary { background: var(--primary-red); color: white; box-shadow: var(--shadow-medium); }
+.btn-secondary { background: var(--primary-blue); color: white; box-shadow: var(--shadow-medium); }
+.btn-yellow { background: var(--primary-yellow); box-shadow: var(--shadow-medium); }
+.btn-outline { background: white; box-shadow: var(--shadow-medium); }
+.btn:hover { opacity: 0.9; }
+.btn:active { transform: translate(2px, 2px); box-shadow: none; }
+.btn-small { padding: 0.5rem 1rem; font-size: 0.75rem; }
+
+/* ========================================
+   Toast
+   ======================================== */
+.message-toast {
+    position: fixed; top: 80px; right: 20px;
+    background: var(--primary-blue); color: white;
+    padding: 1rem 1.5rem; border: 3px solid var(--border);
+    box-shadow: var(--shadow-medium); font-weight: 700;
+    z-index: 3000; animation: slideIn 0.3s ease-out; display: none;
+}
+.message-toast.active { display: block; }
+.message-toast.success { background: #4CAF50; }
+.message-toast.error { background: var(--primary-red); }
+
+@keyframes slideIn {
+    from { transform: translateX(100px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+/* ========================================
+   Footer
+   ======================================== */
+footer {
+    background: var(--foreground); color: white;
+    padding: 2rem; text-align: center;
+    border-top: var(--border-width-desktop) solid var(--border);
+}
+
+.footer-logo {
+    display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem;
+}
+
+.footer-shape {
+    width: 40px; height: 40px; border: 3px solid white;
+}
+.footer-circle { border-radius: 50%; }
+
+/* ========================================
+   Empty State
+   ======================================== */
+.empty-state {
+    text-align: center; padding: 3rem;
+    background: var(--muted); border: var(--border-width-mobile) solid var(--border);
+}
+
+/* ========================================
+   Loading
+   ======================================== */
+.loading-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(255,255,255,0.95);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; z-index: 10;
+}
+.loading-overlay.active { display: flex; }
+
+.loading-spinner {
+    width: 80px; height: 80px;
+    border: 4px solid var(--muted);
+    border-top-color: var(--primary-red);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-text {
+    margin-top: 1rem; font-size: 1rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em;
+}
+
+@media (max-width: 768px) {
+    .nav-links { display: none; }
+    .hero-left { border-right: none; border-bottom: var(--border-width-mobile) solid var(--border); }
+}
+
+/* 暗色模式 */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --background: #1a1a2e;
+        --foreground: #e8e8e8;
+        --primary-red: #ff4444;
+        --primary-blue: #6699ff;
+        --primary-yellow: #ffd700;
+        --border: #444;
+        --muted: #2a2a3e;
+    }
+    body { background-color: var(--background); color: var(--foreground); }
+    .job-card { background: #222; }
+    nav { background: #1a1a2e; border-color: #444; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+    <div class="nav-logo">
+        <div class="logo-shape logo-circle"></div>
+        <div class="logo-shape logo-square"></div>
+        <div class="logo-triangle"></div>
+        <span class="nav-title">简历匹配系统</span>
+    </div>
+    <div class="nav-links">
+        <a class="nav-link" href="#stats">统计</a>
+        <a class="nav-link" href="#cannot-apply">不可投递</a>
+        <a class="nav-link" href="#need-optimization">需优化</a>
+        <a class="nav-link" href="#qualified">符合要求</a>
+    </div>
+</nav>
+
+<!-- Hero Section -->
+<section class="hero">
+    <div class="hero-left">
+        <div class="label" style="margin-bottom: 1rem;">简历分析报告 · <span id="modeTag"></span></div>
+        <h1 class="display-text" style="margin-bottom: 1rem;">岗位匹配<br>可视化</h1>
+        <p style="font-size: 1.125rem; font-weight: 500; max-width: 500px;">
+            基于您的简历技能与岗位要求的智能匹配分析，
+            按匹配度、难度和成功率分类展示投递建议。
+        </p>
+        <!-- Fix 3: 指标语义说明 -->
+        <div style="margin-top:1.5rem;padding:1rem;background:white;border:2px solid var(--border);max-width:500px;">
+            <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--primary-blue);margin-bottom:0.5rem;">
+                <i data-lucide="info" style="width:14px;height:14px;vertical-align:middle;"></i>
+                评分指标说明
+            </div>
+            <div style="font-size:0.85rem;line-height:1.6;color:#444;">
+                <strong>匹配度</strong>：<span id="scoreRangeLabel">6维度综合评分 (0-115分)</span>，越高越匹配<br>
+                <strong>成功率</strong>：预估获得面试邀请的概率 (10-90%)，基于匹配度并考虑公司规模调整<br>
+                <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分
+            </div>
+        </div>
+        <div style="margin-top: 2rem; display: flex; gap: 1rem;">
+            <button class="btn btn-primary" onclick="scrollToSection('stats')">
+                <i data-lucide="arrow-down" style="width: 16px; height: 16px;"></i>
+                查看结果
+            </button>
+            <button class="btn btn-outline" onclick="location.reload()">
+                <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i>
+                重新加载
+            </button>
+        </div>
+    </div>
+    <div class="hero-right">
+        <div class="geometric-composition">
+            <div class="geo-circle"></div>
+            <div class="geo-square"></div>
+            <div class="geo-small-square"></div>
+            <div class="geo-triangle"></div>
+        </div>
+    </div>
+</section>
+
+<!-- Resume Info Card -->
+<section class="section" id="resume-info">
+    <div class="container">
+        <div class="resume-card" id="resumeCard"></div>
+    </div>
+</section>
+
+<!-- Stats Section -->
+<section class="stats-section section" id="stats">
+    <div class="container">
+        <h2 class="subheading" style="text-align: center; margin-bottom: 2rem;">分析统计</h2>
+        <div class="grid-4" id="statsGrid"></div>
+    </div>
+</section>
+
+<!-- Cannot Apply Section -->
+<section class="section-red section" id="cannot-apply">
+    <div class="section-header" onclick="toggleSection('cannotApply')">
+        <div class="section-title">
+            <div class="section-icon">
+                <i data-lucide="x-circle" style="width: 32px; height: 32px;"></i>
+            </div>
+            <span class="subheading">不可投递</span>
+        </div>
+        <span class="section-count" id="cannotApplyCount">0</span>
+    </div>
+    <div class="section-content" id="cannotApplyContent"></div>
+</section>
+
+<!-- Need Optimization Section -->
+<section class="section-yellow section" id="need-optimization">
+    <div class="section-header" onclick="toggleSection('needOptimization')">
+        <div class="section-title">
+            <div class="section-icon">
+                <i data-lucide="alert-triangle" style="width: 32px; height: 32px;"></i>
+            </div>
+            <span class="subheading">需要优化</span>
+        </div>
+        <span class="section-count" id="needOptimizationCount">0</span>
+    </div>
+    <div class="section-content" id="needOptimizationContent"></div>
+</section>
+
+<!-- Qualified Section -->
+<section class="section-blue section" id="qualified">
+    <div class="section-header" onclick="toggleSection('qualified')">
+        <div class="section-title">
+            <div class="section-icon">
+                <i data-lucide="check-circle" style="width: 32px; height: 32px;"></i>
+            </div>
+            <span class="subheading">符合要求</span>
+        </div>
+        <span class="section-count" id="qualifiedCount">0</span>
+    </div>
+    <div class="section-content" id="qualifiedContent"></div>
+</section>
+
+<!-- Footer -->
+<footer>
+    <div class="footer-logo">
+        <div class="footer-shape footer-circle"></div>
+        <div class="footer-shape footer-square"></div>
+    </div>
+    <p style="font-weight: 500;">简历匹配分析系统 · Bauhaus Design</p>
+    <p style="font-size: 0.75rem; margin-top: 0.5rem; opacity: 0.7;">
+        由 Claude Code boss-crawler skill 生成 · 生成时间: <span id="generatedTime"></span>
+    </p>
+</footer>
+
+<!-- Toast Message -->
+<div class="message-toast" id="messageToast"></div>
+
+<script>
+// ========================================
+// Embedded Report Data
+// ========================================
+const REPORT_DATA = ___REPORT_DATA___;
+
+// ========================================
+// Global State
+// ========================================
+let classificationData = null;
+const ANALYSIS_MODE = (REPORT_DATA && REPORT_DATA.analysis_mode) || 'quick';
+        // 根据分析模式更新评分范围说明
+        if (REPORT_DATA && REPORT_DATA.analysis_mode === 'deep') {
+            const label = document.getElementById('scoreRangeLabel');
+            if (label) {
+                label.textContent = 'Claude 深度语义分析 (0-100分，规则40%+AI60%)';
+            }
+        }
+
+const IS_DEEP_MODE = ANALYSIS_MODE === 'deep';
+
+// ========================================
+// Initialization
+// ========================================
+(function init() {
+    if (!REPORT_DATA || !REPORT_DATA.statistics) {
+        showLoadingError();
+        return;
+    }
+    classificationData = REPORT_DATA;
+    renderData(REPORT_DATA);
+    lucide.createIcons();
+// CSP 兼容：为静态 onclick 元素添加事件监听回退
+document.addEventListener('DOMContentLoaded', function() {
+    // 导航链接
+    document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({behavior: 'smooth'});
+        });
+    });
+    // Hero 按钮
+    var statsBtn = document.querySelector('.btn-primary');
+    if (statsBtn && statsBtn.textContent.includes('查看结果')) {
+        statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
+    }
+});
+
+})();
+
+function showLoadingError() {
+    document.getElementById('resumeCard').innerHTML =
+        '<div style="text-align:center;padding:3rem;">' +
+        '<i data-lucide="alert-circle" style="width:48px;height:48px;color:var(--primary-red);"></i>' +
+        '<h3 style="font-weight:700;text-transform:uppercase;margin-top:1rem;">数据加载失败</h3>' +
+        '<p>无法加载报告数据，请重新运行分析。</p>' +
+        '<button class="btn btn-primary" style="margin-top:1rem;" onclick="location.reload()">重新加载</button>' +
+        '</div>';
+    lucide.createIcons();
+// CSP 兼容：为静态 onclick 元素添加事件监听回退
+document.addEventListener('DOMContentLoaded', function() {
+    // 导航链接
+    document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({behavior: 'smooth'});
+        });
+    });
+    // Hero 按钮
+    var statsBtn = document.querySelector('.btn-primary');
+    if (statsBtn && statsBtn.textContent.includes('查看结果')) {
+        statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
+    }
+});
+
+}
+
+// ========================================
+// Render Functions
+// ========================================
+function renderData(data) {
+    renderResumeInfo(data.resume_info);
+    renderStats(data.statistics);
+    renderJobList('cannotApply', data.classification.cannot_apply);
+    renderJobList('needOptimization', data.classification.need_optimization);
+    renderJobList('qualified', data.classification.qualified);
+    document.getElementById('generatedTime').textContent = data.generated_at;
+    document.getElementById('modeTag').textContent = IS_DEEP_MODE ? '🧠 深度模式' : '🚀 快速模式';
+    lucide.createIcons();
+// CSP 兼容：为静态 onclick 元素添加事件监听回退
+document.addEventListener('DOMContentLoaded', function() {
+    // 导航链接
+    document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({behavior: 'smooth'});
+        });
+    });
+    // Hero 按钮
+    var statsBtn = document.querySelector('.btn-primary');
+    if (statsBtn && statsBtn.textContent.includes('查看结果')) {
+        statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
+    }
+});
+
+}
+
+function renderResumeInfo(resume) {
+    var card = document.getElementById('resumeCard');
+    var skillsHtml = (resume.skills || []).map(function(s) {
+        return '<span class="skill-tag">' + escapeHtml(s) + '</span>';
+    }).join('');
+
+    var targetInfo = '';
+    if (resume.target_city || resume.target_position) {
+        targetInfo = '<div class="detail-title" style="margin-top:1rem;">求职意向</div>' +
+            '<div style="display:flex;gap:1rem;flex-wrap:wrap;padding-left:0.5rem;">' +
+            (resume.target_city ? '<span class="job-tag" style="background:var(--muted);">📍 ' + escapeHtml(resume.target_city) + '</span>' : '') +
+            (resume.target_position ? '<span class="job-tag" style="background:var(--muted);">💼 ' + escapeHtml(resume.target_position) + '</span>' : '') +
+            '</div>';
+    }
+
+    card.innerHTML =
+        '<div class="resume-header">' +
+        '<span class="resume-name">' + escapeHtml(resume.name) + '</span>' +
+        '<span class="resume-education">' + escapeHtml(resume.education) + '</span>' +
+        '</div>' +
+        targetInfo +
+        '<div class="detail-title" style="margin-top:1rem;">核心技能</div>' +
+        '<div class="skills-container">' + (skillsHtml || '<span style="color:#999;">未提取技能信息</span>') + '</div>' +
+        '<div class="salary-expectation">' +
+        '<div class="label" style="margin-bottom:0.5rem;">期望薪资</div>' +
+        '<div class="salary-range">' + (resume.salary_expectation ? resume.salary_expectation.min + '-' + resume.salary_expectation.max + 'K' : '面议') + '</div>' +
+        '</div>';
+}
+
+function renderStats(stats) {
+    var grid = document.getElementById('statsGrid');
+    grid.innerHTML =
+        '<div class="stat-item">' +
+        '<div class="stat-shape stat-circle"><i data-lucide="briefcase" style="width:24px;height:24px;"></i></div>' +
+        '<div class="stat-number">' + stats.total_jobs + '</div>' +
+        '<div class="stat-label">总岗位数</div></div>' +
+
+        '<div class="stat-item">' +
+        '<div class="stat-shape stat-circle" style="background:var(--primary-red);border:3px solid var(--border);">' +
+        '<i data-lucide="x-circle" style="width:24px;height:24px;color:white;"></i></div>' +
+        '<div class="stat-number">' + stats.cannot_apply_count + '</div>' +
+        '<div class="stat-label">不可投递</div></div>' +
+
+        '<div class="stat-item">' +
+        '<div class="stat-shape stat-circle" style="background:var(--primary-yellow);border:3px solid var(--border);">' +
+        '<i data-lucide="alert-triangle" style="width:24px;height:24px;"></i></div>' +
+        '<div class="stat-number">' + stats.need_optimization_count + '</div>' +
+        '<div class="stat-label">需优化</div></div>' +
+
+        '<div class="stat-item">' +
+        '<div class="stat-shape stat-circle" style="background:var(--primary-blue);border:3px solid var(--border);">' +
+        '<i data-lucide="check-circle" style="width:24px;height:24px;color:white;"></i></div>' +
+        '<div class="stat-number">' + stats.qualified_count + '</div>' +
+        '<div class="stat-label">符合要求</div></div>';
+    lucide.createIcons();
+// CSP 兼容：为静态 onclick 元素添加事件监听回退
+document.addEventListener('DOMContentLoaded', function() {
+    // 导航链接
+    document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({behavior: 'smooth'});
+        });
+    });
+    // Hero 按钮
+    var statsBtn = document.querySelector('.btn-primary');
+    if (statsBtn && statsBtn.textContent.includes('查看结果')) {
+        statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
+    }
+});
+
+}
+
+function renderJobList(sectionId, jobs) {
+    var countEl = document.getElementById(sectionId + 'Count');
+    var contentEl = document.getElementById(sectionId + 'Content');
+    countEl.textContent = jobs.length;
+
+    if (jobs.length === 0) {
+        contentEl.innerHTML =
+            '<div class="empty-state">' +
+            '<div style="font-size:3rem;font-weight:900;">0</div>' +
+            '<p style="font-weight:700;text-transform:uppercase;margin-top:1rem;">暂无数据</p></div>';
+        return;
+    }
+
+    contentEl.innerHTML = jobs.map(function(job) {
+        var missingHtml = '';
+        if (job.missing_items && job.missing_items.length > 0) {
+            missingHtml =
+                '<div class="detail-section">' +
+                '<div class="detail-title">缺失项</div>' +
+                '<ul class="detail-list missing-items">' +
+                job.missing_items.map(function(item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') +
+                '</ul></div>';
+        }
+
+        var optHtml = '';
+        if (IS_DEEP_MODE && job.optimization_points && job.optimization_points.length > 0) {
+            optHtml =
+                '<div class="detail-section">' +
+                '<div class="detail-title">优化建议</div>' +
+                '<ul class="detail-list optimization-points">' +
+                job.optimization_points.map(function(p) { return '<li>' + escapeHtml(p) + '</li>'; }).join('') +
+                '</ul></div>';
+        } else if (!IS_DEEP_MODE) {
+            optHtml =
+                '<div class="detail-section">' +
+                '<div class="detail-title">优化建议</div>' +
+                '<p style="color:#999;font-size:0.85rem;padding-left:1rem;">深度模式下可查看 AI 生成的个性化简历优化建议</p>' +
+                '</div>';
+        }
+
+        var jdHtml = '';
+        if (job.jd) {
+            jdHtml =
+                '<div class="detail-section">' +
+                '<div class="detail-title">岗位描述</div>' +
+                '<div class="jd-text">' + escapeHtml(job.jd.substring(0, 800)) + '</div></div>';
+        }
+
+        var welfareHtml = '';
+        if (job.welfare_tags) {
+            welfareHtml = '<span class="job-tag" style="background:#E8F5E9;">' + escapeHtml(job.welfare_tags.substring(0, 50)) + '</span>';
+        }
+
+        var jobData = JSON.stringify(job).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+
+        return '<div class="job-card" onclick="toggleJobDetails(\'job-' + job.job_id + '\')">' +
+            '<div class="job-match-score">' + job.match_score + '</div>' +
+            '<div class="job-card-header"><div>' +
+            '<div class="job-company">' + escapeHtml(job.company) + '</div>' +
+            '<div class="job-position">' + escapeHtml(job.position) + '</div>' +
+            '</div></div>' +
+            '<div class="job-meta">' +
+            '<span class="job-tag ' + getDifficultyClass(job.difficulty) + '">' + escapeHtml(job.difficulty || 'Medium') + '</span>' +
+            '<span class="job-tag" style="background:var(--primary-blue);color:white;cursor:help;" title="预估获得面试邀请的概率（已考虑公司规模因素）">成功率 ' + (job.success_rate || 50) + '%</span>' +
+            '<span class="job-tag">' + escapeHtml(job.salary || '') + '</span>' +
+            (job.scale ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.scale) + '</span>' : (job.company_size ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.company_size) + '</span>' : (job.company_info ? '<span class="job-tag" style="background:var(--muted);">🏢 ' + escapeHtml(job.company_info.substring(0, 30)) + '</span>' : ''))) +
+            (job.city ? '<span class="job-tag">📍 ' + escapeHtml(job.city) + '</span>' : '') +
+            (job.experience ? '<span class="job-tag">📅 ' + escapeHtml(job.experience) + '</span>' : '') +
+            welfareHtml +
+            '</div>' +
+            '<div class="job-details" id="job-' + job.job_id + '">' +
+            '<div class="detail-section">' +
+            '<div class="detail-title">分类原因</div>' +
+            '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(job.classification_reason || '') + '</p></div>' +
+            missingHtml + optHtml + jdHtml +
+            '<div style="margin-top:1.5rem;display:flex;gap:1rem;flex-wrap:wrap;">' +
+            (job.link ? '<a href="' + escapeHtml(job.link) + '" target="_blank" rel="noopener" class="btn btn-secondary btn-small" onclick="event.stopPropagation();">' +
+            '<i data-lucide="external-link" style="width:14px;height:14px;"></i>查看原岗位</a>' : '') +
+            '</div></div></div>';
+    }).join('');
+
+    lucide.createIcons();
+// CSP 兼容：为静态 onclick 元素添加事件监听回退
+document.addEventListener('DOMContentLoaded', function() {
+    // 导航链接
+    document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({behavior: 'smooth'});
+        });
+    });
+    // Hero 按钮
+    var statsBtn = document.querySelector('.btn-primary');
+    if (statsBtn && statsBtn.textContent.includes('查看结果')) {
+        statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
+    }
+});
+
+}
+
+// ========================================
+// Interactive Functions
+// ========================================
+function toggleSection(sectionId) {
+    var content = document.getElementById(sectionId + 'Content');
+    if (content) content.classList.toggle('active');
+}
+
+function toggleJobDetails(jobId) {
+    var details = document.getElementById(jobId);
+    if (details) details.classList.toggle('active');
+}
+
+function scrollToSection(sectionId) {
+    var el = document.getElementById(sectionId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function getDifficultyClass(difficulty) {
+    if (difficulty === 'Easy' || difficulty === '易') return 'tag-difficulty-easy';
+    if (difficulty === 'Medium' || difficulty === '中') return 'tag-difficulty-medium';
+    if (difficulty === 'Hard' || difficulty === '难') return 'tag-difficulty-hard';
+    return '';
+}
+
+function getSizeClass(size) {
+    if (size === '大厂') return 'tag-size-big';
+    if (size === '中厂') return 'tag-size-medium';
+    if (size === '小厂') return 'tag-size-small';
+    return '';
+}
+
+function showMessage(text, type) {
+    type = type || 'success';
+    var toast = document.getElementById('messageToast');
+    toast.textContent = text;
+    toast.className = 'message-toast active ' + type;
+    setTimeout(function() { toast.classList.remove('active'); }, 3000);
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+</script>
+</body>
+</html>
