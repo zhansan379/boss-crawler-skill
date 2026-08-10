@@ -250,11 +250,8 @@ def predict_difficulty(
     else:
         level = '难'
 
-    success_rate = min(90, max(10, total))
-
     return DifficultyPrediction(
         difficulty_level=level,
-        success_rate=success_rate,
         factors={
             'education': edu_score,
             'experience': exp_score,
@@ -308,7 +305,6 @@ def score_job_advanced(
             'matched_skills': [str],   # 命中的技能
             'missing_skills': [str],   # 用户缺失的JD要求技能（Fix 7）
             'difficulty': str,         # Easy/Medium/Hard
-            'success_rate': int,       # 预估获得面试邀请概率 15-90%（Fix 3）
             'optimization_points': [str],
         }
     """
@@ -509,29 +505,13 @@ def score_job_advanced(
                          'redis', 'linux', 'git', 'react', 'vue', 'spring']
         missing = [s for s in common_skills[:5] if _skill_in_text(s, jd_text) and _normalize_skill(s) not in user_skill_norms][:5]
 
-    # ── 难度 & 成功率 ── Fix 2: 公司规模调整
-    # 基础成功率 = 匹配分数的分段线性映射（含义：预估获得面试邀请的概率）
+    # ── 难度 ──
     if score >= 100:
         difficulty = 'Easy'
-        success_rate = 65 + min(25, (score - 100))
     elif score >= 85:
         difficulty = 'Medium'
-        success_rate = 40 + (score - 85)
     else:
         difficulty = 'Hard'
-        success_rate = max(15, 15 + (score - 55))
-
-    # 公司规模修正
-    company = job.get('公司', '')
-    scale = job.get('规模', '')
-    company_size = parse_company_size(company, scale)
-    if company_size == '大厂':
-        success_rate = max(10, success_rate - 12)
-        reasons.append('大厂(竞争激烈,成功率下调)')
-    elif company_size == '中厂':
-        success_rate = max(10, success_rate - 3)
-    else:
-        success_rate = min(90, success_rate + 3)
 
     # ── 优化建议 ──
     optimization_points = []
@@ -559,50 +539,30 @@ def score_job_advanced(
         'matched_skills': matched,
         'missing_skills': missing,
         'difficulty': difficulty,
-        'success_rate': success_rate,
         'optimization_points': optimization_points,
         'parsed_salary_low': sal_low,
         'parsed_salary_high': sal_high,
     }
 
 
-def compute_difficulty_success_rate(
+def compute_difficulty(
     match_score: int,
-    company_size: str = '',
-) -> Tuple[str, int]:
+) -> str:
     """
-    根据匹配分数计算难度等级和成功率（Fix 2: 含公司规模调整）
-
-    success_rate 含义：预估获得面试邀请的概率 (estimated probability of
-    receiving an interview invitation)，百分比值 10-90%（Fix 3）。
+    根据匹配分数计算难度等级。
 
     Args:
         match_score: 综合匹配分数
-        company_size: 公司规模类别 ('大厂'/'中厂'/'小厂')，用于调整成功率。
-                      空字符串表示不调整。
 
     Returns:
-        (difficulty: str, success_rate: int)
+        difficulty: str ('Easy' / 'Medium' / 'Hard')
     """
     if match_score >= 100:
-        difficulty = 'Easy'
-        success_rate = 65 + min(25, (match_score - 100))
+        return 'Easy'
     elif match_score >= 85:
-        difficulty = 'Medium'
-        success_rate = 40 + (match_score - 85)
+        return 'Medium'
     else:
-        difficulty = 'Hard'
-        success_rate = max(15, 15 + (match_score - 55))
-
-    # 公司规模修正（Fix 2）
-    if company_size == '大厂':
-        success_rate = max(10, success_rate - 12)
-    elif company_size == '中厂':
-        success_rate = max(10, success_rate - 3)
-    elif company_size == '小厂':
-        success_rate = min(90, success_rate + 3)
-
-    return difficulty, success_rate
+        return 'Hard'
 
 
 def classify_jobs_advanced(
@@ -712,7 +672,7 @@ def tiers_to_classification(
             job.get('公司', job.get('company', '')),
             job.get('规模', job.get('scale', ''))
         )
-        difficulty, success_rate = compute_difficulty_success_rate(score, company_size)
+        difficulty = compute_difficulty(score)
 
         return {
             'job_id': job_id or f"job_{abs(hash(link)):x}"[:12],
@@ -734,7 +694,6 @@ def tiers_to_classification(
             'company_size': company_size,
             'match_score': score,
             'difficulty': difficulty,
-            'success_rate': success_rate,
             'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
             'missing_items': job.get('missing_skills', [])[:5],
             'optimization_points': job.get('optimization_points', []),

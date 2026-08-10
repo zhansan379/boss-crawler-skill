@@ -67,7 +67,7 @@ python scripts/boss_post_interactive.py --ensure-login
 python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 -d -y
 ```
 
-Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages — critical for matching quality), `-y` (skip confirmation prompt). Login state persists via `./chrome_user_data/`.
+Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages — critical for matching quality), `-y` (skip confirmation prompt). Login state persists via `assets/chrome_user_data/`.
 
 ### Stage 2: Read Resume
 

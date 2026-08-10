@@ -109,6 +109,12 @@ CSV_FIELDS = [
     '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息'
 ]
 
+# ==================== 路径配置 ====================
+
+# 技能根目录: scripts/boss_crawler/config.py → 上溯 3 层到 boss-crawler/
+_SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ASSETS_DIR = os.path.join(_SKILL_ROOT, 'assets')
+
 # ==================== Chrome 配置 ====================
 
 co = ChromiumOptions()
@@ -118,8 +124,12 @@ co = ChromiumOptions()
 co.no_imgs(False)
 
 # 持久化 Chrome 用户数据目录，使登录状态跨脚本运行保留
-USER_DATA_DIR = os.path.abspath('./chrome_user_data')
+USER_DATA_DIR = os.path.join(ASSETS_DIR, 'chrome_user_data')
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 co.set_argument('--user-data-dir', USER_DATA_DIR)
+
+# 隐藏自动化标识，避免网站限制
+co.set_argument('--disable-blink-features=AutomationControlled')
 
 # ==================== Sleep 配置 ====================
 

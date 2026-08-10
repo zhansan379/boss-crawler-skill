@@ -15,7 +15,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
-from .scoring import compute_difficulty_success_rate
+from .scoring import compute_difficulty
 from .utils import parse_company_size, ensure_output_dir
 
 
@@ -97,7 +97,6 @@ def save_deep_candidates(
             'rank': rank,
             'rule_score': job.get('match_score', 0),
             'rule_difficulty': job.get('difficulty', 'Medium'),
-            'rule_success_rate': job.get('success_rate', 50),
             'job': {
                 'link': job.get('link', ''),
                 '职位': job.get('职位', ''),
@@ -264,9 +263,9 @@ def merge_deep_results(
             missing = deep.get('missing_items', rule_analysis.get('missing_skills', []))
             optimization = deep.get('optimization_points', rule_analysis.get('optimization_points', []))
 
-            # 难度 & 成功率
+            # 难度
             company_size = parse_company_size(job.get('公司', ''), job.get('规模', ''))
-            difficulty, success_rate = compute_difficulty_success_rate(blended, company_size)
+            difficulty = compute_difficulty(blended)
 
             # 亮点和风险（仅深度模式有）
             highlight = deep.get('highlight', '')
@@ -284,7 +283,7 @@ def merge_deep_results(
             missing = rule_analysis.get('missing_skills', [])
             optimization = rule_analysis.get('optimization_points', [])
             company_size = parse_company_size(job.get('公司', ''), job.get('规模', ''))
-            difficulty, success_rate = compute_difficulty_success_rate(blended, company_size)
+            difficulty = compute_difficulty(blended)
             highlight = ''
             risk = ''
 
@@ -308,7 +307,6 @@ def merge_deep_results(
             'source_file': job.get('source_file', ''),
             'match_score': blended,
             'difficulty': difficulty,
-            'success_rate': success_rate,
             'classification_reason': reasons,
             'missing_items': missing[:5] if isinstance(missing, list) else [],
             'optimization_points': optimization if isinstance(optimization, list) else [],

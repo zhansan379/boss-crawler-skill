@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
 from .utils import ensure_output_dir, parse_company_size
-from .scoring import compute_difficulty_success_rate
+from .scoring import compute_difficulty
 
 # 模板文件路径
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -83,7 +83,7 @@ def generate_html_report(
         'qualified_count': len(q_jobs),
     }
 
-    # ── 确保每个 job 的 difficulty/success_rate 从 match_score 计算 ──
+    # ── 确保每个 job 的 difficulty 从 match_score 计算 ──
     def _ensure_job_meta(job: Dict, idx: int) -> Dict:
         if not job.get('job_id'):
             link = job.get('link', '')
@@ -94,20 +94,9 @@ def generate_html_report(
                     job['job_id'] = 'job_' + m.group(1)
             if not job.get('job_id'):
                 job['job_id'] = f'job_{idx:04d}'
-        # 始终从 match_score 重新计算 difficulty/success_rate
+        # 始终从 match_score 重新计算 difficulty
         score = job.get('match_score', 50)
-        # 优先使用已计算好的 company_size，否则重新解析（保留原始 规模 字段以正确分类）
-        if not job.get('company_size'):
-            company_size = parse_company_size(
-                job.get('公司', job.get('company', '')),
-                job.get('规模', job.get('scale', ''))
-            )
-            job['company_size'] = company_size
-        else:
-            company_size = job['company_size']
-        difficulty, success_rate = compute_difficulty_success_rate(score, company_size)
-        job['difficulty'] = difficulty
-        job['success_rate'] = success_rate
+        job['difficulty'] = compute_difficulty(score)
         return job
 
     # ── 构建完整数据 ──
@@ -195,11 +184,11 @@ def generate_bauhaus_json(
     # ── 映射岗位到报告格式 ──
     def _map_to_report(job: Dict) -> Dict:
         score = job.get('match_score', 50)
+        difficulty = compute_difficulty(score)
         company_size = parse_company_size(
             job.get('公司', job.get('company', '')),
             job.get('规模', job.get('scale', ''))
         )
-        difficulty, success_rate = compute_difficulty_success_rate(score, company_size)
         link = job.get('link', '')
         # 从链接中提取唯一 ID
         import re
@@ -216,7 +205,6 @@ def generate_bauhaus_json(
             'education': job.get('学历', job.get('degree', job.get('education', ''))),
             'match_score': score,
             'difficulty': difficulty,
-            'success_rate': success_rate,
             'company_size': company_size,
             'scale': job.get('规模', job.get('scale', '')),
             'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),

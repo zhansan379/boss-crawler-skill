@@ -12,7 +12,7 @@ import time
 
 from DrissionPage import WebPage
 
-from .config import ENCODING, co
+from .config import ENCODING, ASSETS_DIR, co
 from .utils import detect_encoding, ensure_output_dir
 
 
@@ -20,7 +20,7 @@ from .utils import detect_encoding, ensure_output_dir
 
 def load_position_data():
     """加载岗位分类数据"""
-    file_path = 'post_data.json'
+    file_path = os.path.join(ASSETS_DIR, 'post_data.json')
     if not os.path.exists(file_path):
         print(f"错误: {file_path} 不存在，请先更新数据")
         return {}
@@ -41,7 +41,7 @@ def load_position_data():
                 positions.append({
                     'name': pos_name,
                     'code': pos['code'],
-                    'path': os.path.join('./post_data', cat_name, sub_name, pos_name)
+                    'path': os.path.join(ASSETS_DIR, 'post_data', cat_name, sub_name, pos_name)
                 })
             sub_categories.append({
                 'name': sub_name,
@@ -54,7 +54,7 @@ def load_position_data():
 
 def load_city_data():
     """加载城市数据"""
-    file_path = 'weizhi.json'
+    file_path = os.path.join(ASSETS_DIR, 'weizhi.json')
     if not os.path.exists(file_path):
         print(f"错误: {file_path} 不存在，请先更新数据")
         return {'hot': [], 'other': []}
@@ -103,9 +103,10 @@ def update_json_data():
                         page_text = match.group(1)
 
                 data = json.loads(page_text)
-                with open(file_name, 'w', encoding='utf-8') as f:
+                save_path = os.path.join(ASSETS_DIR, file_name)
+                with open(save_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
-                print(f"  [OK] {file_name} 更新成功")
+                print(f"  [OK] {save_path} 更新成功")
             else:
                 print(f"  [FAIL] {file_name} 获取失败")
         except Exception as e:

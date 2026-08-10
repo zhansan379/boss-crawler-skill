@@ -561,7 +561,7 @@ footer {
         <h1 class="display-text" style="margin-bottom: 1rem;">岗位匹配<br>可视化</h1>
         <p style="font-size: 1.125rem; font-weight: 500; max-width: 500px;">
             基于您的简历技能与岗位要求的智能匹配分析，
-            按匹配度、难度和成功率分类展示投递建议。
+            按匹配度和难度分类展示投递建议。
         </p>
         <!-- Fix 3: 指标语义说明 -->
         <div style="margin-top:1.5rem;padding:1rem;background:white;border:2px solid var(--border);max-width:500px;">
@@ -571,7 +571,6 @@ footer {
             </div>
             <div style="font-size:0.85rem;line-height:1.6;color:#444;">
                 <strong>匹配度</strong>：<span id="scoreRangeLabel">6维度综合评分 (0-115分)</span>，越高越匹配<br>
-                <strong>成功率</strong>：预估获得面试邀请的概率 (10-90%)，基于匹配度并考虑公司规模调整<br>
                 <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分
             </div>
         </div>
@@ -915,7 +914,6 @@ function renderJobList(sectionId, jobs) {
             '</div></div>' +
             '<div class="job-meta">' +
             '<span class="job-tag ' + getDifficultyClass(job.difficulty) + '">' + escapeHtml(job.difficulty || 'Medium') + '</span>' +
-            '<span class="job-tag" style="background:var(--primary-blue);color:white;cursor:help;" title="预估获得面试邀请的概率（已考虑公司规模因素）">成功率 ' + (job.success_rate || 50) + '%</span>' +
             '<span class="job-tag">' + escapeHtml(job.salary || '') + '</span>' +
             (job.scale ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.scale) + '</span>' : (job.company_size ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.company_size) + '</span>' : (job.company_info ? '<span class="job-tag" style="background:var(--muted);">🏢 ' + escapeHtml(job.company_info.substring(0, 30)) + '</span>' : ''))) +
             (job.city ? '<span class="job-tag">📍 ' + escapeHtml(job.city) + '</span>' : '') +

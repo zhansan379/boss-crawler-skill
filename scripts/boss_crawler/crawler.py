@@ -13,7 +13,7 @@ import urllib.parse
 from DrissionPage import WebPage
 
 from .auth import check_login_elements, check_login_status, check_page_status, wait_for_user_action
-from .config import CSV_FIELDS, ENCODING, co, sleep_config
+from .config import CSV_FIELDS, ENCODING, ASSETS_DIR, co, sleep_config
 from .data_loader import load_existing_links, init_csv_file
 from .menu import print_header, estimate_time
 from .state import time_stats
@@ -392,7 +392,7 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
             print(f"{'='*50}")
 
             if is_custom:
-                file_path = f"./post_data/custom/{pos_name}_{city_name}.csv"
+                file_path = os.path.join(ASSETS_DIR, 'post_data', 'custom', f"{pos_name}_{city_name}.csv")
             else:
                 file_path = f"{pos_path}_{city_name}.csv"
 

@@ -47,7 +47,7 @@ from .scoring import (
     score_job_advanced,
     classify_jobs_advanced,
     tiers_to_classification,
-    compute_difficulty_success_rate,
+    compute_difficulty,
 )
 
 # ── 报告生成
@@ -95,7 +95,7 @@ __all__ = [
     "calculate_experience_match", "calculate_skills_match",
     "predict_difficulty", "score_job_advanced", "classify_jobs_advanced",
     "tiers_to_classification",
-    "compute_difficulty_success_rate",
+    "compute_difficulty",
     # Report
     "generate_html_report", "generate_bauhaus_json",
     # Auto-apply

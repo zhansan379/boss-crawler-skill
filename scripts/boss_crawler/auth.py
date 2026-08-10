@@ -162,7 +162,7 @@ def ensure_login():
     - 未登录 → 保持浏览器打开，提示用户手动登录，返回 False
 
     用户手动登录后告诉 Claude "已登录"，Claude 再次调用此函数检测。
-    登录成功后，Chrome 用户数据（含 cookie）持久化保存到 ./chrome_user_data，
+    登录成功后，Chrome 用户数据（含 cookie）持久化保存到 assets/chrome_user_data，
     后续爬取命令可复用该登录状态。
 
     Returns:
@@ -181,7 +181,7 @@ def ensure_login():
 
         if check_login_status(dp):
             print("\n[LOGIN_OK] 检测到已登录。")
-            print("[LOGIN_OK] 登录状态已持久化保存（./chrome_user_data）")
+            print("[LOGIN_OK] 登录状态已持久化保存（assets/chrome_user_data）")
             dp.quit()
             return True
 

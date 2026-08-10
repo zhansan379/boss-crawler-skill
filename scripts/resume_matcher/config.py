@@ -128,7 +128,6 @@ class MatchResult:
 class DifficultyPrediction:
     """投递难度预测"""
     difficulty_level: str = '中'  # '易', '中', '难'
-    success_rate: int = 50  # 10-90
     factors: Dict[str, int] = field(default_factory=dict)
     total_score: int = 0
 

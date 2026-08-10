@@ -8,7 +8,7 @@ import csv
 import os
 from typing import List, Dict, Any
 
-from .config import ENCODING
+from .config import ENCODING, OUTPUT_DIR
 
 
 def load_job_data(csv_paths: List[str]) -> List[Dict[str, Any]]:
@@ -41,8 +41,8 @@ def list_available_job_files() -> List[Dict[str, Any]]:
 
     job_files = []
 
-    # 扫描post_data目录
-    post_data_dir = './post_data'
+    # 扫描 post_data 目录（位于 assets/ 下）
+    post_data_dir = os.path.join(OUTPUT_DIR, 'post_data')
     if os.path.exists(post_data_dir):
         for root, _, files in os.walk(post_data_dir):
             for file in files:

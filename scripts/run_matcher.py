@@ -79,7 +79,7 @@ def run_quick_mode(profile: ResumeProfile, output_dir: str) -> None:
     # 1. 加载岗位数据
     job_files = list_available_job_files()
     if not job_files:
-        print("错误: 未找到岗位数据文件（./post_data/ 目录下无 CSV）")
+        print("错误: 未找到岗位数据文件（assets/post_data/ 目录下无 CSV）")
         print("请先运行爬虫获取岗位数据: python boss_post_interactive.py --ensure-login && python boss_post_interactive.py -m custom -p ... -d -y")
         sys.exit(1)
 

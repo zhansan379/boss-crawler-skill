@@ -26,6 +26,7 @@ from .config import (
     CSV_FIELDS,
     co,
     USER_DATA_DIR,
+    ASSETS_DIR,
     SleepConfig,
     sleep_config,
 )
@@ -159,7 +160,7 @@ __all__ = [
     "ENCODING", "IS_WINDOWS",
     "JOB_TYPE_MAP", "SALARY_MAP", "EXPERIENCE_MAP", "DEGREE_MAP", "SCALE_MAP",
     "FILTER_MAPS", "FILTER_PARAM_NAMES", "FILTER_LABELS",
-    "CSV_FIELDS", "co", "USER_DATA_DIR",
+    "CSV_FIELDS", "co", "USER_DATA_DIR", "ASSETS_DIR",
     "SleepConfig", "sleep_config",
     # Utils
     "_expand_arg", "resolve_filter_values", "build_filter_query_string",

@@ -512,7 +512,7 @@ def auto_apply_jobs(
     sorted_jobs = sorted(
         qualified_jobs,
         key=lambda j: (
-            -j.get('difficulty_score', j.get('success_rate', 0)),
+            -j.get('match_score', 0),
             j.get('company', '')
         )
     )
@@ -530,8 +530,9 @@ def auto_apply_jobs(
     if os.path.exists(chrome_path):
         co.set_browser_path(chrome_path)
 
-    # 持久化 Chrome Profile（复用登录状态）
-    user_data_dir = os.path.abspath('./chrome_user_data')
+    # 持久化 Chrome Profile（复用登录状态，位于 assets/chrome_user_data）
+    user_data_dir = os.path.join(OUTPUT_DIR, 'chrome_user_data')
+    os.makedirs(user_data_dir, exist_ok=True)
     co.set_argument(f'--user-data-dir={user_data_dir}')
 
     if headless:
@@ -758,8 +759,38 @@ def _get_greeting(
 
 
 def _input_greeting(dp: WebPage, greeting: str) -> bool:
-    """在聊天输入框中输入招呼语"""
-    # 先检查是否在 iframe 中
+    """在聊天输入框中输入招呼语（优先使用 JS 直接注入，避免逐键模拟丢字）"""
+    import json as _json
+
+    # 策略 A：直接用 JS 注入文本 + 派发完整事件链（适合 contenteditable div）
+    try:
+        greeting_js = _json.dumps(greeting)
+        result = dp.run_js(f"""
+            const sel = '#chat-input, [contenteditable="true"], textarea, [placeholder*="消息"], [placeholder*="输入"]';
+            const el = document.querySelector(sel);
+            if (el) {{
+                el.focus();
+                el.click();
+                if (el.contentEditable === 'true') {{
+                    el.innerText = {greeting_js};
+                }} else {{
+                    el.value = {greeting_js};
+                }}
+                // 派发完整事件链，确保 Vue/React 绑定生效
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                el.dispatchEvent(new Event('compositionend', {{bubbles: true}}));
+                return 'ok';
+            }}
+            return 'not found';
+        """)
+        if result and 'ok' in str(result):
+            time.sleep(0.5)
+            return True
+    except Exception:
+        pass
+
+    # 策略 B：通过 DrissionPage 查找元素后逐键输入（中文长文本备选）
     input_selectors = [
         XPATH_CHAT_INPUT,
         'css:#chat-input',
@@ -781,6 +812,7 @@ def _input_greeting(dp: WebPage, greeting: str) -> bool:
                 el.click()
                 time.sleep(0.3)
                 el.input(greeting)
+                time.sleep(1.0)  # 等待逐键输入完成
                 return True
         except Exception:
             # 尝试在 iframe 中查找
@@ -792,31 +824,10 @@ def _input_greeting(dp: WebPage, greeting: str) -> bool:
                         el.click()
                         time.sleep(0.3)
                         el.input(greeting)
+                        time.sleep(1.0)
                         return True
             except Exception:
                 continue
-
-    # 最后尝试：直接用 JS 找到输入框并填入
-    try:
-        result = dp.run_js(f"""
-            const sel = '#chat-input, [contenteditable="true"], textarea, [placeholder*="消息"]';
-            const el = document.querySelector(sel);
-            if (el) {{
-                el.focus();
-                if (el.contentEditable === 'true') {{
-                    el.innerText = {json.dumps(greeting)};
-                }} else {{
-                    el.value = {json.dumps(greeting)};
-                }}
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                return 'ok';
-            }}
-            return 'not found';
-        """)
-        if result and 'ok' in str(result):
-            return True
-    except Exception:
-        pass
 
     return False
 
