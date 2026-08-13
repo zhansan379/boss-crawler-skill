@@ -15,6 +15,7 @@
 
 import os
 import json
+import re
 import time
 import random
 from typing import List, Dict, Any, Optional
@@ -111,8 +112,9 @@ def generate_greeting(
     key_skills = _pick_key_skills(all_skills, job)
 
     # 提取相关项目经验
-    projects = profile.experience.get('companies', []) + profile.projects
-    relevant_project = _pick_relevant_project(projects, job)
+    # 只看 projects：experience.companies 的 name 是公司名，
+    # 套进下面「曾主导 XX」的句式会变成病句
+    relevant_project = _pick_relevant_project(profile.projects, job)
 
     # 学历
     education = profile.education
@@ -155,27 +157,43 @@ def generate_greeting(
 
 
 def _pick_key_skills(all_skills: List[str], job: Dict[str, Any]) -> List[str]:
-    """从技能列表中选出与岗位最相关的关键词"""
-    jd = job.get('岗位要求和职责', '') + job.get('技能标签', '')
-    jd_lower = jd.lower()
+    """从技能列表中选出与岗位最相关的关键词
 
-    # 优先选择 JD 中出现的技能
+    排序依据（依次）：
+      1. 技能标签命中 > 岗位职责正文命中 > 未命中
+      2. 在 JD 中首次出现的位置越靠前，说明越是核心要求
+      3. 简历中的原始顺序（稳定排序，简历自己的优先级）
+    """
+    tags = job.get('技能标签', '') or ''
+    body = job.get('岗位要求和职责', '') or ''
+    tags_lower = tags.lower()
+    jd_lower = (tags + body).lower()
+
     scored = []
-    for skill in all_skills:
+    for idx, skill in enumerate(all_skills):
         if not skill or len(skill) < 2:
             continue
-        score = 0
-        if skill.lower() in jd_lower:
-            score = 100  # JD 提及
-        if len(skill) <= 15 and not skill.startswith("传统") and "开发" not in skill:
-            scored.append((score, skill))
+        if len(skill) > 15 or skill.startswith("传统") or "开发" in skill:
+            continue
 
-    scored.sort(key=lambda x: (-x[0], len(x[1])))
+        s = skill.lower()
+        if s in tags_lower:
+            score = 200          # 招聘方自己打的标签，最能代表岗位画像
+        elif s in jd_lower:
+            score = 100
+        else:
+            score = 0
+
+        # 未命中的技能没有位置信息，排到最后
+        pos = jd_lower.find(s) if score else len(jd_lower)
+        scored.append((-score, pos, idx, skill))
+
+    scored.sort()
 
     # 去重优先，取前 8 个
     seen = set()
     result = []
-    for _, s in scored:
+    for _, _, _, s in scored:
         if s.lower() not in seen:
             seen.add(s.lower())
             result.append(s)
@@ -185,23 +203,58 @@ def _pick_key_skills(all_skills: List[str], job: Dict[str, Any]) -> List[str]:
     return result
 
 
+_TOKEN_RE = re.compile(r'[A-Za-z][A-Za-z0-9+#.]*|[一-龥]{2,}')
+
+
+def _tokenize(text: str) -> List[str]:
+    """把中英文混排文本切成可匹配的词元
+
+    英文按连续字母数字串切；中文没有分词库，用 2-4 字滑动窗口，
+    足以覆盖「向量检索」「推荐系统」这类技术名词。
+    """
+    tokens = []
+    for m in _TOKEN_RE.finditer(text or ''):
+        t = m.group()
+        if t[0].isascii():
+            if len(t) >= 2:
+                tokens.append(t.lower())
+        else:
+            for n in (4, 3, 2):
+                for i in range(len(t) - n + 1):
+                    tokens.append(t[i:i + n])
+    return tokens
+
+
 def _pick_relevant_project(projects: List[Dict], job: Dict[str, Any]) -> Optional[str]:
-    """选出与岗位最相关的项目名"""
-    jd = job.get('岗位要求和职责', '') + job.get('职位', '')
+    """选出与岗位最相关的项目名
+
+    按命中的**不同词元数**打分，技术栈命中权重更高（技术栈是硬匹配，
+    项目描述里的词更可能是巧合）。
+    """
+    jd = (
+        (job.get('技能标签', '') or '')
+        + (job.get('岗位要求和职责', '') or '')
+        + (job.get('职位', '') or '')
+    )
     jd_lower = jd.lower()
 
     best = None
     best_score = 0
 
     for proj in projects:
-        name = proj.get('name', '')
-        desc = proj.get('description', '') if isinstance(proj, dict) else ''
-        tech_stack = ' '.join(proj.get('tech_stack', [])) if isinstance(proj, dict) else ''
+        if not isinstance(proj, dict):
+            continue
+        name = proj.get('name', '') or ''
+        desc = proj.get('description', '') or ''
+        tech_stack = proj.get('tech_stack', []) or []
 
         score = 0
-        for word in name + desc + tech_stack:
-            if word.lower() in jd_lower:
+        for token in set(_tokenize(name + ' ' + desc)):
+            if token in jd_lower:
                 score += 1
+        for tech in tech_stack:
+            if tech and str(tech).lower() in jd_lower:
+                score += 3
 
         if score > best_score:
             best_score = score

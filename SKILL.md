@@ -1,31 +1,36 @@
 ---
 name: boss-crawler
-description: Crawls BOSS Zhipin job listings via DrissionPage, parses resumes, matches jobs against candidate profiles using rule-based scoring and LLM semantic analysis, generates HTML visualization reports, and auto-applies to matching positions. Use when the user wants to search BOSS Zhipin jobs, upload a resume for job matching, generate a job matching report, auto-apply to positions, or optimize a resume for specific job descriptions.
+description: Crawls BOSS Zhipin job listings via DrissionPage, parses resumes, matches jobs against candidate profiles using rule-based scoring and LLM semantic analysis, generates HTML visualization reports, auto-applies to matching positions, and launches an embedded Markdown resume editor (ShowCV). Use when the user wants to search BOSS Zhipin jobs, upload a resume for job matching, generate a job matching report, auto-apply to positions, optimize a resume for specific job descriptions, or open the resume editor to write/edit a resume ("打开简历编辑器", "启动 ShowCV", "写一份简历", "预览简历").
 ---
 
 # BOSS Zhipin Job Crawling & Matching
 
-Integrates job crawling (DrissionPage + Chrome CDP), resume parsing (Claude), job matching (rule-based pre-filter + LLM deep analysis), HTML reporting, and auto-apply into one end-to-end workflow.
+Integrates job crawling (DrissionPage + Chrome CDP), resume parsing (Claude), job matching (rule-based pre-filter + LLM deep analysis), HTML reporting, auto-apply, and an embedded Markdown resume editor into one end-to-end workflow.
 
 All scripts live under `scripts/` relative to this skill directory.
 
 ## Path Selection
 
-Three entry paths. Choose based on what data the user already has:
+Four entry paths. Choose based on what data the user already has:
 
 | Path | When | Flow |
 |------|------|------|
 | **A: Crawl-first** | No job data yet | Crawl → Parse resume → Match → Report → Apply |
 | **B: Match-existing** | Already have job CSVs | Parse resume → Match → Report → Apply |
 | **C: Resume-driven** ✨ | Have resume, want precision | Parse resume → Infer params → Crawl → Match → Report → Apply |
+| **D: Editor-only** | No resume file yet, wants to write or edit one | Launch resume editor → **stop there** |
 
-**Path C is recommended**: the resume tells you what to search — skills, expected city, salary range. Crawled jobs are naturally aligned with the candidate's background, yielding higher match rates than guessing keywords.
+**Path C is recommended** for matching: the resume tells you what to search — skills, expected city, salary range. Crawled jobs are naturally aligned with the candidate's background, yielding higher match rates than guessing keywords.
 
-> **Confirmation rule**: regardless of path, Stage 7 (auto-apply) must show the recommended job list with match reasons BEFORE applying. Users confirm jobs, then greetings, then (optionally) resume image — only then execute apply.
+**Path D terminates at launch.** It opens the editor and reports the URL — nothing else. Don't chain it into matching on your own. It commonly serves as a precursor: the user writes a resume in the editor, exports a PDF, then re-enters at path A/B/C. If they'd rather skip the PDF round-trip, the editor's stored Markdown can feed Stage 3 directly — see [references/resume-editor.md](references/resume-editor.md) — but only do that when the user asks.
+
+> **Confirmation rule**: for paths A/B/C, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7b (which jobs) and 7g (approve the generated materials). Never apply without both.
 
 ## Run Directory
 
 Every skill invocation creates a timestamped run directory under `assets/` (e.g., `assets/2026-08-10_14-30-00/`). All outputs go there. Within one conversation, reuse the same directory via `--output-dir`.
+
+Path D is the exception — it produces no run outputs, so it needs no run directory.
 
 ---
 
@@ -35,6 +40,7 @@ Copy this checklist and check off items as you complete them:
 
 ```
 Progress:
+- [ ] Stage 0: Launch resume editor (path D — terminal step)
 - [ ] Stage 1: Crawl jobs (paths A, C)
 - [ ] Stage 2: Read resume file
 - [ ] Stage 3: Parse resume → profile.json
@@ -43,9 +49,94 @@ Progress:
 - [ ] Stage 4: Load job data from CSVs
 - [ ] Stage 5: Match analysis (quick or deep mode)
 - [ ] Stage 6: Generate HTML report + open in browser
-- [ ] Stage 7: Confirm jobs → greetings → resume image → apply
+- [ ] Stage 7: Confirm jobs → parallel per-job material generation → confirm → apply
 - [ ] Stage 8: Resume optimization (optional)
 ```
+
+### Stage 0: Launch Resume Editor (path D)
+
+Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No `pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for design rationale, limitations, and the `storage.py` data-moving tool.
+
+**Step 1 — start the static server** (background task):
+
+```bash
+python scripts/showcv/serve.py
+```
+
+Wait for the ready signal and read the actual address from it:
+
+```bash
+until grep -q "SHOWCV_READY" "<background task output file>"; do sleep 0.3; done
+grep "SHOWCV_READY" "<background task output file>"
+```
+
+First line is always `SHOWCV_READY http://127.0.0.1:<port>`, default 3090.
+
+**If that background process exits immediately but still printed `SHOWCV_READY`**: the service was already running and this run reused it. That's normal — use the address and continue. Do NOT restart it or pick another port; the port is what scopes the user's saved resumes.
+
+**Step 2 — open the browser** (use the address from step 1, don't assume 3090):
+
+```bash
+python scripts/showcv/launch.py http://127.0.0.1:3090
+```
+
+Prints `url=` / `title=` / `profile=` on success, with `ShowCV` in the title. **If the title lacks `ShowCV` the script exits 1** — that means the build is incomplete or the server isn't up. Don't report success.
+
+Optional flags: `--headless`, `--close` (verify then close immediately, for smoke tests), `--browser <exe>`.
+
+**Step 3 — report to the user**: the URL, that the browser is open, and **how to stop it** — `TaskStop` on the step-1 background task; they close the browser window themselves.
+
+Then stop. Path D ends here.
+
+### Stage 0.5: Batch-Import Markdown (standalone, on request only)
+
+Bulk-loads `.md` files into the editor's resume list. **Deliberately not wired into any path and
+not in the Progress checklist** — run it only when the user asks to import Markdown files. It
+assumes Stage 0 already ran (server up, browser open) and fails rather than starting them itself.
+
+```bash
+python scripts/showcv/import_md.py --url http://127.0.0.1:3090 <files-or-dirs> [-r] [--dry-run]
+```
+
+Read the URL from Stage 0's `SHOWCV_READY` line — `--url` has no default on purpose. Batching at
+the frontend's 50-file limit, duplicate-name handling, and the `localStorage` verification are
+handled by the script; see [references/resume-editor.md](references/resume-editor.md) for its
+constraints and failure modes.
+
+### Stage 0.6: Export Resumes as Images (standalone, on request only)
+
+Drives the editor's `/export` direct link, which the export button cannot do: it takes repeated
+`id` params or `all=1`, so one call covers a batch. **Not wired into any path and not in the
+Progress checklist** — same standing as Stage 0.5, and it likewise assumes Stage 0 already ran.
+
+```bash
+python scripts/showcv/export_images.py --url http://127.0.0.1:3090 [--name NAME | --id ID | --all]
+    [--mode paginated|flat] [--scale 1|2|3] [--out DIR] [--dry-run]
+```
+
+With no selector it exports the current resume, matching the page's own fallback. Names are
+resolved to ids locally, so a typo fails before anything is exported. Output is one PNG per A4
+page (`paginated`) or one long image (`flat`); anything more than a single image arrives as
+`showcv-images-<date>.zip`. The script confirms the files actually reached disk rather than
+trusting the page's "已下载" text.
+
+### Stage 0.7: Delete Resumes (standalone, on request only)
+
+Drives the `/delete` direct link. **Not wired into any path and not in the Progress checklist.**
+Destructive: `localStorage` is the only copy of these resumes.
+
+```bash
+# always look first
+python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --dry-run
+# then commit
+python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --yes
+```
+
+Without `--yes` it only prints the plan. With `--yes` it takes a full backup first (restorable via
+`storage.py --force load`, and the command is printed), then goes through the site's own
+confirmation page and aborts without clicking if the names it lists differ from what was resolved
+locally. Unlike `/export`, a missing `id` is never taken to mean "the current resume" — see
+[references/resume-editor.md](references/resume-editor.md).
 
 ### Stage 1: Crawl Jobs (paths A, C)
 
@@ -148,21 +239,41 @@ Open in browser: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or `s
 
 ### Stage 7: Confirm & Apply
 
-Five sub-steps — never skip user confirmation. See [references/auto-apply.md](references/auto-apply.md) for greeting templates, fallback mechanism, and apply flow details.
+Two user gates — 7b picks the jobs, 7g approves the generated materials — with a parallel per-job
+generation phase in between. See [references/auto-apply.md](references/auto-apply.md) for the
+flowchart, subagent contracts, the ShowCV rendering pipeline, and the directory layout.
 
-- **7a**: Display recommended jobs table with match scores and reasons
-- **7b**: `AskUserQuestion` — confirm which jobs to apply to
-- **7c**: Generate per-job greetings (5-paragraph structure), user confirms/edits each
-- **7c-2**: `AskUserQuestion` — upload resume image attachment?
-- **7d**: Execute `auto_apply_jobs()` with confirmed greetings and optional resume image
+| Sub-step | Action |
+|---|---|
+| **7a** | Display recommended jobs table with match scores and reasons |
+| **7b** | `AskUserQuestion` — **gate 1**: which jobs to apply to |
+| **7c** | `AskUserQuestion` — both independent questions in **one** call: 招呼语生成方式 (自定义 / 默认 / AI生成) and 是否发送图片 (自定义上传 / AI调整 / 不发送) |
+| **7d** | Launch subagents **in parallel, one pair per confirmed job**. Neither subagent touches a browser |
+| **7e** | Render adjusted resumes to flat images — **serial, one batch covering all jobs** (ShowCV) |
+| **7f** | Write `{run_dir}/applications/{company}-{position}/` per job, then notify the user to review |
+| **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
+| **7h** | On 全部投递, execute `auto_apply_jobs()` with the confirmed greetings and attachments |
 
-### Stage 8: Resume Optimization (optional)
+**Which subagents actually launch** in 7d — the non-AI options resolve inline and need no agent:
 
-Claude reads `scripts/prompts/resume_optimize.st`, compares the resume against a specific job's JD, and suggests targeted improvements. Never fabricate experience. Save to `{run_dir}/resume_{company}_{position}.md`.
+| 7c answer | 7d subagent | 7h attachment |
+|---|---|---|
+| 招呼语 **自定义** | none — one user-supplied text reused for every job | — |
+| 招呼语 **默认** | none — `generate_greeting()` per job | — |
+| 招呼语 **AI生成** | one greeting agent per job | — |
+| 图片 **自定义上传** | none — validate the path, copy into the job dir | the user's image |
+| 图片 **AI调整** | one resume agent per job, base = the original resume | the rendered flat PNG |
+| 图片 **不发送** | one resume agent per job, base = generic resume structure | none (the PNG is archived only) |
+
+**7e is a barrier**: every resume agent must finish first, because a single
+import → export → delete batch covers all jobs. Never run two ShowCV commands concurrently — they
+share one browser on debug port 9333, and that port may be an *adopted* browser holding the user's
+real resumes (see [references/resume-editor.md](references/resume-editor.md)).
+
 
 ## Package Reference
 
-See [references/scripts.md](references/scripts.md) for module tables, key functions, and import examples for both `boss_crawler/` and `resume_matcher/` packages.
+See [references/scripts.md](references/scripts.md) for module tables, key functions, and import examples for both `boss_crawler/` and `resume_matcher/` packages, and [references/resume-editor.md](references/resume-editor.md) for `showcv/`.
 
 ## Key Principles
 

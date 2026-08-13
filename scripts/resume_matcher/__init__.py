@@ -54,7 +54,7 @@ from .scoring import (
 from .report import generate_html_report, generate_bauhaus_json
 
 # ── 自动投递
-from .auto_apply import auto_apply_jobs
+from .auto_apply import auto_apply_jobs, generate_greeting
 
 # ── 深度分析
 from .deep_analysis import (
@@ -99,7 +99,7 @@ __all__ = [
     # Report
     "generate_html_report", "generate_bauhaus_json",
     # Auto-apply
-    "auto_apply_jobs",
+    "auto_apply_jobs", "generate_greeting",
     # Deep analysis
     "save_deep_candidates", "merge_deep_results",
     "serialize_profile", "deserialize_profile",

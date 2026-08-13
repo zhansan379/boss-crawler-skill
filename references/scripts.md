@@ -76,6 +76,26 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `boss_post_interactive.py` | Crawler CLI entry point (thin wrapper over `boss_crawler/`) |
 | `run_matcher.py` | Matching pipeline entry point (`--mode quick\|deep`) |
 | `validate_profile.py` | Cross-validation: diff raw resume vs profile.json |
+| `check_artifacts.py` | 7d→7e barrier: verify each subagent's artifact landed in `generated/`. Exit 1 + names on any miss. Use this instead of waiting on completion notifications, which are not guaranteed to arrive |
+
+---
+
+## showcv/ Scripts
+
+Embedded ShowCV Markdown resume editor (path D / Stage 0). Standalone CLI scripts — run as
+scripts, not modules. Full documentation in [resume-editor.md](resume-editor.md).
+
+| Script | Purpose |
+|--------|---------|
+| `showcv/serve.py` | Static server for `app/` with SPA fallback; prints `SHOWCV_READY <url>` |
+| `showcv/launch.py` | Opens isolated Chromium (port 9333, profile `assets/showcv_profile/`) and verifies load |
+| `showcv/storage.py` | Resume data `dump`/`load`/`move` between origins and disk |
+| `showcv/import_md.py` | Batch-import `.md` files as resumes (standalone stage, on request only) |
+| `showcv/export_images.py` | Export resumes as PNG/zip via the `/export` direct link |
+| `showcv/delete_resumes.py` | Delete resumes via `/delete`; backs up first, needs `--yes` |
+| `showcv/sync_app.py` | Re-sync `app/` from a ShowCV repo `dist/` (upgrade only) |
+| `showcv/_browser.py` | Shared browser connection logic, incl. real-profile resolution |
+| `showcv/_resumes.py` | Shared resume list reader + `--id`/`--name` → id resolution |
 
 ---
 
@@ -108,3 +128,14 @@ All outputs under `assets/<timestamp>/`:
 | `resume_{company}_{position}.md` | Per-job optimized resume |
 | `apply_log.json` | Auto-apply record |
 | `LATEST.txt` (in `assets/`) | Pointer to most recent run timestamp |
+
+Not run outputs, but also under `assets/` (both gitignored):
+
+| Path | Description |
+|------|-------------|
+| `chrome_user_data/` | BOSS Zhipin login state (persists across runs) |
+| `showcv_profile/` | Resume editor's Chrome profile — **the resumes live in here** (~28MB) |
+| `showcv-resume.json` | Default `storage.py dump` target |
+| `showcv_exports/` | Default `export_images.py` download directory |
+| `showcv_backups/` | Automatic pre-delete backups from `delete_resumes.py` |
+
