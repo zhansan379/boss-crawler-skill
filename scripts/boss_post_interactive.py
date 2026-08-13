@@ -9,7 +9,13 @@ BOSS直聘交互式岗位爬虫
 
 此文件为薄入口，实际逻辑已拆分至 boss_crawler/ 包。
 """
+import sys
+
 from boss_crawler import main
 
 if __name__ == '__main__':
+    # Windows 控制台是 GBK，爬虫的中文/emoji 进度输出会抛 UnicodeEncodeError
+    # 并带崩整轮采集。在入口统一改掉，调用方不必每条命令加 PYTHONIOENCODING。
+    for _stream in (sys.stdout, sys.stderr):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
     main()

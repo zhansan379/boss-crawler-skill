@@ -225,6 +225,12 @@ def run_deep_merge(output_dir: str) -> None:
 
 
 def main():
+    # Windows 控制台是 GBK，print 里任何 emoji（本文件就有 📄/🧠）都会抛
+    # UnicodeEncodeError 并带崩整个匹配流程。放在 main() 头部，调用方就不必
+    # 每条命令手加 PYTHONIOENCODING=utf-8。
+    for _stream in (sys.stdout, sys.stderr):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(
         description='BOSS直聘岗位匹配系统 — 简历与岗位智能匹配',
         formatter_class=argparse.RawDescriptionHelpFormatter,

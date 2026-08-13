@@ -346,7 +346,8 @@ def print_report(report: dict):
 def main():
     # Fix Windows console encoding for emoji/Chinese output
     if sys.platform == 'win32':
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        for _stream in (sys.stdout, sys.stderr):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
 
     if len(sys.argv) < 3:
         print("用法: python validate_profile.py <resume_text_path> <profile_json_path>")

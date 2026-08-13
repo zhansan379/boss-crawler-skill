@@ -667,8 +667,12 @@ def classify_jobs_advanced(
     ]
 
     salary = profile.salary_expectation or {}
-    sal_min = salary.get('min', 8)
-    sal_max = salary.get('max', 10)
+    # `or` 而不是 get 的第二参数：简历没写期望薪资时，解析产出的是
+    # {"min": null, "max": null}——键存在、值是 None，默认值形同虚设，
+    # 于是 None 一路传到 score_job_advanced 的 `sal_low <= salary_max` 崩成
+    # TypeError，整批评分挂掉（2026-08-13 实测）。
+    sal_min = salary.get('min') or 8
+    sal_max = salary.get('max') or 10
     user_experience_years = float(profile.experience.get('total_years', 0) or 0)
     user_degree = profile.education.get('degree', '') or ''
 

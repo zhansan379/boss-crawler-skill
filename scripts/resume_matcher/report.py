@@ -70,8 +70,8 @@ def generate_html_report(
         'education': education_str,
         'skills': all_skills,
         'salary_expectation': {
-            'min': salary.get('min', '?') if salary else '?',
-            'max': salary.get('max', '?') if salary else '?'
+            'min': salary.get('min') or '?' if salary else '?',
+            'max': salary.get('max') or '?' if salary else '?'
         },
         'target_city': profile.basic_info.get('city', '杭州'),
         'target_position': profile.basic_info.get('target_position', '后端开发'),
@@ -195,8 +195,10 @@ def generate_bauhaus_json(
                       f"{profile.education.get('graduation_year', '')}届").strip(' ·'),
         'skills': all_skills,
         'salary_expectation': {
-            'min': profile.salary_expectation.get('min', '?'),
-            'max': profile.salary_expectation.get('max', '?')
+            # 与本文件 73-74 行同样的兜底：salary_expectation 整个可能是 null，
+            # 值也可能是 null，两层都要挡，否则报告生成整个崩掉
+            'min': (profile.salary_expectation or {}).get('min') or '?',
+            'max': (profile.salary_expectation or {}).get('max') or '?'
         },
         'target_city': '杭州',
         'target_position': '后端开发 / AI应用开发'

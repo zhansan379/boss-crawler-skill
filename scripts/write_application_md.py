@@ -367,7 +367,8 @@ def write_one(run_dir, job, index, args):
 
 
 def main():
-    sys.stdout.reconfigure(encoding='utf-8')      # Windows 控制台是 GBK
+    for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK
+        _stream.reconfigure(encoding='utf-8', errors='replace')
 
     ap = argparse.ArgumentParser(
         description='生成 applications/<公司>-<岗位>/岗位信息+招呼语.md（含全部爬取字段）')

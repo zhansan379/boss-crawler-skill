@@ -49,6 +49,18 @@ Progress:
 - [ ] Stage 7: Confirm jobs → parallel per-job material generation → confirm → apply
 ```
 
+**Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
+state.** Ask the filesystem instead:
+
+```bash
+python scripts/where_am_i.py           # or pass an explicit <run_dir>
+```
+
+It infers the current stage from the run directory's artifacts and prints the next commands in
+~500 characters. `references/auto-apply.md` is 25k characters; in the 2026-08-13 run it was read
+five times, twice purely because compaction had discarded the earlier read. Consult a reference doc
+only for the *one* section `where_am_i.py` points you at, and read that section, not the whole file.
+
 ### Stage 0: Launch Resume Editor (path D)
 
 Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No `pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for design rationale, limitations, and the `storage.py` data-moving tool.

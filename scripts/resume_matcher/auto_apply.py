@@ -123,8 +123,9 @@ def generate_greeting(
     major = education.get('major', '')
     school = education.get('school', '')
 
-    # 经验年限
-    total_years = profile.experience.get('total_years', 0)
+    # 经验年限 —— 用 `or` 兜底：应届简历里 total_years 是 null 而非缺键，
+    # get 的默认值不生效，`None > 0` 直接 TypeError（同 scoring.py:674 的坑）
+    total_years = profile.experience.get('total_years') or 0
     exp_desc = f"{total_years}年" if total_years > 0 else "实习"
 
     # 构建招呼语

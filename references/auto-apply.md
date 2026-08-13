@@ -191,20 +191,34 @@ So before starting 7e, settle the barrier against the filesystem. Both 7d contra
 agent to write its artifact to `{run_dir}/generated/`, which is what makes this check possible:
 
 ```bash
-python scripts/check_artifacts.py "{run_dir}"
+# --wait polls until the artifacts land; default 360s. Raise the Bash timeout to match.
+python scripts/check_artifacts.py "{run_dir}" --wait 360
 ```
+
+**A missing artifact is not proof the agent is dead.** This is the other half of the rule, and
+getting it wrong costs as much as the stall did. In the 2026-08-13 real run the resume agent was
+dispatched at 11:59:37 and this check was run at 12:00:24 — **47 seconds later**. It reported
+「缺失：resume #1」, so a duplicate was dispatched at 12:04:10 and ran for 241 s; meanwhile the
+`task_status` record at 12:03:11 shows the *original* agent still `running`. Two agents produced the
+same resume, burning ~4 minutes and double the tokens. Resume optimization takes 3–5 minutes, so a
+snapshot taken 47 s after dispatch is guaranteed to look empty.
+
+So `--wait` is the default and a bare snapshot (`--wait 0`) is only for re-checking *after* you have
+established the agent is no longer running. The script also ignores 0-byte files, since an agent that
+has just `open()`ed its output would otherwise pass the barrier and send an empty resume into 7e.
 
 Expect one greeting and one resume per job (minus whatever the 7c skip rules exempt). Then:
 
 - **All present** → proceed to 7e immediately, regardless of which notifications arrived.
-- **Some missing** → re-dispatch only the missing ones. Do not re-run agents whose artifact exists;
-  that burns tokens and can overwrite good output with a worse sample.
+- **Missing after the full wait elapsed** → now you may treat them as dead. Re-dispatch only those.
+  Do not re-run agents whose artifact exists; that burns tokens and can overwrite good output with a
+  worse sample.
 - **Still missing after one re-dispatch** → **drop that job from the batch.** Mark it failed, leave it
   out of the 7e render batch and out of the 7h apply list, and surface it in the 7g summary
   ("N 个岗位材料生成失败，已跳过"). One retry, then move on — a stuck agent must not hold up the
   other jobs' materials.
-- **Nothing arrived after a couple of minutes** → check the filesystem *before* concluding anything
-  is still running. A missing notification and a slow agent look identical from the inside.
+- **Never re-dispatch on a snapshot alone.** A missing notification, a slow agent, and a dead agent
+  are all indistinguishable from the inside; only the elapsed wait separates them.
 
 The same rule applies to any fan-out in this skill: **an agent's artifact on disk is the source of
 truth for whether it finished.** Track expected artifacts explicitly rather than counting
@@ -282,6 +296,28 @@ differs from what it resolved locally. See
 **Never run two of these commands concurrently.** They drive one browser, and `import_md.py`,
 `storage.py` and `delete_resumes.py` all mutate through the *main* tab — a second command mid-flight
 would have zustand `persist` write stale in-memory state back over the result.
+
+### Verify the render without `Read`-ing it
+
+A PNG that exported blank or half-finished must be caught before 7h attaches it to a real
+application. Check it with the script, which prints ~8 lines of numbers:
+
+```bash
+python scripts/verify_image.py "{run_dir}/applications" --all
+```
+
+It flags blank/solid images, too-few content rows, a bottom margin over 25% (export fired before the
+page finished laying out), and — by cross-checking the sibling `<姓名>-<应聘岗位>.md` — a render that
+contains far less content than its own source. Exit 1 means something is suspicious.
+
+**`Read` on one of these images is the single most expensive thing this skill can do.** Measured on
+the 2026-08-13 run (session `3b45c941`), reading `<姓名>-<应聘岗位>.png` — a 509 KB JPEG — cost
+**638,960 input tokens in one request**: 79% of that entire 46-minute session's 809k fresh input
+tokens. Context went 83k → 722k in one step and immediately tripped auto-compaction, which cost
+another 112 s *and* discarded the 7e/7f working context, so `auto-apply.md` had to be re-read
+afterwards. Images enter context as base64 and bill roughly per character, so the cost tracks
+**file size**, not visual complexity — and compaction cannot help, because it runs after the request
+that already paid. If a human genuinely needs to look, print the path and let the user open it.
 
 ## 7f: Directory Layout & Files
 
@@ -468,3 +504,5 @@ the effect only appears when a caller sets a smaller cap.
 - Pause and notify user on captcha
 - Reuse `./chrome_user_data/` login session (port 9222 — distinct from ShowCV's 9333)
 - Log every application to `{run_dir}/apply_log.json`
+- **Never `Read` a rendered resume image.** See 7e「Verify the render without Read-ing it」— one
+  0.5 MB PNG is ~640k input tokens. Use `scripts/verify_image.py`, or hand the path to the user.
