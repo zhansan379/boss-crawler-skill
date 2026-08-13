@@ -6,6 +6,7 @@
 - score_job_advanced:          6 维度规则评分（0-115 分）
 - decide_application_category: 硬门槛优先的投递建议分类（后端唯一裁定）
 - compute_difficulty:          分数 → 难度等级
+- hr_activity_rank:            HR 活跃度 → 排序键（不参与评分）
 - classify_jobs_advanced:      批量评分 + 4 级分层
 - tiers_to_classification:     tiers → JobClassification 适配器
 
@@ -25,6 +26,72 @@ from .utils import parse_experience_years, parse_company_size
 TIER1_MIN = 100   # Easy   / qualified
 TIER2_MIN = 85    # Medium / need_optimization
 TIER3_MIN = 70    # Hard   / cannot_apply（低于此值归入 Tier4，报告中丢弃）
+
+
+# ==================== HR 活跃度（排序键，不参与评分） ====================
+
+# 活跃度刻意不进入 score，也不影响 application_category。
+# 它衡量的是「HR 会不会回」，与「人岗是否匹配」是两个正交维度 —— 混进总分会让
+# 「匹配度 85%」这个数字失去单一含义，也会让 difficulty 阈值随 HR 状态漂移。
+# 这里只产出一个排序键：auto_apply 用它决定投递顺序，报告用它展示。
+#
+# 数据是爬取瞬间的快照。bossOnline 波动极快，投递时通常已过期；
+# activeTimeDesc（"刚刚活跃"/"本月活跃"）粒度粗但相对稳定，是排序的主要依据。
+
+HR_ONLINE_RANK = 100      # 爬取瞬间在线
+HR_UNRECOGNIZED_RANK = 30  # 采集到了但文案无法识别
+
+
+def hr_activity_rank(job) -> Optional[int]:
+    """
+    把 HR 活跃度快照折算成排序键。越大越活跃。
+
+    Returns:
+        int:  0-100，越大越活跃
+        None: 未采集（无 -d 的爬取拿不到活跃度）
+
+    None 是有意义的取值而非错误：未采集时全部岗位同为 None，排序退化成纯
+    match_score 排序，而不是把它们误判成「最不活跃」而集体沉底。
+    """
+    online = (job.get('HR在线') or job.get('hr_online') or '').strip()
+    if online == '是':
+        return HR_ONLINE_RANK
+
+    desc = (job.get('HR活跃度') or job.get('hr_active_desc') or '').strip()
+    if not desc:
+        return None
+
+    # 带数字的区间文案优先（"3日内活跃"），再落到固定文案
+    m = re.search(r'(\d+)\s*[日天]', desc)
+    if m:
+        return max(65, 78 - int(m.group(1)))
+    m = re.search(r'(\d+)\s*周', desc)
+    if m:
+        return max(45, 58 - int(m.group(1)) * 3)
+    m = re.search(r'(\d+)\s*个?月', desc)
+    if m:
+        return max(15, 38 - int(m.group(1)) * 4)
+
+    for token, rank in (
+        ('刚刚', 90),
+        ('今日', 80), ('今天', 80),
+        ('本周', 60),
+        ('半月', 50), ('半个月', 50),
+        ('本月', 40),
+        ('半年', 12),
+        ('年前', 10),
+    ):
+        if token in desc:
+            return rank
+
+    # BOSS 改了文案：给中性值。既不当成最不活跃，也不退回 None —— 它确实采集到了。
+    return HR_UNRECOGNIZED_RANK
+
+
+def hr_activity_sort_key(job) -> int:
+    """排序用：未采集（None）折成 -1，排在所有已采集岗位之后。"""
+    rank = hr_activity_rank(job)
+    return -1 if rank is None else rank
 
 
 # ==================== 投递建议分类 ====================
@@ -634,13 +701,108 @@ def classify_jobs_advanced(
         else:
             tier4.append(job_result)
 
+    # 报告是给人看的，主序仍是匹配分；活跃度只做同分裁决
     for tier in (tier1, tier2, tier3, tier4):
-        tier.sort(key=lambda x: x['match_score'], reverse=True)
+        tier.sort(key=lambda x: (x['match_score'], hr_activity_sort_key(x)), reverse=True)
 
     print(f"分析完成！Tier1: {len(tier1)}, Tier2: {len(tier2)}, "
           f"Tier3: {len(tier3)}, Tier4: {len(tier4)}")
 
     return tier1, tier2, tier3, tier4
+
+
+# ==================== 岗位视图（唯一的字段映射处） ====================
+
+# 岗位从 CSV（中文列名）走到前端（ASCII 键）的路上要被重新构造一次。
+# 这里曾经有三份各自独立的白名单：scoring.tiers_to_classification、
+# report.generate_bauhaus_json、deep_analysis 的 job_result。三者服务不同路径
+# （快速模式 HTML / 快速模式 JSON / 深度模式），加一个字段必须同步改三处，
+# 漏一处那条路径就静默丢字段 —— 没有报错，只是前端拿到空值。
+# HR 活跃度就这么丢过一次：JSON 正常，HTML 每张卡都显示「未采集」，
+# 而数据其实已经采到了。比不显示更糟的是显示成没有。
+#
+# 所以现在只有这一处枚举岗位字段。新增字段只加在这里。
+def build_job_view(
+    job: Dict[str, Any],
+    fallback_category: str = '',
+    *,
+    company_info_len: int = 500,
+    jd_len: int = 1000,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    岗位 dict → 报告/前端统一视图。
+
+    读取时对「中文列名（来自 CSV）」和「ASCII 键（已归一化过的 job）」都做兜底，
+    所以同一个函数能吃原始 CSV 行，也能吃已经映射过一轮的 job。
+
+    Args:
+        job: 岗位 dict，中文或 ASCII 键均可
+        fallback_category: job 自身没有 application_category 时的兜底值
+        company_info_len / jd_len: 截断长度。JSON 产出比 HTML 更紧，故可调。
+        overrides: 调用方已算好的字段（如深度模式的 blended 分数），最后覆盖上去
+
+    Returns:
+        扁平 dict，键为前端读取的 ASCII 名
+    """
+    link = job.get('link', '') or ''
+    job_id = job.get('job_id', '') or ''
+    if not job_id and link:
+        m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link)
+        if m:
+            job_id = 'job_' + m.group(1)
+
+    score = job.get('match_score', 50)
+    company = job.get('公司', job.get('company', '')) or ''
+    scale = job.get('规模', job.get('scale', '')) or ''
+    skill_tags = job.get('技能标签', job.get('skill_tags', '')) or ''
+    jd = (job.get('岗位要求和职责', job.get('jd', '')) or '')
+    company_info = (job.get('公司信息', job.get('company_info', '')) or '')
+
+    view = {
+        'job_id': job_id or f"job_{abs(hash(link)):x}"[:12],
+        'link': link or '#',
+        'company': company,
+        'position': job.get('职位', job.get('position', '')) or '',
+        'city': job.get('城市', job.get('city', '')) or '',
+        'salary': job.get('薪资', job.get('salary', '')) or '',
+        'experience': job.get('经验', job.get('experience', '')) or '',
+        'education': job.get('学历', job.get('degree', job.get('education', ''))) or '',
+        'skills': skill_tags,
+        'skill_tags': skill_tags,
+        'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')) or '',
+        'source_file': job.get('source_file', '') or '',
+        'company_info': company_info[:company_info_len],
+        'scale': scale,
+        'jd': jd[:jd_len],
+        'job_detail': jd[:200],
+        'company_size': parse_company_size(company, scale),
+        'match_score': score,
+        'difficulty': compute_difficulty(score),
+        'application_category': job.get('application_category', fallback_category),
+        'application_category_reason': job.get('application_category_reason', '') or '',
+        'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
+        'missing_items': job.get('missing_skills', [])[:5],
+        'optimization_points': job.get('optimization_points', []),
+        # HR 活跃度快照（爬取瞬间）。rank 为 None 表示「未采集」——爬取时没加 -d，
+        # 详情 API 没被调用过。这与「不活跃」是两件事，前端必须分开显示。
+        'hr_active_desc': job.get('HR活跃度', job.get('hr_active_desc', '')) or '',
+        'hr_online': job.get('HR在线', job.get('hr_online', '')) or '',
+        'hr_title': job.get('HR职位', job.get('hr_title', '')) or '',
+        'hr_activity_rank': hr_activity_rank(job),
+        # 深度模式专有，快速模式留空以保证两种模式字段集一致（前端无需判空）
+        'highlight': job.get('highlight', '') or '',
+        'risk': job.get('risk', '') or '',
+        'is_deep': bool(job.get('is_deep', False)),
+    }
+
+    if overrides:
+        view.update(overrides)
+    return view
+
+
+# 供回归测试和调用方校验：视图的完整字段集合。
+JOB_VIEW_FIELDS = frozenset(build_job_view({}).keys())
 
 
 # ==================== 适配器 ====================
@@ -658,50 +820,8 @@ def tiers_to_classification(
     tier3 → cannot_apply（不匹配）
     tier4 丢弃
     """
-    def _map_job(job: Dict, fallback_category: str) -> Dict[str, Any]:
-        link = job.get('link', '')
-        job_id = job.get('job_id', '')
-        if not job_id and link:
-            m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link)
-            if m:
-                job_id = 'job_' + m.group(1)
-
-        score = job.get('match_score', 50)
-        skill_tags = job.get('技能标签', job.get('skill_tags', ''))
-        jd = (job.get('岗位要求和职责', job.get('jd', '')) or '')
-
-        return {
-            'job_id': job_id or f"job_{abs(hash(link)):x}"[:12],
-            'link': link,
-            'company': job.get('公司', job.get('company', '')),
-            'position': job.get('职位', job.get('position', '')),
-            'city': job.get('城市', job.get('city', '')),
-            'salary': job.get('薪资', job.get('salary', '')),
-            'experience': job.get('经验', job.get('experience', '')),
-            'education': job.get('学历', job.get('education', '')),
-            'skills': skill_tags,
-            'skill_tags': skill_tags,
-            'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')),
-            'source_file': job.get('source_file', ''),
-            'company_info': (job.get('公司信息', job.get('company_info', '')) or '')[:500],
-            'scale': job.get('规模', job.get('scale', '')),
-            'jd': jd[:1000],
-            'job_detail': jd[:200],
-            'company_size': parse_company_size(
-                job.get('公司', job.get('company', '')),
-                job.get('规模', job.get('scale', ''))
-            ),
-            'match_score': score,
-            'difficulty': compute_difficulty(score),
-            'application_category': job.get('application_category', fallback_category),
-            'application_category_reason': job.get('application_category_reason', ''),
-            'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
-            'missing_items': job.get('missing_skills', [])[:5],
-            'optimization_points': job.get('optimization_points', []),
-        }
-
     return JobClassification(
-        cannot_apply=[_map_job(j, CATEGORY_CANNOT_APPLY) for j in tier3],
-        need_optimization=[_map_job(j, CATEGORY_NEED_OPTIMIZATION) for j in tier2],
-        qualified=[_map_job(j, CATEGORY_QUALIFIED) for j in tier1],
+        cannot_apply=[build_job_view(j, CATEGORY_CANNOT_APPLY) for j in tier3],
+        need_optimization=[build_job_view(j, CATEGORY_NEED_OPTIMIZATION) for j in tier2],
+        qualified=[build_job_view(j, CATEGORY_QUALIFIED) for j in tier1],
     )

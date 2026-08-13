@@ -67,7 +67,9 @@ python scripts/boss_post_interactive.py -u
 
 ## Important Notes
 
-- `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly
+- `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly. It is also the only source of the three HR-activity columns (`HR活跃度` / `HR在线` / `HR职位`): they come from `zpData.bossInfo` on the detail API, so a crawl without `-d` leaves them empty, the report shows 活跃度未采集, and Stage 7's apply ordering falls back to pure `match_score`
+- HR activity is a **crawl-time snapshot**, never re-fetched. `HR在线` in particular is stale by the time you apply — treat `HR活跃度` as the durable signal. An empty value means "not collected", which is *not* the same as "offline"
+- The CSV header is migrated in place: opening an older 17-column file rewrites it to the current 20-column schema (missing cells filled with `''`) and prints a `[迁移]` line. Existing rows are preserved but keep empty HR columns — re-crawl to populate them
 - Default request delay is on (anti-crawl); use `--no-sleep` only if you understand the risk
 - Persistent Chrome profile at `./chrome_user_data/` means login once, crawl many times
 - CSV output lands in `./post_data/` directory

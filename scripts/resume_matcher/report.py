@@ -11,9 +11,11 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
-from .utils import ensure_output_dir, parse_company_size
+from .utils import ensure_output_dir
 from .scoring import (
     compute_difficulty,
+    hr_activity_rank,
+    build_job_view,
     CATEGORY_QUALIFIED,
     CATEGORY_NEED_OPTIMIZATION,
     CATEGORY_CANNOT_APPLY,
@@ -106,6 +108,13 @@ def generate_html_report(
         if not job.get('application_category'):
             job['application_category'] = category
         job.setdefault('application_category_reason', '')
+        # HR 活跃度：CSV 里是中文列名，归一化成前端读的 ASCII 键。
+        # hr_activity_rank 为 None 表示未采集（无 -d），前端据此显示「未采集」，
+        # 而不是把它伪装成「不活跃」。
+        job['hr_active_desc'] = job.get('HR活跃度', job.get('hr_active_desc', '')) or ''
+        job['hr_online'] = job.get('HR在线', job.get('hr_online', '')) or ''
+        job['hr_title'] = job.get('HR职位', job.get('hr_title', '')) or ''
+        job['hr_activity_rank'] = hr_activity_rank(job)
         return job
 
     # ── 构建完整数据 ──
@@ -194,42 +203,10 @@ def generate_bauhaus_json(
     }
 
     # ── 映射岗位到报告格式 ──
+    # 字段枚举统一在 scoring.build_job_view，不要在这里重建 dict（见该函数注释）。
+    # JSON 产出比 HTML 紧，只调截断长度。
     def _map_to_report(job: Dict, category: str) -> Dict:
-        score = job.get('match_score', 50)
-        difficulty = compute_difficulty(score)
-        company_size = parse_company_size(
-            job.get('公司', job.get('company', '')),
-            job.get('规模', job.get('scale', ''))
-        )
-        link = job.get('link', '')
-        # 从链接中提取唯一 ID
-        import re
-        m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link) if link else None
-        job_id = f"job_{m.group(1)}" if m else f"job_{abs(hash(link or str(id(job)))):x}"[:12]
-
-        return {
-            'job_id': job_id,
-            'company': job.get('公司', job.get('company', '')),
-            'position': job.get('职位', job.get('position', '')),
-            'salary': job.get('薪资', job.get('salary', '')),
-            'city': job.get('城市', job.get('city', '杭州')),
-            'experience': job.get('经验', job.get('experience', '')),
-            'education': job.get('学历', job.get('degree', job.get('education', ''))),
-            'match_score': score,
-            'difficulty': difficulty,
-            'application_category': job.get('application_category', category),
-            'application_category_reason': job.get('application_category_reason', ''),
-            'company_size': company_size,
-            'scale': job.get('规模', job.get('scale', '')),
-            'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
-            'missing_items': job.get('missing_skills', [])[:5],
-            'optimization_points': job.get('optimization_points', []),
-            'link': link or '#',
-            'skill_tags': job.get('技能标签', job.get('skill_tags', '')),
-            'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')),
-            'company_info': (job.get('公司信息', job.get('company_info', '')) or '')[:300],
-            'jd': (job.get('岗位要求和职责', job.get('jd', '')) or '')[:500],
-        }
+        return build_job_view(job, category, company_info_len=300, jd_len=500)
 
     # ── 构建输出 ──
     output = {

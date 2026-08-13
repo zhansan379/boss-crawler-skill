@@ -344,6 +344,12 @@ nav {
 .tag-difficulty-medium { background: var(--primary-yellow); }
 .tag-difficulty-hard { background: var(--primary-red); color: white; }
 
+/* HR 活跃度：爬取瞬间的快照，后端 hr_activity_rank 分档，前端只查表 */
+.tag-hr-online { background: #00897B; color: white; border-color: #00897B; }
+.tag-hr-high { background: #B2DFDB; }
+.tag-hr-low { background: var(--muted); }
+.tag-hr-unknown { background: transparent; color: var(--border); border-style: dashed; }
+
 /* 投递建议分类：后端 application_category 字段直出，前端不做任何运算 */
 .tag-category-qualified { background: #1B5E20; color: white; border-color: #1B5E20; }
 .tag-category-need_optimization { background: #E65100; color: white; border-color: #E65100; }
@@ -930,6 +936,7 @@ function renderJobList(sectionId, jobs) {
             '<div class="job-meta">' +
             '<span class="job-tag ' + getCategoryClass(job.application_category) + '">' + escapeHtml(getCategoryLabel(job.application_category)) + '</span>' +
             '<span class="job-tag ' + getDifficultyClass(job.difficulty) + '">' + escapeHtml(job.difficulty || 'Medium') + '</span>' +
+            renderHrTag(job) +
             '<span class="job-tag">' + escapeHtml(job.salary || '') + '</span>' +
             (job.scale ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.scale) + '</span>' : (job.company_size ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.company_size) + '</span>' : (job.company_info ? '<span class="job-tag" style="background:var(--muted);">🏢 ' + escapeHtml(job.company_info.substring(0, 30)) + '</span>' : ''))) +
             (job.city ? '<span class="job-tag">📍 ' + escapeHtml(job.city) + '</span>' : '') +
@@ -941,7 +948,8 @@ function renderJobList(sectionId, jobs) {
             '<div class="detail-title">投递建议</div>' +
             '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(getCategoryLabel(job.application_category)) +
             (job.application_category_reason ? ' —— ' + escapeHtml(job.application_category_reason) : '') +
-            '</p></div>' +
+            '</p>' +
+            '<p style="font-weight:500;padding-left:1rem;">' + hrDetailLine(job) + '</p></div>' +
             '<div class="detail-section">' +
             '<div class="detail-title">分类原因</div>' +
             '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(job.classification_reason || '') + '</p></div>' +
@@ -995,6 +1003,48 @@ function getDifficultyClass(difficulty) {
     if (difficulty === 'Medium' || difficulty === '中') return 'tag-difficulty-medium';
     if (difficulty === 'Hard' || difficulty === '难') return 'tag-difficulty-hard';
     return '';
+}
+
+// ── HR 活跃度：纯查表渲染 ──
+// 分档由后端 hr_activity_rank 给出（scoring.py），前端只挑颜色和文案。
+// rank === null 表示未采集：爬取时没加 -d，详情 API 没被调用过。
+// 这必须显示成「未采集」而不是「不活跃」—— 两者对投递决策的含义完全不同。
+function renderHrTag(job) {
+    var rank = job.hr_activity_rank;
+    var desc = job.hr_active_desc || '';
+    var title = job.hr_title ? ' · ' + job.hr_title : '';
+
+    if (rank === null || rank === undefined) {
+        return '<span class="job-tag tag-hr-unknown" title="爬取时未加 -d，未采集活跃度">'
+            + '👤 活跃度未采集</span>';
+    }
+
+    var cls, icon;
+    if (job.hr_online === '是') { cls = 'tag-hr-online'; icon = '🟢 在线'; }
+    else if (rank >= 60) { cls = 'tag-hr-high'; icon = '🟡'; }
+    else { cls = 'tag-hr-low'; icon = '⚪'; }
+
+    var text = (job.hr_online === '是' && desc) ? (icon + '·' + desc)
+             : (desc ? icon + ' ' + desc : icon + ' 活跃度未知');
+
+    return '<span class="job-tag ' + cls + '" title="爬取瞬间的快照'
+        + escapeHtml(title) + '">' + escapeHtml(text) + '</span>';
+}
+
+// 展开区的一行说明，让活跃度出现在决策上下文里而不只是个角落标签。
+// 明确写出「快照」和采集时间的不确定性 —— 在线状态到投递时通常已经过期。
+function hrDetailLine(job) {
+    var rank = job.hr_activity_rank;
+    if (rank === null || rank === undefined) {
+        return '👤 HR 活跃度：未采集（爬取时未使用 <code>-d</code>，投递排序将退化为按匹配分）';
+    }
+    var parts = [];
+    if (job.hr_active_desc) parts.push(escapeHtml(job.hr_active_desc));
+    if (job.hr_online === '是') parts.push('爬取时在线');
+    else if (job.hr_online === '否') parts.push('爬取时离线');
+    if (job.hr_title) parts.push('招聘者身份：' + escapeHtml(job.hr_title));
+    return '👤 HR 活跃度：' + (parts.join('，') || '未知')
+        + '（爬取瞬间快照，实时状态可能已变化）';
 }
 
 // ── 投递建议分类：纯查表渲染 ──

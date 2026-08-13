@@ -50,7 +50,11 @@ def process_job_list(job_list, file_path, existing_links, csv_writer):
             '福利标签': ' '.join(job.get('welfareList', [])),
             '位置': str(job.get('gps', '')),
             '岗位要求和职责': '',
-            '公司信息': ''
+            '公司信息': '',
+            # HR 活跃度只存在于详情 API，列表阶段一律留空，由 crawl_job_details 回填
+            'HR活跃度': '',
+            'HR在线': '',
+            'HR职位': ''
         }
 
         csv_writer.writerow(dit)
@@ -171,7 +175,14 @@ def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit, existing_l
 # ==================== 详情爬取 ====================
 
 def get_single_job_detail(dp, url):
-    """获取单个岗位详情（优先API直调，兜底DOM解析）"""
+    """
+    获取单个岗位详情（优先API直调，兜底DOM解析）
+
+    Returns:
+        dict: {'jd', 'company_info', 'hr_active', 'hr_online', 'hr_title'}
+              HR 三项仅 API 直调分支可得，DOM 兜底时为空串。
+        None: 获取失败或需要登录
+    """
     import re
     try:
         time_stats.start_request('detail', url)
@@ -237,7 +248,11 @@ def get_single_job_detail(dp, url):
 
         if post_desc:
             time_stats.end_request(True, 'API直调')
-            return (post_desc, comp_info if comp_info else '')
+            return {
+                'jd': post_desc,
+                'company_info': comp_info if comp_info else '',
+                **_extract_hr_info(zp),
+            }
 
         # API 没有描述内容，回退 DOM
         dp.get(url)
@@ -249,8 +264,31 @@ def get_single_job_detail(dp, url):
         return None
 
 
+def _extract_hr_info(zp):
+    """
+    从详情 API 的 zpData.bossInfo 提取招聘者活跃度。
+
+    快照语义：这三项是爬取瞬间的状态。bossOnline 波动极快，
+    投递时基本已过期；activeTimeDesc 粒度粗但相对稳定，是排序的主要依据。
+
+    hr_online 取不到时留空串而非 '否' —— 「未采集」不能被读成「不在线」。
+    """
+    boss = zp.get('bossInfo') or {}
+    if not isinstance(boss, dict):
+        return {'hr_active': '', 'hr_online': '', 'hr_title': ''}
+
+    online = boss.get('bossOnline')
+    return {
+        'hr_active': boss.get('activeTimeDesc') or '',
+        'hr_online': '' if online is None else ('是' if online else '否'),
+        'hr_title': boss.get('title') or '',
+    }
+
+
 def _extract_detail_from_dom(dp):
     """兜底方案：从 DOM 中提取详情（需要等 JS 渲染完成）"""
+    empty_hr = {'hr_active': '', 'hr_online': '', 'hr_title': ''}
+
     if dp.wait.ele_displayed('css:.job-sec-text', timeout=15):
         pass  # 元素已出现
 
@@ -262,10 +300,10 @@ def _extract_detail_from_dom(dp):
 
     if len(res) == 1:
         time_stats.end_request(True, 'DOM解析')
-        return (res[0].text, '')
+        return {'jd': res[0].text, 'company_info': '', **empty_hr}
     elif len(res) == 2:
         time_stats.end_request(True, 'DOM解析')
-        return (res[0].text, res[1].text)
+        return {'jd': res[0].text, 'company_info': res[1].text, **empty_hr}
     else:
         time_stats.end_request(False, '未找到详情元素')
         return None
@@ -330,8 +368,11 @@ def crawl_job_details(dp, file_path, existing_links):
         if detail:
             for row in rows:
                 if row['link'] == link:
-                    row['岗位要求和职责'] = detail[0]
-                    row['公司信息'] = detail[1]
+                    row['岗位要求和职责'] = detail['jd']
+                    row['公司信息'] = detail['company_info']
+                    row['HR活跃度'] = detail['hr_active']
+                    row['HR在线'] = detail['hr_online']
+                    row['HR职位'] = detail['hr_title']
                     break
             success_count += 1
             existing_links.add(link)
@@ -342,7 +383,7 @@ def crawl_job_details(dp, file_path, existing_links):
         if success_count % 5 == 0 or i == len(links_to_update):
             try:
                 with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                    writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
                     writer.writeheader()
                     writer.writerows(rows)
             except Exception as save_err:
@@ -353,7 +394,7 @@ def crawl_job_details(dp, file_path, existing_links):
     # 最终保存
     try:
         with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(rows)
     except Exception as final_save_err:

@@ -22,6 +22,7 @@ from typing import List, Dict, Any, Optional, Union
 
 from .config import ResumeProfile, OUTPUT_DIR, get_latest_run_dir, create_run_dir
 from .utils import ensure_output_dir
+from .scoring import hr_activity_rank, hr_activity_sort_key
 
 # 尝试导入浏览器自动化库
 try:
@@ -594,19 +595,35 @@ def auto_apply_jobs(
         print("没有可投递的岗位")
         return []
 
-    # 按优先级排序
+    # 按优先级排序：HR 活跃度优先，匹配分次之
+    #
+    # 活跃度作主键是有意的：到这一步的岗位都已通过硬门禁、又经用户在 7b 手工确认，
+    # 都是值得投的 —— 那么先投会回复的那个。未采集活跃度（无 -d）时全部折成 -1，
+    # 排序自动退化成纯匹配分排序。
+    #
+    # 注意 max_applications 的截断发生在排序之后：当选中岗位数超过上限时，
+    # 活跃度高但匹配分低的岗位会挤掉匹配分高但 HR 不活跃的岗位。
+    # 若要改成匹配分优先、活跃度只做同分裁决，把前两个键对调即可。
     sorted_jobs = sorted(
         qualified_jobs,
         key=lambda j: (
+            -hr_activity_sort_key(j),
             -j.get('match_score', 0),
             j.get('company', '')
         )
     )
     jobs_to_apply = sorted_jobs[:max_applications]
 
+    ranked = [hr_activity_rank(j) for j in jobs_to_apply]
+    if any(r is not None for r in ranked):
+        hr_order = '活跃度优先'
+    else:
+        hr_order = '活跃度未采集，按匹配分排序'
+
     print(f"\n{'='*60}")
     print(f"  🤖 自动投递模式")
     print(f"  目标岗位: {len(jobs_to_apply)} 个")
+    print(f"  投递顺序: {hr_order}")
     print(f"  招呼语来源: {'Claude 预生成' if greetings else '模板自动生成'}")
     print(f"{'='*60}")
 

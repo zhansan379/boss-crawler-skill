@@ -142,6 +142,33 @@ reported as "cannot apply".
 
 ---
 
+## HR Activity (Sort Key Only — Never Scored)
+
+The crawler stores three columns per job (`-d` required): `HR活跃度` (e.g. 刚刚活跃 / 今日活跃 /
+3日内活跃), `HR在线` (`是`/`否`/empty), `HR职位`. `scoring.hr_activity_rank(job)` folds them into a
+single integer rank, higher = more active, with `HR在线 == '是'` pinned to the top
+(`HR_ONLINE_RANK = 100`).
+
+**It does not participate in scoring.** `match_score` and `application_category` are computed
+without ever consulting activity — a very active HR cannot promote a job past a hard gate, and a
+dormant one cannot demote a strong match. Activity affects exactly two things:
+
+| Consumer | Role of activity |
+|----------|------------------|
+| Report tier lists (`scoring.py`) | Tiebreak only: sorted by `(match_score, activity)` — match score stays the primary key, because the report is for a human reading top-down |
+| Stage 7 apply order (`auto_apply.py`) | **Primary** key: sorted by `(activity, match_score, company)` — a reply from an active HR beats a marginally better match that nobody reads |
+
+`hr_activity_rank` returns `None` when nothing was collected (no `-d`). `hr_activity_sort_key`
+folds `None` to `-1` so uncollected jobs sort after every collected one; when *no* job has data,
+the ordering degrades cleanly to pure `match_score`. `None` is deliberately not `0` — "not
+collected" must never be scored as "least active", and the report renders it as 活跃度未采集
+rather than as an inactive HR.
+
+Parsing is regex + keyword based with a neutral `HR_UNRECOGNIZED_RANK = 30` fallback, so wording
+changes on BOSS's side degrade to "middling" instead of crashing or silently reading as inactive.
+
+---
+
 ## Scoring Dimensions (Rule-Based, 0-115 pts)
 
 1. **Salary match** (20 pts) — JD range vs expected range; overlap ≥2K scores full, "reach" jobs above expectation score higher than jobs below it

@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
 from .scoring import (
     compute_difficulty,
+    build_job_view,
     CATEGORY_QUALIFIED,
     CATEGORY_NEED_OPTIMIZATION,
     CATEGORY_CANNOT_APPLY,
@@ -308,23 +309,11 @@ def merge_deep_results(
             risk = ''
 
         # ── 构建 job dict ──
-        job_result = {
+        # 字段枚举统一在 scoring.build_job_view（见该函数注释）。深度模式只把自己
+        # 算出来的那几项通过 overrides 盖上去，不再重建整个 dict。
+        job_result = build_job_view(job, category, overrides={
             'job_id': job_id,
-            'link': job.get('link', ''),
-            'company': job.get('公司', ''),
-            'position': job.get('职位', ''),
-            'city': job.get('城市', ''),
-            'salary': job.get('薪资', ''),
-            'experience': job.get('经验', ''),
-            'education': job.get('学历', ''),
-            'skill_tags': job.get('技能标签', ''),
-            'welfare_tags': job.get('福利标签', ''),
-            'company_info': (job.get('公司信息', '') or '')[:500],
-            'scale': job.get('规模', ''),
             'company_size': company_size,
-            'jd': (job.get('岗位要求和职责', '') or '')[:1000],
-            'job_detail': (job.get('岗位要求和职责', '') or '')[:200],
-            'source_file': job.get('source_file', ''),
             'match_score': blended,
             'difficulty': difficulty,
             'application_category': category,
@@ -335,7 +324,7 @@ def merge_deep_results(
             'highlight': highlight,
             'risk': risk,
             'is_deep': deep is not None,
-        }
+        })
 
         if category == CATEGORY_QUALIFIED:
             qualified.append(job_result)

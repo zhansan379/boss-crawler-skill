@@ -226,10 +226,44 @@ def load_existing_links(file_path):
 
 
 def init_csv_file(file_path):
-    """初始化CSV文件（首次写入表头）"""
+    """初始化CSV文件（首次写入表头，旧表头自动迁移）"""
     ensure_output_dir(file_path)
+    from .config import CSV_FIELDS
+
     if not os.path.exists(file_path):
         with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-            from .config import CSV_FIELDS
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
+        return
+
+    # 文件已存在：爬取阶段以 'a' 追加模式写入，若表头是旧版本（列数更少），
+    # 新写入的行会按当前 CSV_FIELDS 的列数排列，静默错位到旧表头下面。
+    # 所以先把整个文件按新表头重写一遍，缺失的列补空串。
+    try:
+        with open(file_path, 'r', encoding=ENCODING) as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                return  # 空文件，交给后续写入
+            if list(reader.fieldnames) == CSV_FIELDS:
+                return  # 表头已是最新，无需迁移
+            old_fields = list(reader.fieldnames)
+            rows = list(reader)
+    except Exception as e:
+        print(f"[警告] 读取表头失败，跳过迁移: {e}")
+        return
+
+    dropped = [c for c in old_fields if c and c not in CSV_FIELDS]
+    if dropped:
+        print(f"[警告] 旧表头存在未知列，迁移时将丢弃: {', '.join(dropped)}")
+
+    try:
+        with open(file_path, 'w', encoding=ENCODING, newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: (row.get(k) or '') for k in CSV_FIELDS})
+        added = [c for c in CSV_FIELDS if c not in old_fields]
+        print(f"[迁移] {os.path.basename(file_path)} 表头已更新"
+              f"（{len(old_fields)} → {len(CSV_FIELDS)} 列，新增: {', '.join(added) or '无'}）")
+    except Exception as e:
+        print(f"[警告] 表头迁移失败: {e}")

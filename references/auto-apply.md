@@ -418,6 +418,30 @@ Hard-won specifics (2026-08-13, verified against live DOM):
 - A conversation preview reading `您正在与Boss XXX沟通` in the chat list means **zero messages were
   ever sent** in it. `[送达]` plus body text means the greeting landed.
 
+### Apply order: HR activity first
+
+`auto_apply_jobs` sorts before applying, with HR activity as the **primary** key:
+
+```
+key = (-hr_activity_sort_key(job), -match_score, company)
+```
+
+This is the one place activity outranks `match_score` — an unanswered message to a dormant HR is
+worth less than a reply from an active one. Note this is the *opposite* weighting from the report's
+tier lists, which keep `match_score` primary (see `references/matching.md` → HR Activity). To flip
+it back, swap the first two elements of the tuple; nothing else depends on the order.
+
+Activity is a crawl-time snapshot and is **not** refreshed here — `HR在线` was true when the crawl
+ran, not necessarily now. When no job carries activity data (crawled without `-d`), the sort key
+collapses to `-1` for every job and the order degrades to pure `match_score`; the run logs
+`活跃度未采集，按匹配分排序` instead of `活跃度优先` so this is visible rather than silent.
+
+**Truncation side effect:** `max_applications` slices *after* this sort, so raising activity to the
+primary key changes *which* jobs get applied to whenever `len(qualified_jobs) > max_applications` —
+not merely the sequence. A high-activity, lower-score job can now displace a top-score job with a
+dormant HR. Stage 7 normally passes `max_applications=len(selected_jobs)`, so nothing is dropped;
+the effect only appears when a caller sets a smaller cap.
+
 ## Greeting Fallback Chain
 
 | Priority | Source | When |

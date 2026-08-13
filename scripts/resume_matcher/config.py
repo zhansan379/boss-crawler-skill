@@ -64,10 +64,11 @@ def get_latest_run_dir(base_dir: Optional[str] = None) -> Optional[str]:
         return os.path.abspath(run_dir)
     return None
 
-# CSV字段（与爬虫脚本一致）
+# CSV字段（与 boss_crawler/config.py 的 CSV_FIELDS 必须逐字一致）
 CSV_FIELDS = [
     'link', '职位', '城市', '区域', '商圈', '公司', '薪资', '经验', '学历',
-    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息'
+    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
+    'HR活跃度', 'HR在线', 'HR职位'
 ]
 
 

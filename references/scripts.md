@@ -24,12 +24,62 @@ Crawl logic split into independent modules. Import via `from boss_crawler import
 | `check_page_status(page, response)` | `auth` | Composite page status: `need_login`/`no_data`/`normal`/`verify` |
 | `crawl_jobs_by_query(dp, ...)` | `crawler` | Keyword-based paginated crawl |
 | `crawl_jobs_by_position(dp, ...)` | `crawler` | Category-code-based paginated crawl |
-| `crawl_job_details(dp, ...)` | `crawler` | Batch detail page crawl |
+| `crawl_job_details(dp, ...)` | `crawler` | Batch detail page crawl. Backfills JD, company info, and the three HR-activity columns |
+| `init_csv_file(path)` | `data_loader` | Write header, or rewrite an older header to the current `CSV_FIELDS` (see below) |
 | `run_crawl_cli(args)` | `crawler` | CLI mode full crawl flow |
 | `parse_args()` | `cli` | CLI argument parsing |
 | `load_position_data()` | `data_loader` | Load position category JSON |
 | `load_city_data()` | `data_loader` | Load city list JSON |
 | `update_json_data()` | `data_loader` | Online update of position and city data |
+
+### CSV Schema
+
+The CSV is the contract between crawler and matcher, so `CSV_FIELDS` is duplicated in
+`boss_crawler/config.py` and `resume_matcher/config.py` and **must stay byte-identical** — the
+matcher reads columns by name and silently sees empty strings for any it doesn't know about.
+
+```python
+CSV_FIELDS = [
+    'link', '职位', '城市', '区域', '商圈', '公司', '薪资', '经验', '学历',
+    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
+    'HR活跃度', 'HR在线', 'HR职位',
+]
+```
+
+The last five columns come from the detail API and are empty without `-d`. **Only append** new
+columns at the end: the crawl phase writes rows in `'a'` append mode, so `init_csv_file` migrates an
+existing file's header to this exact order before any row is written. Without that migration, new
+20-column rows would land under an old 17-column header and shift silently.
+
+### Adding a Job Field
+
+A job is rebuilt once on its way from the CSV (Chinese column names) to the frontend (ASCII keys).
+**`scoring.build_job_view()` is the only place that enumerates job fields** — add new fields there
+and every output path picks them up:
+
+```
+CSV (中文列名)
+  ├─ quick mode → classify_jobs_advanced
+  │    ├─ tiers_to_classification ─→ generate_html_report → matching_report.html
+  │    └─ generate_bauhaus_json ────→ job_classification.json
+  └─ deep mode  → deep_analysis ────→ both of the above
+                        ↑
+              all three call build_job_view()
+```
+
+`build_job_view(job, fallback_category, *, company_info_len, jd_len, overrides)` reads both Chinese
+and ASCII keys, so it accepts a raw CSV row or an already-mapped job. Callers that computed their
+own values (deep mode's blended score) pass them via `overrides`; the JSON output only narrows the
+truncation lengths.
+
+This used to be **three independent whitelists** — one per path. Adding a field meant editing all
+three, and missing one silently dropped it on that path with no error. HR activity was lost exactly
+this way: the JSON was correct while every HTML card read 活跃度未采集 despite the data being
+collected — worse than not showing it at all. `scripts/test_job_view.py` now locks the invariant:
+
+```bash
+python scripts/test_job_view.py   # asserts both artifacts carry identical, complete field sets
+```
 
 ### Python API Example
 
@@ -64,7 +114,7 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()` |
 | Prompts | `resume_matcher/prompts.py` | `load_prompt()`, `get_resume_parse_prompt()`, `get_job_analysis_prompt()`, `get_match_analysis_prompt()`, `get_optimize_prompt()` |
 | Data loading | `resume_matcher/data_loader.py` | `list_available_job_files()`, `load_job_data()` |
-| Scoring | `resume_matcher/scoring.py` | `score_job_advanced()` (6 dimensions, 0-115), `classify_jobs_advanced()` (4 tiers), `compute_difficulty()`, `tiers_to_classification()` |
+| Scoring | `resume_matcher/scoring.py` | `score_job_advanced()` (6 dimensions, 0-115), `classify_jobs_advanced()` (4 tiers), `compute_difficulty()`, `tiers_to_classification()`, `build_job_view()` (the only field mapper), `hr_activity_rank()` / `hr_activity_sort_key()` (sort only, never scored) |
 | HTML report | `resume_matcher/report.py` | `generate_html_report()`, `generate_bauhaus_json()` |
 | Auto-apply | `resume_matcher/auto_apply.py` | `auto_apply_jobs()` |
 | Templates | `resume_matcher/templates/report.html` | HTML report template (dual-theme CSS) |
