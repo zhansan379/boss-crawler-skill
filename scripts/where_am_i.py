@@ -88,11 +88,32 @@ def survey(run_dir):
     if has('matching_report.html'):
         done.append('Stage 4-6 匹配：matching_report.html')
     elif has('deep_candidates.json') and not has('deep_results.json'):
-        return done, ('Stage 4-6 深度模式阶段 2：逐个分析候选并写 deep_results.json', [
-            '读 %s/deep_candidates.json，按 references/matching.md 分析' % run_dir,
+        # 深度模式阶段 2 拆成了「切片 → 并行 agent → 收拢」，按分片状态细分下一步
+        shard_dir = os.path.join(run_dir, 'deep_shards')
+        shards, results = [], []
+        if os.path.isdir(shard_dir):
+            names = os.listdir(shard_dir)
+            shards = [n for n in names if n.startswith('shard_') and n.endswith('.md')]
+            results = [n for n in names if n.startswith('result_') and n.endswith('.json')]
+
+        if not shards:
+            return done, ('Stage 4-6 深度模式阶段 2：先切片，再并行派发 subagent', [
+                'python scripts/shard_deep_candidates.py %s' % run_dir,
+            ]), ['deep_candidates.json 在，但还没切片（deep_shards/ 没有 shard_*.md）',
+                 '不要在主上下文里逐个分析——JD 全文会把上下文顶到触发压缩']
+
+        if len(results) < len(shards):
+            return done, ('Stage 4-6 深度模式阶段 2：派发缺失的分片并等产物齐全', [
+                'python scripts/check_artifacts.py %s --kinds deep_shards --wait 360'
+                % run_dir,
+                '（缺哪片就只派哪片：Read deep_shards/shard_NN.md 并按其中要求执行）',
+            ]), ['%d 片里已回收 %d 份结果' % (len(shards), len(results)),
+                 'Bash 默认 120s 超时，--wait 360 要把 timeout 提到 380000ms']
+
+        return done, ('Stage 4-6 深度模式阶段 3：合并分片结果并出报告', [
             'python scripts/run_matcher.py --mode deep --merge --run-id %s'
             % os.path.basename(run_dir),
-        ]), ['deep_candidates.json 在，deep_results.json 不在']
+        ]), ['%d 片结果齐全，merge 会自动收拢成 deep_results.json' % len(shards)]
     else:
         return done, ('Stage 4-6 跑匹配', [
             'python scripts/run_matcher.py --mode deep --profile "%s/profile.json" --top 15'

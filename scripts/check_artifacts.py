@@ -23,9 +23,13 @@ agent 干了同一件事，白烧 4 分钟和一倍 token。简历优化实测�
     python scripts/check_artifacts.py <run_dir> --wait 600      # 岗位多时加长
     python scripts/check_artifacts.py <run_dir> --wait 0        # 一次性快照
     python scripts/check_artifacts.py <run_dir> [--greeting] [--resume]
+    python scripts/check_artifacts.py <run_dir> --kinds deep_shards   # 阶段 2 分片
 
 不带 --greeting/--resume 时两者都查。按 7c 的 skip 规则，
 `自定义上传` 不产简历、只有 `AI生成` 才产招呼语，此时用开关缩小范围。
+
+`--kinds deep_shards` 是另一套：查深度分析并行分片（deep_shards/shard_NN.md
+是否都有对应的 result_NN.json），额外多一道 JSON 解析校验。
 
 注意 Bash 工具默认 120s 超时：用 --wait 360 时要把 timeout 提到 380000ms 以上。
 
@@ -82,15 +86,56 @@ def check(run_dir, kinds, jobs=None):
     return jobs, found, missing
 
 
-def wait_for(run_dir, kinds, wait_seconds):
+def check_shards(run_dir, _kinds=None, jobs=None):
+    """
+    深度分析分片的产物校验：每个 shard_NN.md 都该有一个 result_NN.json。
+
+    与 generated/ 那套的区别在于多一道 JSON 解析：分片结果要喂给
+    deep_analysis.collect_shard_results，半截的 JSON 会让合并失败。解析不过就
+    当作「还没写完」继续等——agent 正在写的文件本来就是残缺的。
+    """
+    shard_dir = os.path.join(run_dir, 'deep_shards')
+    if not os.path.isdir(shard_dir):
+        return [], [], ['deep_shards/ 目录不存在（先跑 shard_deep_candidates.py）']
+
+    names = os.listdir(shard_dir)
+    shards = sorted(n for n in names if n.startswith('shard_') and n.endswith('.md'))
+    if not shards:
+        return [], [], ['deep_shards/ 下没有 shard_*.md（先跑 shard_deep_candidates.py）']
+
+    missing, found = [], []
+    for shard_name in shards:
+        index = shard_name[len('shard_'):-len('.md')]
+        result_name = 'result_%s.json' % index
+        result_path = os.path.join(shard_dir, result_name)
+        try:
+            if os.path.getsize(result_path) <= 0:
+                raise OSError('empty')
+            with open(result_path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            missing.append('%s（对应 %s）' % (result_name, shard_name))
+            continue
+
+        results = data.get('results', []) if isinstance(data, dict) else data
+        count = len(results) if isinstance(results, list) else 0
+        if count == 0:
+            missing.append('%s 的 results 为空' % result_name)
+        else:
+            found.append('%s（%d 条）' % (result_name, count))
+
+    return shards, found, missing
+
+
+def wait_for(run_dir, kinds, wait_seconds, checker=check):
     """轮询到产物齐全或超时。返回 (jobs, found, missing, elapsed)。"""
-    jobs = _load_jobs(run_dir)
+    jobs = _load_jobs(run_dir) if checker is check else None
     started = time.monotonic()
     deadline = started + wait_seconds
     reported = set()
 
     while True:
-        jobs, found, missing = check(run_dir, kinds, jobs)
+        jobs, found, missing = checker(run_dir, kinds, jobs)
 
         # 新落盘的产物即时播报，让等待过程可见而不是一片死寂
         for name in found:
@@ -113,24 +158,40 @@ def main():
     ap.add_argument('run_dir')
     ap.add_argument('--greeting', action='store_true', help='只查招呼语')
     ap.add_argument('--resume', action='store_true', help='只查简历')
+    ap.add_argument('--kinds', nargs='+', metavar='KIND',
+                    choices=['greeting', 'resume', 'deep_shards'],
+                    help='要查的产物种类。deep_shards 查阶段 2 的并行分片结果，'
+                         '不能和 greeting/resume 混用（它们在不同目录、不同命名）')
     ap.add_argument('--wait', type=int, default=DEFAULT_WAIT, metavar='SECONDS',
                     help='轮询等待产物落盘的秒数（默认 %d）。0 = 一次性快照，'
                          '仅在已确认 agent 不再运行时才该用' % DEFAULT_WAIT)
     args = ap.parse_args()
 
-    kinds = [k for k, on in (('greeting', args.greeting), ('resume', args.resume)) if on]
-    if not kinds:
-        kinds = ['greeting', 'resume']
+    kinds = list(args.kinds or [])
+    for name, on in (('greeting', args.greeting), ('resume', args.resume)):
+        if on and name not in kinds:
+            kinds.append(name)
+
+    if 'deep_shards' in kinds:
+        if len(kinds) > 1:
+            ap.error('deep_shards 不能与 greeting/resume 混用，请分两次运行')
+        checker, label = check_shards, 'deep_shards'
+    else:
+        if not kinds:
+            kinds = ['greeting', 'resume']
+        checker, label = check, '/'.join(kinds)
 
     if args.wait > 0:
-        jobs, found, missing, elapsed = wait_for(args.run_dir, kinds, args.wait)
-        print('%d 个岗位 × %s → 期望 %d 个产物（等待 %ds）'
-              % (len(jobs), '/'.join(kinds), len(jobs) * len(kinds), elapsed))
+        units, found, missing, elapsed = wait_for(args.run_dir, kinds, args.wait, checker)
+        print('%d 个待办 × %s → 齐全需 %d 个产物（等待 %ds）'
+              % (len(units or []), label,
+                 len(units or []) * (1 if checker is check_shards else len(kinds)), elapsed))
     else:
-        jobs, found, missing = check(args.run_dir, kinds)
+        units, found, missing = checker(args.run_dir, kinds)
         elapsed = 0
-        print('%d 个岗位 × %s → 期望 %d 个产物（一次性快照）'
-              % (len(jobs), '/'.join(kinds), len(jobs) * len(kinds)))
+        print('%d 个待办 × %s → 齐全需 %d 个产物（一次性快照）'
+              % (len(units or []), label,
+                 len(units or []) * (1 if checker is check_shards else len(kinds))))
         for name in found:
             print('  ✅ %s' % name)
 
@@ -148,7 +209,12 @@ def main():
               '（浪费 token，且可能用更差的结果覆盖好的）。')
         return 1
 
-    print('\n产物齐全，可以进入 7e。无需理会通知到没到。')
+    if checker is check_shards:
+        print('\n分片结果齐全，可以合并：'
+              'python scripts/run_matcher.py --mode deep --merge --output-dir %s'
+              % args.run_dir)
+    else:
+        print('\n产物齐全，可以进入 7e。无需理会通知到没到。')
     return 0
 
 

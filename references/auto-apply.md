@@ -115,6 +115,18 @@ what makes unrestricted parallelism safe.
 Skip rules (from the table in `SKILL.md`): the greeting agent launches only for `AI生成`; the resume
 agent launches for `AI调整` and `不发送`, but not for `自定义上传`.
 
+Mark the boundary before dispatching and after the barrier settles, so this stage's real cost is on
+disk instead of only in a session transcript:
+
+```bash
+python scripts/stage_timer.py mark {run_dir} 7d_dispatch     # before launching agents
+python scripts/stage_timer.py mark {run_dir} 7e_start        # after the barrier passes
+```
+
+`python scripts/stage_timer.py report {run_dir}` then prints the gap between them. In the
+2026-08-13 run this stage was where a duplicate agent dispatch burned ~4 minutes, and the only way
+to see it afterwards was parsing a 30 MB JSONL.
+
 ### Greeting agent contract
 
 Input: the job's row from the match results (company, position, JD, match reasons), plus

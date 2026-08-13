@@ -61,6 +61,25 @@ It infers the current stage from the run directory's artifacts and prints the ne
 five times, twice purely because compaction had discarded the earlier read. Consult a reference doc
 only for the *one* section `where_am_i.py` points you at, and read that section, not the whole file.
 
+**Two habits that keep a run cheap.** The 2026-08-13 run took 46 minutes to deliver a single
+application; 65% of that was model inference across 97 round trips. Both rules below exist to keep
+bulk text out of *your* context, because that is what triggers compaction:
+
+1. **Fan bulk analysis out to subagents; keep only the verdicts.** Deep-mode Phase 2 is sharded for
+   this reason (`scripts/shard_deep_candidates.py`) — N full JDs never enter the main context. When
+   you dispatch agents, require a file write and a one-line reply; never let an agent echo its
+   payload back.
+2. **Never `Read` a rendered resume image.** Use `scripts/verify_image.py`. One 0.5 MB PNG cost
+   638,960 input tokens — 79% of that session's fresh input, in a single tool call.
+
+Drop a timing mark at each stage boundary so the next run can be profiled from a file rather than
+from a session transcript:
+
+```bash
+python scripts/stage_timer.py mark <run_dir> stage_7d_dispatch
+python scripts/stage_timer.py report <run_dir>      # duration ranking when done
+```
+
 ### Stage 0: Launch Resume Editor (path D)
 
 Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No `pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for design rationale, limitations, and the `storage.py` data-moving tool.
@@ -235,9 +254,12 @@ python scripts/run_matcher.py --mode quick --profile {run_dir}/profile.json --ou
 # Phase 1: Python pre-filter (ask user for top-N first)
 python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top <N> --output-dir {run_dir}
 
-# Phase 2: Claude reads deep_candidates.json, analyzes each job, writes deep_results.json
+# Phase 2: shard, then dispatch one subagent per shard (never analyze in the main context —
+# N full JDs there is what forced a 167 s compaction). The script prints the dispatch prompts.
+python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
+python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360   # timeout: 380000
 
-# Phase 3: Merge rule scores (40%) + Claude scores (60%), reclassify, regenerate report
+# Phase 3: collect shards, merge rule scores (40%) + Claude scores (60%), reclassify, regenerate report
 python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
 ```
 

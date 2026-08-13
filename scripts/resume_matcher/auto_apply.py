@@ -101,12 +101,14 @@ def generate_greeting(
     company = job.get('公司', '')
 
     # 提取核心技能匹配
-    skills = profile.skills
+    # `or []` 逐项兜底：某类技能为空时值是 null 而非缺键，get 的默认值不生效，
+    # None + list 直接 TypeError 带崩招呼语生成（同本文件 128 行的坑）
+    skills = profile.skills or {}
     all_skills = (
-        skills.get('programming', [])
-        + skills.get('frameworks', [])
-        + skills.get('tools', [])
-        + skills.get('other', [])
+        (skills.get('programming') or [])
+        + (skills.get('frameworks') or [])
+        + (skills.get('tools') or [])
+        + (skills.get('other') or [])
     )
 
     # 提取关键技能词（取前 5 个最有辨识度的）

@@ -9,8 +9,11 @@
 `TypeError: '<=' not supported between 'int' and 'NoneType'`，
 整批 45 个岗位的评分挂掉，重跑两次才绕过。
 
-同一类坑还有 `experience.total_years`（`None > 0`）和报告生成里的
-`profile.salary_expectation.get(...)`（整个字段可能是 null）。
+同一类坑还有 `experience.total_years`（`None > 0`）、报告生成里的
+`profile.salary_expectation.get(...)`（整个字段可能是 null），以及
+`skills.get('tools', [])`（某类技能为空时值是 null，`extend(None)` 崩）。
+
+结论：凡是从 JSON 读出来的值，兜底一律用 `or`，不要用 `get` 的第二参数。
 
 用法：python scripts/test_null_profile.py
 """
@@ -82,6 +85,57 @@ def main():
         check('classify_jobs_advanced 不抛异常', sum(len(t) for t in tiers) == 1)
     except (TypeError, AttributeError) as error:
         check('classify_jobs_advanced 不抛异常 (%s)' % error, False)
+
+    # 场景 3：技能分类的值是 null —— 简历里没有该类技能时解析就这么产出。
+    # 2026-08-13 由深度分析分片的端到端测试抓到：`skills.get(cat, [])` 返回
+    # None，`extend(None)` / `None + list` 在 report.py:56、report.py:188、
+    # scoring.py:661、auto_apply.py:106 四处 TypeError，报告整个生不出来。
+    print('\n[3] skills 某些分类的值是 null')
+    p3 = ResumeProfile(
+        basic_info={'name': '王五', 'city': '杭州', 'target_position': '后端'},
+        education={'degree': '本科', 'major': '计算机', 'school': 'X大学'},
+        experience={'total_years': 3},
+        skills={'programming': ['Python'], 'frameworks': None,
+                'tools': None, 'other': []},
+        salary_expectation={'min': 20, 'max': 30},
+        keywords=['Python'],
+    )
+    try:
+        tiers = classify_jobs_advanced(p3, JOBS)
+        check('classify_jobs_advanced 不抛异常', sum(len(t) for t in tiers) == 1)
+    except TypeError as error:
+        check('classify_jobs_advanced 不抛异常 (%s)' % error, False)
+
+    try:
+        greeting = generate_greeting(p3, JOBS[0])
+        check('generate_greeting 不抛异常', bool(greeting))
+    except TypeError as error:
+        check('generate_greeting 不抛异常 (%s)' % error, False)
+
+    # 报告生成是这一类坑最容易漏掉的一环：它在流程末尾，前面全跑完才崩
+    import tempfile
+    from resume_matcher.report import generate_html_report, generate_bauhaus_json
+    from resume_matcher.scoring import tiers_to_classification
+    tmp_dir = tempfile.mkdtemp(prefix='null_profile_test_')
+    try:
+        # tiers_to_classification 只吃前三层，tier4 是丢弃的
+        tier1, tier2, tier3, _tier4 = classify_jobs_advanced(p3, JOBS)
+        classification = tiers_to_classification(tier1, tier2, tier3)
+        try:
+            path = generate_html_report(p3, classification, output_dir=tmp_dir)
+            check('generate_html_report 不抛异常', os.path.getsize(path) > 0)
+        except TypeError as error:
+            check('generate_html_report 不抛异常 (%s)' % error, False)
+        try:
+            # 这个函数吃的是分层列表，不是 JobClassification
+            generate_bauhaus_json(p3, tier1, tier2, tier3, _tier4,
+                                  output_dir=tmp_dir)
+            check('generate_bauhaus_json 不抛异常', True)
+        except TypeError as error:
+            check('generate_bauhaus_json 不抛异常 (%s)' % error, False)
+    finally:
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     print('\n' + '=' * 46)
     if FAILURES:

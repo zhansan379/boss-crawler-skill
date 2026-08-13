@@ -53,7 +53,8 @@ def generate_html_report(
     # ── 构建 resume_info ──
     all_skills = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # 同本文件 188 行：值可能是 null，`or []` 才挡得住
+        all_skills.extend((profile.skills or {}).get(cat) or [])
 
     school = profile.education.get('school', '')
     degree = profile.education.get('degree', '')
@@ -185,7 +186,10 @@ def generate_bauhaus_json(
     # ── 构建 resume_info ──
     all_skills = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # `or []` 而非 get 的第二参数：简历里没有该类技能时，解析产出的是
+        # {"tools": null}——键存在、值是 None，默认值不生效，extend(None)
+        # 直接 TypeError 带崩报告生成（同 scoring.py:676 的坑）
+        all_skills.extend((profile.skills or {}).get(cat) or [])
 
     resume_info = {
         'name': profile.basic_info.get('name', '未提取'),

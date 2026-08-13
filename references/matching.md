@@ -51,18 +51,46 @@ python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top
 
 Saves `deep_candidates.json` to `{run_dir}/`. Contains top N candidates (from Tier1+Tier2) with full profile and rule scores.
 
-### Phase 2: Claude Deep Analysis
+### Phase 2: Parallel Deep Analysis (sharded)
 
-Claude reads `{run_dir}/deep_candidates.json`, then for each candidate (in rank order):
+**Do not analyze the candidates one-by-one in the main context.** Top-15 means 15 full JD texts
+plus 15 analysis outputs land in your own context; the 2026-08-13 run hit `preTokens=167,609` and
+paid 167 s for a compaction because of exactly this. It is also serial — 15 sequential
+read-think-write round trips.
 
-1. Read the job's `岗位要求和职责` field (JD text)
-2. Read `scripts/prompts/match_analysis.st` template
-3. Fill resume info and job requirements into the template
-4. Output structured JSON per job:
+Shard, then fan out:
+
+```bash
+python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
+```
+
+This writes `{run_dir}/deep_shards/shard_NN.md`, one per group of 4 candidates. Each shard file is
+**self-contained** — grading rules, resume summary, and that group's JDs are all inside it, so the
+subagent reads *one* file and needs neither `deep_candidates.json`, nor `profile.json`, nor
+`prompts/match_analysis.st`. The resume `raw_text` is deliberately excluded (it would be duplicated
+into every shard for no benefit).
+
+The script prints one ready-to-dispatch prompt per shard. Dispatch them **in parallel**, one agent
+per shard. Each agent writes `deep_shards/result_NN.json` and replies with a single `done <path> <n>`
+line — it must not echo the JSON back, or the main context pays for it twice, which is the whole
+cost this design removes.
+
+Then settle the barrier on artifacts, not notifications:
+
+```bash
+python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360
+```
+
+(Bash's default timeout is 120 s — pass `timeout: 380000` when using `--wait 360`.) This checker
+additionally parses each `result_NN.json`; a half-written file counts as *not ready* rather than as
+a failure, so polling handles agents that are mid-write.
+
+Each result entry must carry `rank` — the merge step maps results back to candidates by `rank`, not
+by `job_id`:
 
 ```json
 {
-  "job_id": "job_xxxxx",
+  "rank": 1,
   "score": 85,
   "category": "qualified",
   "reason": "核心技能高度匹配，RAG/Agent经验是亮点",
@@ -80,11 +108,22 @@ Claude reads `{run_dir}/deep_candidates.json`, then for each candidate (in rank 
 }
 ```
 
-`category` must be one of the three English enums (`qualified` / `need_optimization` / `cannot_apply`).
-The merge step also accepts the legacy `overall_match` + `classification` (Chinese label) fields for
-backward compatibility with older `deep_results.json` files.
+`category` must be one of the three English enums (`qualified` / `need_optimization` /
+`cannot_apply`). The merge step also accepts the legacy `overall_match` + `classification` (Chinese
+label) fields for backward compatibility with older `deep_results.json` files.
 
-Write all results to `{run_dir}/deep_results.json`:
+### Phase 3: Merge & Report
+
+```bash
+python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
+```
+
+Merge first collects `deep_shards/result_*.json` into `{run_dir}/deep_results.json` (dedup by
+`rank`, first occurrence wins; a corrupt shard is skipped with a warning instead of failing the
+batch), then does blended scoring (rule 40% + Claude 60%) → reclassify → HTML report.
+
+If no `deep_shards/` directory exists it falls back to reading a hand-written
+`deep_results.json`, so the old single-file flow still works:
 
 ```json
 {
@@ -94,14 +133,6 @@ Write all results to `{run_dir}/deep_results.json`:
   "results": [/* per-job analysis array */]
 }
 ```
-
-### Phase 3: Merge & Report
-
-```bash
-python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
-```
-
-Script auto-completes: read candidates + deep results → blended scoring (rule 40% + Claude 60%) → reclassify → HTML report.
 
 HTML report shows `🧠 深度模式` badge. Deep-analyzed job cards show highlight/risk tags. "View optimization suggestions" button opens a modal with Claude-generated advice, missing skills, and risk assessment.
 

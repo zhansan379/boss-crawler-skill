@@ -658,7 +658,9 @@ def classify_jobs_advanced(
     """
     all_skills: List[str] = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # `or []`：某类技能为空时解析产出的是 null 而非缺键，get 的默认值不生效，
+        # extend(None) 会 TypeError（同本文件 676 行的坑）
+        all_skills.extend((profile.skills or {}).get(cat) or [])
     if not all_skills:
         all_skills = profile.keywords or []
 

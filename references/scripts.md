@@ -134,10 +134,20 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `boss_post_interactive.py` | Crawler CLI entry point (thin wrapper over `boss_crawler/`) |
 | `run_matcher.py` | Matching pipeline entry point (`--mode quick\|deep`) |
 | `validate_profile.py` | Cross-validation: diff raw resume vs profile.json |
-| `check_artifacts.py` | 7d→7e barrier: verify each subagent's artifact landed in `generated/`. Exit 1 + names on any miss. Use this instead of waiting on completion notifications, which are not guaranteed to arrive. **Defaults to `--wait 360`** — a missing artifact is not proof the agent is dead (a 47 s snapshot once caused a duplicate dispatch), and 0-byte files don't count as landed |
+| `check_artifacts.py` | 7d→7e barrier: verify each subagent's artifact landed in `generated/`. Exit 1 + names on any miss. Use this instead of waiting on completion notifications, which are not guaranteed to arrive. **Defaults to `--wait 360`** — a missing artifact is not proof the agent is dead (a 47 s snapshot once caused a duplicate dispatch), and 0-byte files don't count as landed. `--kinds deep_shards` checks the Phase-2 shard results instead, with an extra JSON-parse gate so a half-written file counts as not-ready |
+| `shard_deep_candidates.py` | Deep mode Phase 2: split `deep_candidates.json` into self-contained prompt shards (`deep_shards/shard_NN.md`, 4 candidates each) for parallel subagents. Each shard carries the grading rules, resume summary and its own JDs, so an agent reads one file and nothing else; `raw_text` is excluded and long JDs are truncated at `--max-jd`. Keeps N full JDs out of the main context — that was the cause of the `preTokens=167,609` compaction. Prints the dispatch prompts, the barrier command, and the merge command |
+| `stage_timer.py` | Stage timing telemetry → `{run_dir}/run_timings.jsonl`. `mark` records a boundary (for stages Claude drives, where no single script wraps the work), `span`/the `stage()` context manager records a measured block and still writes on exception (`status=error`). `report` prints a duration ranking plus the gaps between marks. Exists so the next optimization reads a file instead of forensically parsing a session transcript |
 | `write_application_md.py` | 7f: write `applications/<公司>-<岗位>/岗位信息+招呼语.md` with all 25 crawled fields + the greeting. Re-reads the original crawl CSV by `link`, because `build_job_view()` drops `区域` `商圈` `领域` `性质` `位置` `地址` `已失效` `代招` `HR姓名` `HR公司` and truncates `公司信息` / JD. Flags 已失效 and 代招 岗位 with a banner. Exit 1 when a job's CSV row can't be found |
 | `verify_image.py` | Check a rendered resume PNG in ~8 lines of numbers: blank/solid detection, content-row count, bottom-margin overrun, and a cross-check against the sibling `.md`. **Use this instead of `Read` on the image** — one 0.5 MB PNG cost 639k input tokens (79% of a whole session's fresh input) and forced a compaction. `--all` sweeps an `applications/` tree |
 | `where_am_i.py` | Infer the current stage from the run directory's artifacts and print the next commands in ~500 chars. The recovery move after a context compaction — reconstructing state by re-reading the 25k-char `auto-apply.md` is what made that run expensive. Read-only, always exits 0 |
+
+### Tests
+
+| Script | Covers |
+|--------|--------|
+| `test_job_view.py` | `build_job_view()` field parity against `CSV_FIELDS` |
+| `test_null_profile.py` | JSON nulls in `profile.json` (`salary_expectation`, `total_years`, and per-category `skills`). All four paths crash on `get(key, default)` because the key *exists* with a null value — the rule is `or`, never the second arg to `get` |
+| `test_deep_shards.py` | Sharding, shard collection (bare arrays, corrupt shards, rank conflicts), the `deep_shards` barrier, and `stage_timer` |
 
 ---
 
@@ -182,7 +192,10 @@ All outputs under `assets/<timestamp>/`:
 | `profile.json` | Structured resume parse result |
 | `resume_text.txt` | Raw resume text (for cross-validation) |
 | `deep_candidates.json` | Deep mode Phase 1 output: top N candidates |
-| `deep_results.json` | Deep mode Phase 2 output: Claude's per-job analysis |
+| `deep_shards/shard_NN.md` | Deep mode Phase 2: self-contained prompt for one parallel subagent |
+| `deep_shards/result_NN.json` | Deep mode Phase 2: that subagent's analysis, keyed by `rank` |
+| `deep_results.json` | Deep mode Phase 2 output: all per-job analyses, collected from the shards by the merge step |
+| `run_timings.jsonl` | Per-stage timings (`stage_timer.py`); `report` ranks them |
 | `scored_jobs.json` | Full job rule-scoring results (quick mode) |
 | `job_classification.json` | Structured classification result |
 | `matching_report.html` | HTML visualization report |

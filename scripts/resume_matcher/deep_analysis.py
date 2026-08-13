@@ -148,10 +148,10 @@ def save_deep_candidates(
         'total': len(candidates),
         'prepared_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'instruction': (
-            '请 Claude Code 对以上 candidates 逐一进行深度匹配分析。'
-            '对每个候选岗位，读取 prompts/match_analysis.st 模板，'
-            '填入简历信息和岗位要求，输出结构化的匹配分析 JSON。'
-            f'汇总所有结果写入 {output_dir}/deep_results.json'
+            '不要在主上下文里逐个分析这些 candidates —— N 份 JD 全文进主上下文会触发压缩。'
+            '改为 `python scripts/shard_deep_candidates.py <run_dir>` 切成自包含分片，'
+            '每片派一个 subagent，结果写 deep_shards/result_NN.json，'
+            f'再 `--merge` 收拢成 {output_dir}/deep_results.json。'
         ),
     }
 
@@ -162,13 +162,103 @@ def save_deep_candidates(
     print(f"\n深度分析候选已保存: {output_path}")
     print(f"共 {len(candidates)} 个候选岗位待 Claude 深度分析")
     print(f"规则评分范围: {candidates[-1]['rule_score']} ~ {candidates[0]['rule_score']}")
-    print(f"\n下一步: Claude Code 读取 deep_candidates.json → 逐岗分析 → 写入 deep_results.json")
+    print(f"\n下一步: python scripts/shard_deep_candidates.py {output_dir}")
+    print(f"        → 并行派发 subagent → check_artifacts.py --kinds deep_shards")
     print(f"然后运行: python run_matcher.py --mode deep --merge --run-id {os.path.basename(output_dir)}")
 
     return output_path
 
 
 # ==================== Deep Results Merge ====================
+
+SHARD_DIR = 'deep_shards'
+
+
+def collect_shard_results(output_dir: str) -> Optional[str]:
+    """
+    把 deep_shards/result_*.json 收拢成一份 deep_results.json。
+
+    并行分片方案的汇流点（见 scripts/shard_deep_candidates.py 的动机说明）：
+    每个 subagent 只写自己那片的 result_NN.json，本函数按 rank 去重后合成
+    merge_deep_results 期望的单文件格式。这样 merge 那侧完全不用改。
+
+    没有分片目录 / 没有 result 文件时返回 None，调用方回落到「Claude 直接写了
+    deep_results.json」的旧路径 —— 两种流程并存，不强制迁移。
+
+    Returns:
+        写出的 deep_results.json 路径，没有分片则 None
+    """
+    shard_dir = os.path.join(output_dir, SHARD_DIR)
+    if not os.path.isdir(shard_dir):
+        return None
+
+    shard_files = sorted(
+        name for name in os.listdir(shard_dir)
+        if name.startswith('result_') and name.endswith('.json')
+    )
+    if not shard_files:
+        return None
+
+    merged: Dict[Any, Dict[str, Any]] = {}
+    conflicts = []
+    broken = []
+
+    for name in shard_files:
+        path = os.path.join(shard_dir, name)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (ValueError, OSError) as exc:
+            # 单片坏掉不该让整批失败：记下来，其余照常合并
+            broken.append((name, str(exc)))
+            continue
+
+        # 容忍两种写法：{"results": [...]} 和裸数组
+        results = data.get('results', []) if isinstance(data, dict) else data
+        if not isinstance(results, list):
+            broken.append((name, 'results 不是数组'))
+            continue
+
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            rank = item.get('rank')
+            if rank is None:
+                # 没有 rank 就无法回填到候选（merge 靠 rank 匹配），只能丢弃
+                broken.append((name, '有一条结果缺 rank，已丢弃'))
+                continue
+            if rank in merged:
+                conflicts.append(rank)
+                continue          # 先到先得，不让后来的覆盖
+            merged[rank] = item
+
+    if not merged:
+        print(f"警告: {shard_dir} 下的分片结果都无法使用")
+        for name, why in broken:
+            print(f"  ❌ {name}: {why}")
+        return None
+
+    results_list = [merged[k] for k in sorted(merged, key=lambda r: (r is None, r))]
+    output = {
+        'version': '1.0',
+        'analyzed_by': 'claude-code-parallel-shards',
+        'analyzed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'shard_files': shard_files,
+        'results': results_list,
+    }
+
+    output_path = os.path.join(output_dir, 'deep_results.json')
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    print(f"\n分片结果已收拢: {len(shard_files)} 片 → {len(results_list)} 条 → {output_path}")
+    if conflicts:
+        print(f"  ⚠ rank 重复（保留先出现的）: {sorted(set(conflicts))}")
+    for name, why in broken:
+        print(f"  ⚠ {name}: {why}")
+
+    return output_path
+
 
 # 深度分析权重：claude 评分占 60%，规则评分占 40%
 DEEP_WEIGHT = 0.6
