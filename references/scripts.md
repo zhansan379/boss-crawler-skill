@@ -59,12 +59,12 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| Config/dataclasses | `resume_matcher/config.py` | Constants + `ResumeProfile`, `JobRequirements`, `MatchResult`, `JobClassification`, `DifficultyPrediction` |
-| Utilities | `resume_matcher/utils.py` | `parse_education_level()`, `parse_experience_years()`, `parse_salary_range()`, `parse_company_size()`, `ensure_output_dir()` |
+| Config/dataclasses | `resume_matcher/config.py` | Constants + `ResumeProfile`, `JobClassification` |
+| Utilities | `resume_matcher/utils.py` | `parse_experience_years()`, `parse_company_size()`, `ensure_output_dir()`, `print_header()`, `print_section()` |
 | File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()` |
 | Prompts | `resume_matcher/prompts.py` | `load_prompt()`, `get_resume_parse_prompt()`, `get_job_analysis_prompt()`, `get_match_analysis_prompt()`, `get_optimize_prompt()` |
 | Data loading | `resume_matcher/data_loader.py` | `list_available_job_files()`, `load_job_data()` |
-| Scoring | `resume_matcher/scoring.py` | `analyze_job_requirements_quick()`, `score_job_advanced()` (6 dimensions), `classify_jobs_advanced()` (4 tiers), `predict_difficulty()` |
+| Scoring | `resume_matcher/scoring.py` | `score_job_advanced()` (6 dimensions, 0-115), `classify_jobs_advanced()` (4 tiers), `compute_difficulty()`, `tiers_to_classification()` |
 | HTML report | `resume_matcher/report.py` | `generate_html_report()`, `generate_bauhaus_json()` |
 | Auto-apply | `resume_matcher/auto_apply.py` | `auto_apply_jobs()` |
 | Templates | `resume_matcher/templates/report.html` | HTML report template (dual-theme CSS) |

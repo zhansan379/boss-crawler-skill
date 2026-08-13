@@ -344,6 +344,11 @@ nav {
 .tag-difficulty-medium { background: var(--primary-yellow); }
 .tag-difficulty-hard { background: var(--primary-red); color: white; }
 
+/* 投递建议分类：后端 application_category 字段直出，前端不做任何运算 */
+.tag-category-qualified { background: #1B5E20; color: white; border-color: #1B5E20; }
+.tag-category-need_optimization { background: #E65100; color: white; border-color: #E65100; }
+.tag-category-cannot_apply { background: #616161; color: white; border-color: #424242; }
+
 .tag-size-big { background: #FFEBEE; color: #C62828; border-color: #EF5350; }
 .tag-size-medium { background: var(--muted); }
 .tag-size-small { background: #E8F5E9; color: #2E7D32; border-color: #66BB6A; }
@@ -571,7 +576,8 @@ footer {
             </div>
             <div style="font-size:0.85rem;line-height:1.6;color:#444;">
                 <strong>匹配度</strong>：<span id="scoreRangeLabel">6维度综合评分 (0-115分)</span>，越高越匹配<br>
-                <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分
+                <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分<br>
+                <strong>投递建议</strong>：可直接投递 / 优化后投递 / 不可投递，由后端按硬门槛裁定（学历、经验、薪资），不由分数换算
             </div>
         </div>
         <div style="margin-top: 2rem; display: flex; gap: 1rem;">
@@ -913,6 +919,7 @@ function renderJobList(sectionId, jobs) {
             '<div class="job-position">' + escapeHtml(job.position) + '</div>' +
             '</div></div>' +
             '<div class="job-meta">' +
+            '<span class="job-tag ' + getCategoryClass(job.application_category) + '">' + escapeHtml(getCategoryLabel(job.application_category)) + '</span>' +
             '<span class="job-tag ' + getDifficultyClass(job.difficulty) + '">' + escapeHtml(job.difficulty || 'Medium') + '</span>' +
             '<span class="job-tag">' + escapeHtml(job.salary || '') + '</span>' +
             (job.scale ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.scale) + '</span>' : (job.company_size ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.company_size) + '</span>' : (job.company_info ? '<span class="job-tag" style="background:var(--muted);">🏢 ' + escapeHtml(job.company_info.substring(0, 30)) + '</span>' : ''))) +
@@ -921,6 +928,11 @@ function renderJobList(sectionId, jobs) {
             welfareHtml +
             '</div>' +
             '<div class="job-details" id="job-' + job.job_id + '">' +
+            '<div class="detail-section">' +
+            '<div class="detail-title">投递建议</div>' +
+            '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(getCategoryLabel(job.application_category)) +
+            (job.application_category_reason ? ' —— ' + escapeHtml(job.application_category_reason) : '') +
+            '</p></div>' +
             '<div class="detail-section">' +
             '<div class="detail-title">分类原因</div>' +
             '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(job.classification_reason || '') + '</p></div>' +
@@ -974,6 +986,24 @@ function getDifficultyClass(difficulty) {
     if (difficulty === 'Medium' || difficulty === '中') return 'tag-difficulty-medium';
     if (difficulty === 'Hard' || difficulty === '难') return 'tag-difficulty-hard';
     return '';
+}
+
+// ── 投递建议分类：纯查表渲染 ──
+// application_category 由后端裁定，前端只负责查表显示。
+// 调整阈值请改 scoring.py 的 QUALIFIED_MIN_SKILLS / CANNOT_APPLY_* 常量，
+// 此处无需同步修改。
+var CATEGORY_LABELS = {
+    qualified: '✅ 可直接投递',
+    need_optimization: '⚡ 优化后投递',
+    cannot_apply: '⛔ 不可投递'
+};
+
+function getCategoryLabel(category) {
+    return CATEGORY_LABELS[category] || '待定';
+}
+
+function getCategoryClass(category) {
+    return CATEGORY_LABELS[category] ? 'tag-category-' + category : '';
 }
 
 function getSizeClass(size) {

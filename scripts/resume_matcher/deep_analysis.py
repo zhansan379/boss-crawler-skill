@@ -15,7 +15,12 @@ import time
 from typing import List, Dict, Any, Optional
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
-from .scoring import compute_difficulty
+from .scoring import (
+    compute_difficulty,
+    CATEGORY_QUALIFIED,
+    CATEGORY_NEED_OPTIMIZATION,
+    CATEGORY_CANNOT_APPLY,
+)
 from .utils import parse_company_size, ensure_output_dir
 
 
@@ -129,6 +134,9 @@ def save_deep_candidates(
                 'position_score': job.get('position_score', 0),
                 'ai_bonus': job.get('ai_bonus', 0),
             },
+            # 规则侧的投递分类，作为 Claude 未覆盖该候选时的兜底
+            'rule_application_category': job.get('application_category', CATEGORY_NEED_OPTIMIZATION),
+            'rule_application_category_reason': job.get('application_category_reason', ''),
         })
 
     output = {
@@ -166,15 +174,26 @@ DEEP_WEIGHT = 0.6
 QUICK_WEIGHT = 0.4
 
 
-def _map_chinese_classification(classification: str) -> str:
-    """中文分类文本 → 标准 bucket 名"""
-    c = classification.strip()
-    if '符合要求' in c or '可直接投递' in c or 'qualified' in c.lower():
-        return 'qualified'
-    elif '可优化' in c or '优化后' in c or 'need_optimization' in c.lower():
-        return 'need_optimization'
-    else:
-        return 'cannot_apply'
+def _normalize_category(value: str) -> Optional[str]:
+    """
+    Claude 输出的分类文本 → 标准 category 枚举。
+
+    兼容三种写法：新枚举（qualified/need_optimization/cannot_apply）、
+    旧提示词的中文标签（符合要求/可优化后投递/不可投递）、以及 direct_apply 别名。
+    无法识别时返回 None，由调用方决定兜底。
+    """
+    if not value:
+        return None
+    c = value.strip().lower()
+
+    if 'cannot' in c or '不可投递' in c or '不建议' in c:
+        return CATEGORY_CANNOT_APPLY
+    if 'need_optimization' in c or 'need optimization' in c or '可优化' in c or '优化后' in c:
+        return CATEGORY_NEED_OPTIMIZATION
+    if ('qualified' in c or 'direct_apply' in c or 'direct apply' in c
+            or '符合要求' in c or '可直接投递' in c or '直接投递' in c):
+        return CATEGORY_QUALIFIED
+    return None
 
 
 def merge_deep_results(
@@ -232,6 +251,7 @@ def merge_deep_results(
         rank = candidate.get('rank')
         rule_score = candidate.get('rule_score', 50)
         rule_analysis = candidate.get('rule_analysis', {})
+        rule_category = candidate.get('rule_application_category', CATEGORY_NEED_OPTIMIZATION)
 
         # 提取 job_id（用于输出标识，不影响匹配）
         import re
@@ -249,17 +269,20 @@ def merge_deep_results(
 
         if deep:
             # ── 混合评分 ──
-            deep_score = deep.get('overall_match', deep.get('deep_score', rule_score))
+            deep_score = deep.get('score', deep.get('overall_match', deep.get('deep_score', rule_score)))
             # 规则分归一化到 0-100
             quick_normalized = min(100, rule_score / 115.0 * 100)
             blended = int(QUICK_WEIGHT * quick_normalized + DEEP_WEIGHT * deep_score)
 
-            # 分类以 Claude 为准
-            classification = deep.get('classification', deep.get('deep_classification', ''))
-            bucket = _map_chinese_classification(classification)
+            # 分类以 Claude 为准；无法识别时退回规则分类
+            raw_category = deep.get('category', deep.get('classification', deep.get('deep_classification', '')))
+            category = _normalize_category(raw_category) or rule_category
 
             # 原因：Claude 的 > 规则的
-            reasons = deep.get('classification_reason', '; '.join(rule_analysis.get('match_reasons', [])[:3]))
+            reasons = deep.get(
+                'reason',
+                deep.get('classification_reason', '; '.join(rule_analysis.get('match_reasons', [])[:3])),
+            )
             missing = deep.get('missing_items', rule_analysis.get('missing_skills', []))
             optimization = deep.get('optimization_points', rule_analysis.get('optimization_points', []))
 
@@ -271,15 +294,12 @@ def merge_deep_results(
             highlight = deep.get('highlight', '')
             risk = deep.get('risk', '')
         else:
-            # ── 未深度分析的候选：用规则结果 ──
+            # ── 未深度分析的候选：沿用规则侧裁定的分类 ──
             blended = min(100, int(rule_score / 115.0 * 100))
-            bucket = 'need_optimization'  # 默认
-            if rule_score >= 100:
-                bucket = 'qualified'
-            elif rule_score < 85:
-                bucket = 'cannot_apply'
+            category = rule_category
 
-            reasons = '; '.join(rule_analysis.get('match_reasons', [])[:4])
+            reasons = (candidate.get('rule_application_category_reason', '')
+                       or '; '.join(rule_analysis.get('match_reasons', [])[:4]))
             missing = rule_analysis.get('missing_skills', [])
             optimization = rule_analysis.get('optimization_points', [])
             company_size = parse_company_size(job.get('公司', ''), job.get('规模', ''))
@@ -307,6 +327,8 @@ def merge_deep_results(
             'source_file': job.get('source_file', ''),
             'match_score': blended,
             'difficulty': difficulty,
+            'application_category': category,
+            'application_category_reason': reasons,
             'classification_reason': reasons,
             'missing_items': missing[:5] if isinstance(missing, list) else [],
             'optimization_points': optimization if isinstance(optimization, list) else [],
@@ -315,9 +337,9 @@ def merge_deep_results(
             'is_deep': deep is not None,
         }
 
-        if bucket == 'qualified':
+        if category == CATEGORY_QUALIFIED:
             qualified.append(job_result)
-        elif bucket == 'cannot_apply':
+        elif category == CATEGORY_CANNOT_APPLY:
             cannot_apply.append(job_result)
         else:
             need_optimization.append(job_result)

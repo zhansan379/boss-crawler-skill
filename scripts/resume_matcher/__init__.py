@@ -10,12 +10,8 @@
 # ── 数据类
 from .config import (
     ResumeProfile,
-    JobRequirements,
-    MatchResult,
-    DifficultyPrediction,
     JobClassification,
     CSV_FIELDS,
-    DIFFICULTY_WEIGHTS,
     ENCODING,
     OUTPUT_DIR,
     create_run_dir,
@@ -39,15 +35,15 @@ from .data_loader import load_job_data, list_available_job_files
 
 # ── 评分与分类
 from .scoring import (
-    analyze_job_requirements_quick,
-    calculate_education_match,
-    calculate_experience_match,
-    calculate_skills_match,
-    predict_difficulty,
     score_job_advanced,
     classify_jobs_advanced,
     tiers_to_classification,
     compute_difficulty,
+    decide_application_category,
+    parse_degree_level,
+    CATEGORY_QUALIFIED,
+    CATEGORY_NEED_OPTIMIZATION,
+    CATEGORY_CANNOT_APPLY,
 )
 
 # ── 报告生成
@@ -69,19 +65,15 @@ from .utils import (
     print_header,
     print_section,
     ensure_output_dir,
-    parse_education_level,
     parse_experience_years,
-    parse_salary_range,
     parse_company_size,
-    edu_level_to_str,
 )
 
 
 __all__ = [
     # Data classes
-    "ResumeProfile", "JobRequirements", "MatchResult",
-    "DifficultyPrediction", "JobClassification",
-    "CSV_FIELDS", "DIFFICULTY_WEIGHTS", "ENCODING", "OUTPUT_DIR",
+    "ResumeProfile", "JobClassification",
+    "CSV_FIELDS", "ENCODING", "OUTPUT_DIR",
     "create_run_dir", "get_latest_run_dir",
     # Parsers
     "parse_resume_file", "parse_pdf", "parse_docx",
@@ -91,11 +83,10 @@ __all__ = [
     # Data loader
     "load_job_data", "list_available_job_files",
     # Scoring
-    "analyze_job_requirements_quick", "calculate_education_match",
-    "calculate_experience_match", "calculate_skills_match",
-    "predict_difficulty", "score_job_advanced", "classify_jobs_advanced",
-    "tiers_to_classification",
-    "compute_difficulty",
+    "score_job_advanced", "classify_jobs_advanced",
+    "tiers_to_classification", "compute_difficulty",
+    "decide_application_category", "parse_degree_level",
+    "CATEGORY_QUALIFIED", "CATEGORY_NEED_OPTIMIZATION", "CATEGORY_CANNOT_APPLY",
     # Report
     "generate_html_report", "generate_bauhaus_json",
     # Auto-apply
@@ -105,6 +96,5 @@ __all__ = [
     "serialize_profile", "deserialize_profile",
     # Utils
     "print_header", "print_section", "ensure_output_dir",
-    "parse_education_level", "parse_experience_years",
-    "parse_salary_range", "parse_company_size", "edu_level_to_str",
+    "parse_experience_years", "parse_company_size",
 ]

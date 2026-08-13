@@ -12,7 +12,12 @@ from pathlib import Path
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
 from .utils import ensure_output_dir, parse_company_size
-from .scoring import compute_difficulty
+from .scoring import (
+    compute_difficulty,
+    CATEGORY_QUALIFIED,
+    CATEGORY_NEED_OPTIMIZATION,
+    CATEGORY_CANNOT_APPLY,
+)
 
 # 模板文件路径
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -83,8 +88,8 @@ def generate_html_report(
         'qualified_count': len(q_jobs),
     }
 
-    # ── 确保每个 job 的 difficulty 从 match_score 计算 ──
-    def _ensure_job_meta(job: Dict, idx: int) -> Dict:
+    # ── 确保每个 job 的 difficulty / application_category 由后端给定 ──
+    def _ensure_job_meta(job: Dict, idx: int, category: str) -> Dict:
         if not job.get('job_id'):
             link = job.get('link', '')
             if link:
@@ -97,6 +102,10 @@ def generate_html_report(
         # 始终从 match_score 重新计算 difficulty
         score = job.get('match_score', 50)
         job['difficulty'] = compute_difficulty(score)
+        # 投递分类：缺失时按所在桶回填，保证前端永不拿到空值
+        if not job.get('application_category'):
+            job['application_category'] = category
+        job.setdefault('application_category_reason', '')
         return job
 
     # ── 构建完整数据 ──
@@ -104,9 +113,12 @@ def generate_html_report(
         'resume_info': resume_info,
         'statistics': statistics,
         'classification': {
-            'cannot_apply': [_ensure_job_meta(j, i) for i, j in enumerate(c_jobs)],
-            'need_optimization': [_ensure_job_meta(j, i) for i, j in enumerate(n_jobs)],
-            'qualified': [_ensure_job_meta(j, i) for i, j in enumerate(q_jobs)],
+            'cannot_apply': [_ensure_job_meta(j, i, CATEGORY_CANNOT_APPLY)
+                             for i, j in enumerate(c_jobs)],
+            'need_optimization': [_ensure_job_meta(j, i, CATEGORY_NEED_OPTIMIZATION)
+                                  for i, j in enumerate(n_jobs)],
+            'qualified': [_ensure_job_meta(j, i, CATEGORY_QUALIFIED)
+                          for i, j in enumerate(q_jobs)],
         },
         'crawl_params': {},
         'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -182,7 +194,7 @@ def generate_bauhaus_json(
     }
 
     # ── 映射岗位到报告格式 ──
-    def _map_to_report(job: Dict) -> Dict:
+    def _map_to_report(job: Dict, category: str) -> Dict:
         score = job.get('match_score', 50)
         difficulty = compute_difficulty(score)
         company_size = parse_company_size(
@@ -205,6 +217,8 @@ def generate_bauhaus_json(
             'education': job.get('学历', job.get('degree', job.get('education', ''))),
             'match_score': score,
             'difficulty': difficulty,
+            'application_category': job.get('application_category', category),
+            'application_category_reason': job.get('application_category_reason', ''),
             'company_size': company_size,
             'scale': job.get('规模', job.get('scale', '')),
             'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
@@ -227,9 +241,9 @@ def generate_bauhaus_json(
             'qualified_count': len(tier1),
         },
         'classification': {
-            'cannot_apply': [_map_to_report(j) for j in tier3],
-            'need_optimization': [_map_to_report(j) for j in tier2],
-            'qualified': [_map_to_report(j) for j in tier1],
+            'cannot_apply': [_map_to_report(j, CATEGORY_CANNOT_APPLY) for j in tier3],
+            'need_optimization': [_map_to_report(j, CATEGORY_NEED_OPTIMIZATION) for j in tier2],
+            'qualified': [_map_to_report(j, CATEGORY_QUALIFIED) for j in tier1],
         },
         'crawl_params': crawl_params or {},
         'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
