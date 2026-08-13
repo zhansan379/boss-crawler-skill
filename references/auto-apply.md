@@ -38,7 +38,7 @@ flowchart TD
 
     ResumeDone --> Render[7e 串行批量渲染平铺图<br>ShowCV: import → export → delete]
     GreetingDone & Render --> CreateDir[7f 建目录<br>run_dir/applications/公司名-岗位名]
-    CreateDir --> SaveFiles[写入两个文件<br>1. 岗位信息+招呼语.md<br>2. 调整后简历.png]
+    CreateDir --> SaveFiles[写入三个文件<br>1. 岗位信息+招呼语.md<br>2. 姓名-应聘岗位.md<br>3. 姓名-应聘岗位.png]
     SaveFiles --> Notify[通知用户：已生成 N 份<br>请手动浏览确认]
     Notify --> Confirm{7g 门禁二：用户确认}
 
@@ -224,7 +224,8 @@ python scripts/showcv/export_images.py --url <url> --mode flat \
     --out {run_dir}/showcv_exports \
     --name "XX科技-Java开发__20260813-1430" --name "YY公司-全栈工程师__20260813-1430"
 
-# 4. distribute the PNGs into the job dirs, then remove the temp resumes
+# 4. distribute the PNGs into the job dirs (renaming to <姓名>-<应聘岗位>.png), then remove the
+#    temp resumes
 python scripts/showcv/delete_resumes.py --url <url> --yes \
     --name "XX科技-Java开发__20260813-1430" --name "YY公司-全栈工程师__20260813-1430"
 ```
@@ -238,7 +239,33 @@ the directory name.
 
 **Read the output naming before hunting for missing files**: one resume in `flat` mode downloads as
 `<name>.png`; two or more arrive as `showcv-images-<YYYYMMDD>.zip` containing one `<name>.png` per
-resume. Unzip, then move each into its job directory as `调整后简历.png`.
+resume — i.e. named after the *staged* name, stamp and all. Unzip, then rename on the way into the
+job directory (below).
+
+### The saved filename is `<姓名>-<应聘岗位>`
+
+Both files that represent the resume itself use one base name, `<姓名>-<应聘岗位>`:
+
+| File | Path |
+|---|---|
+| Markdown resume | `{run_dir}/applications/<company>-<position>/<姓名>-<应聘岗位>.md` |
+| Flat image | `{run_dir}/applications/<company>-<position>/<姓名>-<应聘岗位>.png` |
+
+- **`姓名`** comes from `{run_dir}/profile.json` → `basic_info.name`. If it is empty or `未提取`,
+  ask the user for their name with one `AskUserQuestion` before 7e — this string is what the
+  recruiter sees on the attachment, so do not guess it and do not fall back to a placeholder.
+- **`应聘岗位`** is that job's position title, no company name. Two postings with the same title
+  don't collide because they sit in different `<company>-<position>/` directories.
+- Sanitize `/ \ : * ? " < > |` out of both halves, same as for the directory name.
+- The `.md` is the same Markdown that was staged for ShowCV — copy it in, don't regenerate it, so the
+  image and the Markdown can never disagree.
+
+**Staging names stay unique and stamped; the rename happens on distribution.** Keep the
+`<company>-<position>__<run-stamp>` staging name for import/export/delete — `<姓名>-<应聘岗位>`
+is *not* unique inside ShowCV's global resume list (`姓名` is constant and the stamp is per-run, not
+per-job, so two same-title jobs would land on one name and get silently renamed to `名字 (2)`,
+breaking name → id resolution). So resolve every ShowCV call by the staged name, then rename to
+`<姓名>-<应聘岗位>.png` / `.md` only as you move the files into the job directory.
 
 **Confirm which browser you are driving before step 2.** Debug port 9333 is shared with the upstream
 `showcv-launch` skill, and an already-running browser is *adopted* with the configured profile
@@ -269,11 +296,16 @@ One directory per job, under the run directory:
   applications/
       XX科技-Java开发/
         岗位信息+招呼语.md
-        调整后简历.png                  #  自定义上传 → the user's image instead
+        张三-Java开发.md
+        张三-Java开发.png                # 自定义上传 → the user's image, renamed the same way
       YY公司-全栈工程师/
         岗位信息+招呼语.md
-        调整后简历.png
+        张三-全栈工程师.md
+        张三-全栈工程师.png
 ```
+
+`张三-Java开发.md` / `.png` are the resume itself, named `<姓名>-<应聘岗位>` — see the naming rule in
+7e. Both live in the job directory, so the same 姓名 and a repeated position title never collide.
 
 `岗位信息+招呼语.md` holds the job facts and the greeting together, so one file answers "what did I
 send to whom":
@@ -334,13 +366,16 @@ results = auto_apply_jobs(
     _profile=profile,
     max_applications=len(selected_jobs),
     greetings=greetings,              # keyed by job link
-    resume_file_path=resume_image,    # None when 7c answered 不发送
+    resume_file_path=resume_images,   # keyed by job link; None when 7c answered 不发送
     output_dir=run_dir,
 )
 ```
 
-`resume_file_path` resolves per the 7c answer: the user's uploaded image (`自定义上传`), the rendered
-`调整后简历.png` (`AI调整`), or `None` (`不发送`).
+`resume_file_path` takes either a single path (whole batch shares one attachment) or a
+`{job_link: path}` dict (per-job attachment) — pass the dict, since each job has its own
+`<姓名>-<应聘岗位>.png`. It resolves per the 7c answer: the user's uploaded image (`自定义上传`, one
+path reused for every job), the rendered per-job `<姓名>-<应聘岗位>.png` (`AI调整`), or `None`
+(`不发送`).
 
 **Apply flow (per job):**
 

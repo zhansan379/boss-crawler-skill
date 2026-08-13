@@ -18,7 +18,7 @@ import json
 import re
 import time
 import random
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 from .config import ResumeProfile, OUTPUT_DIR, get_latest_run_dir, create_run_dir
 from .utils import ensure_output_dir
@@ -526,7 +526,7 @@ def auto_apply_jobs(
     max_applications: int = 10,
     headless: bool = False,
     greetings: Optional[Dict[str, str]] = None,
-    resume_file_path: Optional[str] = None,
+    resume_file_path: Optional[Union[str, Dict[str, str]]] = None,
     output_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -546,7 +546,9 @@ def auto_apply_jobs(
         max_applications: 最大投递数量
         headless: 是否无头模式
         greetings: 预生成的招呼语字典 {job_link: greeting_text}，优先使用
-        resume_file_path: 简历文件路径（图片/PDF），用于「发送图片」上传附件
+        resume_file_path: 简历文件路径（图片/PDF），用于「发送图片」上传附件。
+                    传字符串则整批共用一个文件；传 {job_link: path} 则按岗位
+                    各发各的（分岗位定制简历走这条）。
         output_dir: 输出目录（投递日志保存位置）。
                     默认自动定位最近运行目录或创建新目录。
 
@@ -686,10 +688,11 @@ def auto_apply_jobs(
                         print(f"  ✅ 投递+招呼完成！")
 
                         # === 步骤 7：发送简历附件 ===
-                        if resume_file_path:
+                        job_resume = _get_resume_file(job, resume_file_path)
+                        if job_resume:
                             time.sleep(1)
                             attachment_ok = send_resume_attachment(
-                                dp, resume_file_path
+                                dp, job_resume
                             )
                             result['attachment_sent'] = attachment_ok
                             if attachment_ok:
@@ -809,6 +812,17 @@ def _get_greeting(
             return greetings[link]
 
     return generate_greeting(profile=profile, job=job)
+
+
+def _get_resume_file(
+    job: Dict[str, Any],
+    resume_file_path: Optional[Union[str, Dict[str, str]]]
+) -> Optional[str]:
+    """取该岗位要发的简历附件：dict 按 job_link 取，字符串则整批共用"""
+    if isinstance(resume_file_path, dict):
+        return resume_file_path.get(job.get('link', ''))
+
+    return resume_file_path
 
 
 def _input_greeting(dp: WebPage, greeting: str) -> bool:
