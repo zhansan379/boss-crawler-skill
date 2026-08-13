@@ -18,16 +18,42 @@ from .utils import detect_encoding, ensure_output_dir
 
 # ==================== JSON 数据加载 ====================
 
+# update_json_data() 会开浏览器，一个进程里最多自动触发一次：
+# 首用（文件根本没下载过）值得自动补，但如果补完还是读不出来，
+# 那是网络或接口的问题，重试只会再开一次浏览器。
+_auto_init_done = False
+
+
+def _load_json_asset(file_name, _retry=True):
+    """读取 assets 下的 JSON 数据文件。
+
+    缺失或损坏时自动跑一次首用初始化（update_json_data）再读一遍。
+    成功返回 dict，彻底失败返回 None —— 空结构长什么样由调用方决定。
+    """
+    global _auto_init_done
+
+    file_path = os.path.join(ASSETS_DIR, file_name)
+    try:
+        encoding = detect_encoding(file_path)
+        with open(file_path, 'r', encoding=encoding) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        reason = type(e).__name__
+        if not _retry or _auto_init_done:
+            print(f"[错误] {file_path} 读取失败（{reason}），请手动运行 --update-data 后重试")
+            return None
+
+        _auto_init_done = True
+        print(f"[首用初始化] {file_name} 缺失或损坏（{reason}），自动获取一次...")
+        update_json_data()
+        return _load_json_asset(file_name, _retry=False)
+
+
 def load_position_data():
     """加载岗位分类数据"""
-    file_path = os.path.join(ASSETS_DIR, 'post_data.json')
-    if not os.path.exists(file_path):
-        print(f"错误: {file_path} 不存在，请先更新数据")
+    data = _load_json_asset('post_data.json')
+    if data is None:
         return {}
-
-    encoding = detect_encoding(file_path)
-    with open(file_path, 'r', encoding=encoding) as f:
-        data = json.load(f)
 
     position_data = {}
     for category in data.get('zpData', {}).get('position', []):
@@ -54,14 +80,9 @@ def load_position_data():
 
 def load_city_data():
     """加载城市数据"""
-    file_path = os.path.join(ASSETS_DIR, 'weizhi.json')
-    if not os.path.exists(file_path):
-        print(f"错误: {file_path} 不存在，请先更新数据")
+    data = _load_json_asset('weizhi.json')
+    if data is None:
         return {'hot': [], 'other': []}
-
-    encoding = detect_encoding(file_path)
-    with open(file_path, 'r', encoding=encoding) as f:
-        data = json.load(f)
 
     zpData = data.get('zpData', {})
     hot_cities = zpData.get('hotCitySites', [])

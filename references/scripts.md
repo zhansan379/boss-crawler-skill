@@ -28,9 +28,20 @@ Crawl logic split into independent modules. Import via `from boss_crawler import
 | `init_csv_file(path)` | `data_loader` | Write header, or rewrite an older header to the current `CSV_FIELDS` (see below) |
 | `run_crawl_cli(args)` | `crawler` | CLI mode full crawl flow |
 | `parse_args()` | `cli` | CLI argument parsing |
-| `load_position_data()` | `data_loader` | Load position category JSON |
-| `load_city_data()` | `data_loader` | Load city list JSON |
+| `load_position_data()` | `data_loader` | Load position category JSON (auto-inits on first use, see below) |
+| `load_city_data()` | `data_loader` | Load city list JSON (auto-inits on first use, see below) |
 | `update_json_data()` | `data_loader` | Online update of position and city data |
+
+### First-Use Auto-Init
+
+`post_data.json` / `weizhi.json` are not in the repo — they are fetched from zhipin.com. When either is
+missing or corrupt, the loader calls `update_json_data()` once and re-reads, so a fresh clone crawls
+without a manual `--update-data` step.
+
+The retry is capped at **one browser launch per process** (`_auto_init_done`). If the file is still
+unreadable afterwards the loader returns the same empty structure as before (`{}` /
+`{'hot': [], 'other': []}`) and tells the user to run `--update-data` by hand — a second launch would
+only re-hit whatever network or API problem broke the first one.
 
 ### CSV Schema
 
@@ -119,7 +130,7 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 |--------|------|---------|
 | Config/dataclasses | `resume_matcher/config.py` | Constants + `ResumeProfile`, `JobClassification` |
 | Utilities | `resume_matcher/utils.py` | `parse_experience_years()`, `parse_company_size()`, `ensure_output_dir()`, `print_header()`, `print_section()` |
-| File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()` |
+| File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()`, `parse_plain_text()` |
 | Prompts | `resume_matcher/prompts.py` | `load_prompt()`, `get_resume_parse_prompt()`, `get_job_analysis_prompt()`, `get_match_analysis_prompt()`, `get_optimize_prompt()` |
 | Data loading | `resume_matcher/data_loader.py` | `list_available_job_files()`, `load_job_data()` |
 | Scoring | `resume_matcher/scoring.py` | `score_job_advanced()` (6 dimensions, 0-115), `classify_jobs_advanced()` (4 tiers), `compute_difficulty()`, `tiers_to_classification()`, `build_job_view()` (the only field mapper), `hr_activity_rank()` / `hr_activity_sort_key()` (sort only, never scored) |

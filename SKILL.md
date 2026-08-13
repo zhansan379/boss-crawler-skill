@@ -194,7 +194,7 @@ Reading the file and structuring it are one pass, not two stages. Ask for the re
 ```python
 from resume_matcher import parse_resume_file, create_run_dir
 
-resume_text = parse_resume_file(file_path)   # PDF / Word / txt
+resume_text = parse_resume_file(file_path)   # PDF / Word / md / markdown / txt
 run_dir = create_run_dir()
 # write resume_text.txt into run_dir
 ```

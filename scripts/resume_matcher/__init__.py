@@ -19,7 +19,7 @@ from .config import (
 )
 
 # ── 简历解析
-from .parsers import parse_resume_file, parse_pdf, parse_docx
+from .parsers import parse_resume_file, parse_pdf, parse_docx, parse_plain_text
 
 # ── 提示词
 from .prompts import (
@@ -80,7 +80,7 @@ __all__ = [
     "CSV_FIELDS", "ENCODING", "OUTPUT_DIR",
     "create_run_dir", "get_latest_run_dir",
     # Parsers
-    "parse_resume_file", "parse_pdf", "parse_docx",
+    "parse_resume_file", "parse_pdf", "parse_docx", "parse_plain_text",
     # Prompts
     "load_prompt", "get_resume_parse_prompt", "get_job_analysis_prompt",
     "get_match_analysis_prompt", "get_optimize_prompt",

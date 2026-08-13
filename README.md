@@ -283,7 +283,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── resume_matcher/               # 匹配引擎包 (9 modules + template)
     │   ├── config.py                 # 数据类 (ResumeProfile, JobClassification, ...)
     │   ├── scoring.py                # 6 维度评分 + 4 层分类（含技能别名映射）
-    │   ├── parsers.py                # PDF/Word 简历解析
+    │   ├── parsers.py                # PDF/Word/Markdown 简历解析
     │   ├── prompts.py                # 提示词模板加载
     │   ├── data_loader.py            # CSV 岗位数据加载
     │   ├── report.py                 # HTML 报告 + JSON 生成
