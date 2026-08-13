@@ -75,14 +75,14 @@ def survey(run_dir):
             '按 references/resume-parsing.md 写 resume_text.txt + profile.json',
         ]), ['缺 profile.json 或 resume_text.txt']
 
-    # ── Stage 3.5b: 交叉校验（强制 gate）──
+    # ── Stage 3.5b: 交叉校验 ──
     if has('profile_validation.json'):
         done.append('Stage 3.5b 校验：profile_validation.json')
     else:
-        return done, ('Stage 3.5b 交叉校验 profile（强制 gate）', [
+        return done, ('Stage 3.5b 交叉校验 profile', [
             'python scripts/validate_profile.py "%s/resume_text.txt" "%s/profile.json"'
             % (run_dir, run_dir),
-        ]), ['缺 profile_validation.json——这一步不能跳']
+        ]), ['缺 profile_validation.json——跑一下，退出码 0 就一行带过']
 
     # ── Stage 4-6: 匹配与报告 ──
     if has('matching_report.html'):

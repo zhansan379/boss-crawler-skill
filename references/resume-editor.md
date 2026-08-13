@@ -59,8 +59,8 @@ To use it:
    active one via `state.currentResumeId`, then confirm with `AskUserQuestion` showing each
    `name` + `updatedAt`. The field is `currentResumeId` — **not** `activeResumeId`.
 2. Write that entry's `content` to `{run_dir}/resume_text.txt` — it *is* `resume_text`.
-3. Continue at Stage 3 (parse → profile.json) as normal, including the mandatory Stage 3.5b
-   cross-validation gate.
+3. Continue at Stage 3 (parse → profile.json) as normal, including the Stage 3.5b cross-validation
+   run.
 
 `currentResumeId` can be `null` (no resume ever selected). Ask the user in that case rather than
 guessing.

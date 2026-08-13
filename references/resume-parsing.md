@@ -82,9 +82,10 @@ with open(profile_path, 'w', encoding='utf-8') as f:
 
 ---
 
-## Stage 3.5b: Cross-Validation Procedure (MANDATORY)
+## Stage 3.5b: Cross-Validation Procedure
 
-This is a quality gate. Skipping it risks profile omissions that cascade into incorrect match classifications.
+Always run this — it is one command and usually ends in one line. It is not a blocking gate, but the
+omissions it catches cascade into wrong match classifications downstream, so don't skip it.
 
 ### Step 1: Run Automated Check
 
@@ -92,20 +93,46 @@ This is a quality gate. Skipping it risks profile omissions that cascade into in
 python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
 ```
 
-The script extracts suspected technical terms (CamelCase names, known frameworks/tools) from the raw resume and diffs against `profile.json` skills, projects, and experience — outputting a gap report.
+The script scans the raw resume with a known-tech dictionary (`KNOWN_TECH_TERMS`) and diffs against
+`profile.json` skills + project tech stacks. **Exit code 1 means a skill is missing, and nothing
+else.**
 
-### Step 2: Claude Manual Line-by-Line Scan
+Everything printed under `hints` — unmatched project names, unmatched company names, skill categories
+with fewer than two entries — comes from loose regex plus exact set-difference:
 
-Even if the script reports "no differences", Claude must:
+- `hint_projects` grabs "the line after a date range", so job titles and company names land there too
+- `hint_companies` matches literally, so `山西物联…研究院` vs the same name with `有限公司` reads as a
+  missing entry; a client or cloud vendor named inside a project description reads as missing work
+  experience
+- `hint_warnings` fires on any category with one item, which is often legitimate
 
-1. **Reverse scan**: read the original resume, identify every technical term paragraph-by-paragraph, verify each appears in `profile.skills.*`
-2. **Project completeness**: verify every project appears in `profile.projects` with complete `tech_stack` and all original `highlights`
-3. **Experience completeness**: verify every work/internship entry appears in `profile.experience.companies` with `highlights` split per original bullet
+Read the hints as places to look. Do not treat them as findings, and do not fix profile.json just to
+silence one.
+
+### Step 2: Claude Scan for What the Dictionary Can't See
+
+The script only knows skills, and only the ones in its dictionary. Claude covers the rest:
+
+1. **Skills beyond the dictionary**: read the resume, verify each technical term appears in
+   `profile.skills.*` — including terms `KNOWN_TECH_TERMS` has never heard of
+2. **Project completeness**: verify every project appears in `profile.projects` with complete
+   `tech_stack` and all original `highlights`
+3. **Experience completeness**: verify every work/internship entry appears in
+   `profile.experience.companies` with `highlights` split per original bullet
 4. **Awards & publications**: verify all awards, publications, and social links are extracted
 5. **Skills description**: verify `skills.summary` preserves the original skills paragraph
-6. **Soft evidence**: verify `profile.projects` is non-empty, `profile.skills` covers every skills paragraph, `profile.keywords` covers core competencies
+6. **Soft evidence**: verify `profile.projects` is non-empty and `profile.keywords` covers core
+   competencies
 
 ### Step 3: Report Findings
+
+One line when nothing was wrong:
+
+```
+✅ Profile 交叉校验：exit 0，逐项扫描无遗漏（hints 2 条，均为措辞差异）
+```
+
+When something was fixed:
 
 ```
 🔍 Profile Cross-Validation Report
@@ -118,14 +145,14 @@ Even if the script reports "no differences", Claude must:
 Result: 3 omissions fixed, profile updated.
 ```
 
-### Step 4: User Confirmation (only when there is something to confirm)
+### Step 4: User Confirmation (rarely)
 
-If Step 1's exit code was 0 **and** the line-by-line scan in Step 2 found nothing, report that in one
-line and continue — no `AskUserQuestion`. A question whose only honest answer is "yes, nothing was
-wrong" spends a user turn to buy nothing.
+Transcription fixes — a skill that was plainly in the resume and plainly missing from the JSON — need
+no confirmation. Report and continue.
 
-Otherwise use `AskUserQuestion` to show what you changed (or what stayed ambiguous) and get approval
-before proceeding.
+Use `AskUserQuestion` only when a correction was a *judgement call*: a skill the resume implies rather
+than states, projects you merged or split, an experience entry whose dates or scope are ambiguous.
+Show what you changed and why it was a call, not a copy.
 
 ---
 

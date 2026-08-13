@@ -43,7 +43,7 @@ Progress:
 - [ ] Stage 0: Launch resume editor (path D — terminal step)
 - [ ] Stage 1: Crawl jobs (paths A, C)
 - [ ] Stage 2-3: Read resume file → parse → profile.json
-- [ ] Stage 3.5b: Cross-validate profile (MANDATORY gate)
+- [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
 - [ ] Stage 3.5: Infer crawl params from resume (path C only)
 - [ ] Stage 4-6: Match analysis (quick or deep) → report written and opened
 - [ ] Stage 7: Confirm jobs → parallel per-job material generation → confirm → apply
@@ -204,21 +204,28 @@ to `{run_dir}/profile.json`. See
 [references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and
 extraction rules.
 
-### Stage 3.5b: Cross-Validate Profile (MANDATORY)
+### Stage 3.5b: Cross-Validate Profile
 
-Quality gate — must execute before any downstream stage. See [references/resume-parsing.md](references/resume-parsing.md) for the full 4-step procedure.
+Always run it; it is cheap and almost always ends in one line. See
+[references/resume-parsing.md](references/resume-parsing.md) for the full procedure.
 
 1. Run `python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json`
-2. Claude manually scans original resume line-by-line against profile
-3. Report findings, fix all omissions, update profile.json
-4. **Only if something was found or is ambiguous**, confirm the corrections via `AskUserQuestion`.
-   Exit code 0 plus a clean line-by-line scan → say so in one line and move on; don't spend a
-   question on "nothing was wrong"
+2. Claude scans the original resume against the profile for anything the dictionary can't see
+   (projects, experience bullets, awards, the skills paragraph)
+3. Fix whatever either step found, update profile.json
+4. Report in one line and move on. Only spend an `AskUserQuestion` when a correction was
+   *judgement*, not transcription — a skill you added that the resume only implies, a project you
+   merged or split. Exit code 0 plus a clean scan → one line, no question
 
-**Do not replace step 1 with self-review.** `validate_profile.py` is a dictionary + regex extractor
-(`KNOWN_TECH_TERMS`), so it is the one signal here that is *independent of the model that produced
-the JSON*. The failure it catches is "the parse dropped a skill" — and the model that dropped it is
-the least likely to notice. Step 2 complements the script, it doesn't substitute for it.
+**Do not replace step 1 with self-review.** `validate_profile.py`'s skill check is a dictionary
+lookup (`KNOWN_TECH_TERMS`), so it is the one signal here that is *independent of the model that
+produced the JSON*. The failure it catches is "the parse dropped a skill" — and the model that
+dropped it is the least likely to notice. Step 2 complements the script, it doesn't substitute for it.
+
+**Exit code 1 means a skill is missing — that alone.** Anything the script prints under `hints`
+(unmatched project names, unmatched company names, thin skill categories) comes from loose regex and
+exact set-difference, so a wording difference between resume and profile is enough to trigger it.
+Read hints, don't obey them, and don't let one turn into a gate.
 
 ### Stage 3.5: Infer Crawl Params (path C only)
 
