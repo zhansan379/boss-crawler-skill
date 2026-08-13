@@ -13,6 +13,7 @@
 
 ## 搜集的投递技巧
 [在boss直聘如何打招呼语](Tutorial/Greeting.md)
+
 [在boss直聘什么时候打招呼](Tutorial/DeliveryTime.md)
 
 
