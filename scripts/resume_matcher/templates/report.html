@@ -697,7 +697,14 @@ const IS_DEEP_MODE = ANALYSIS_MODE === 'deep';
 // ========================================
 // Initialization
 // ========================================
-(function init() {
+// ⚠ init 必须延迟执行，不能写成 (function init(){...})()。
+//   原因：本脚本里的 CATEGORY_LABELS 等是 `var` 声明，位置在 init 之后。
+//   var 只提升声明不提升赋值，所以立即执行的 init 里读到的是 undefined，
+//   getCategoryClass() 会抛 TypeError；该异常未被捕获会中断整个 <script>，
+//   导致后面的赋值语句全部不执行、岗位列表整体空白。
+//   （2026-08-13 实测复现：CATEGORY_LABELS 为 undefined，可投递/需优化计数恒为 0）
+//   实际调用见脚本末尾的 bootstrap 段。
+function init() {
     if (!REPORT_DATA || !REPORT_DATA.statistics) {
         showLoadingError();
         return;
@@ -705,8 +712,12 @@ const IS_DEEP_MODE = ANALYSIS_MODE === 'deep';
     classificationData = REPORT_DATA;
     renderData(REPORT_DATA);
     lucide.createIcons();
+    bindStaticHandlers();
+}
+
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
-document.addEventListener('DOMContentLoaded', function() {
+// init 已在 DOMContentLoaded 之后运行，这里直接绑定，不能再套一层 DOMContentLoaded
+function bindStaticHandlers() {
     // 导航链接
     document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
         link.addEventListener('click', function(e) {
@@ -720,9 +731,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (statsBtn && statsBtn.textContent.includes('查看结果')) {
         statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
     }
-});
-
-})();
+}
 
 function showLoadingError() {
     document.getElementById('resumeCard').innerHTML =
@@ -999,11 +1008,12 @@ var CATEGORY_LABELS = {
 };
 
 function getCategoryLabel(category) {
-    return CATEGORY_LABELS[category] || '待定';
+    return (CATEGORY_LABELS || {})[category] || '待定';
 }
 
 function getCategoryClass(category) {
-    return CATEGORY_LABELS[category] ? 'tag-category-' + category : '';
+    // 容错：即使 CATEGORY_LABELS 尚未赋值也只是丢个样式，不能抛异常整页空白
+    return (CATEGORY_LABELS || {})[category] ? 'tag-category-' + category : '';
 }
 
 function getSizeClass(size) {
@@ -1031,6 +1041,16 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
+// ========================================
+// Bootstrap —— 必须放在脚本最末尾
+// ========================================
+// 到 DOMContentLoaded 时整段内联脚本已执行完毕，所有 var 赋值均已生效。
+// 若脚本被后置注入（readyState 已过 loading），此处也已在文件末尾，同样安全。
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
 </script>
 </body>
 </html>

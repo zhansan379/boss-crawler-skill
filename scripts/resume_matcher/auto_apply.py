@@ -310,35 +310,64 @@ def send_resume_attachment(
     ext = os.path.splitext(resume_file_path)[1].lower()
     is_image = ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
 
+    # ── 送达校验基线：记录发送前的图片消息数量 ──
+    # ⚠ 图片消息在 innerText 中不可见，只能数 img.message-image 元素。
+    #   基线为 -1 表示读不到消息列表，此时无法校验，退化为「上传即返回」。
+    baseline = _count_chat_images(dp) if is_image else -1
+    can_verify = is_image and baseline >= 0
+    if can_verify:
+        print(f"  📐 校验基线: 当前 {baseline} 张图片消息")
+
+    def _verify_sent() -> bool:
+        """确认图片消息数量增加了 —— 这是唯一可信的送达证据"""
+        if not can_verify:
+            return True
+        for _ in range(int(timeout)):
+            time.sleep(1)
+            if _count_chat_images(dp) > baseline:
+                return True
+        return False
+
     # ── 策略 A：直接找隐藏 file input（不点击按钮，绕过原生对话框）──
+    # ⚠ 每次只投递一个 input 并立即校验，成功即停 ——
+    #   历史上「往所有 file input 都塞文件」会导致重复发送。
     file_inputs = _find_all_file_inputs(dp)
     if file_inputs:
-        print(f"  🔍 找到 {len(file_inputs)} 个 file input，尝试匹配...")
+        print(f"  🔍 找到 {len(file_inputs)} 个 file input，逐个尝试并校验...")
+        ordered = []
+        fallback = []
         for fi in file_inputs:
             try:
                 accept = (fi.attr('accept') or '').lower()
-                # 匹配：accept 为空（兜底）、accept 匹配图片、或 accept 匹配 PDF
-                if not accept or (is_image and 'image' in accept) or (not is_image and ext.lstrip('.') in accept):
-                    fi.input(resume_file_path)
-                    time.sleep(2)
-                    print(f"  ✅ 简历附件已上传 (策略A: 直接 file input)")
-                    return True
             except Exception:
+                accept = ''
+            matched = (
+                (is_image and 'image' in accept)
+                or (not is_image and ext.lstrip('.') in accept)
+            )
+            (ordered if matched else fallback).append((fi, accept))
+
+        for fi, accept in ordered + fallback:
+            try:
+                fi.input(resume_file_path)
+            except Exception as e:
+                print(f"  ⚠ input(accept={accept[:30]!r}) 失败: {e}")
                 continue
 
-        # accept 都不匹配，用最后一个兜底
-        try:
-            file_inputs[-1].input(resume_file_path)
-            time.sleep(2)
-            print(f"  ✅ 简历附件已上传 (策略A: 兜底 input)")
-            return True
-        except Exception as e:
-            print(f"  ⚠ 策略A失败: {e}")
+            if _verify_sent():
+                after = _count_chat_images(dp) if can_verify else -1
+                suffix = f"，图片消息 {baseline} → {after}" if can_verify else "（无法校验）"
+                print(f"  ✅ 简历附件已送达 (策略A: file input){suffix}")
+                return True
+            print(f"  ⚠ 该 input 未产生新图片消息，尝试下一个")
 
     # ── 策略 B：JS 注入 file input → 设置文件 → 触发 change 事件 ──
     print(f"  🔄 尝试策略B: JS 注入 file input...")
     if _upload_via_js_injection(dp, resume_file_path):
-        return True
+        if _verify_sent():
+            print(f"  ✅ 简历附件已送达 (策略B)")
+            return True
+        print(f"  ⚠ 策略B 未产生新图片消息")
 
     # ── 策略 C：点击「发送图片」div（兜底，会弹出原生对话框需手动处理）──
     print(f"  🔄 尝试策略C: 点击「发送图片」按钮...")
@@ -357,9 +386,11 @@ def send_resume_attachment(
         _auto_accept_file_dialog(dp, resume_file_path)
         img_btn.click()
         time.sleep(3)
-        print(f"  ℹ 策略C: 已点击按钮，如弹出对话框请手动选择文件")
-        # 此时如果 CDP 拦截成功文件已上传，否则需要手动操作
-        return True
+        if _verify_sent():
+            print(f"  ✅ 简历附件已送达 (策略C)")
+            return True
+        print(f"  ⚠ 策略C: 未确认送达，如弹出对话框请手动选择文件")
+        return False
     except Exception as e:
         print(f"  ❌ 策略C失败: {e}")
         return False
@@ -681,10 +712,11 @@ def auto_apply_jobs(
                     print(f"  📝 已输入招呼语")
                     time.sleep(0.5)
 
-                    # === 步骤 6：点击发送 ===
-                    if _click_send(dp):
-                        print(f"  📤 消息已发送")
+                    # === 步骤 6：发送（回车优先）+ 回读聊天记录校验 ===
+                    if _click_send(dp, greeting):
+                        print(f"  📤 消息已发送（已校验气泡）")
                         result['status'] = 'applied'
+                        result['greeting_verified'] = True
                         print(f"  ✅ 投递+招呼完成！")
 
                         # === 步骤 7：发送简历附件 ===
@@ -696,16 +728,21 @@ def auto_apply_jobs(
                             )
                             result['attachment_sent'] = attachment_ok
                             if attachment_ok:
-                                print(f"  ✅ 简历附件已发送！")
+                                print(f"  ✅ 简历附件已发送（已校验）！")
                             else:
-                                print(f"  ⚠ 简历附件发送失败，请手动发送")
+                                print(f"  ⚠ 简历附件未确认送达，请手动发送")
                     else:
                         result['status'] = 'partial'
-                        result['error'] = '招呼语已输入但发送失败'
-                        print(f"  ⚠ 发送失败，请手动发送")
+                        result['greeting_verified'] = False
+                        result['error'] = (
+                            '招呼语已输入但聊天记录中未出现消息气泡 —— 未发送成功，'
+                            '请在浏览器中手动按回车'
+                        )
+                        print(f"  ❌ 发送未通过校验，招呼语仍在输入框，请手动按回车")
                 else:
                     result['status'] = 'no_chat'
-                    result['error'] = '无法输入招呼语（可能已投递或聊天窗口未开启）'
+                    result['greeting_verified'] = False
+                    result['error'] = '招呼语无法输入聊天框（可能已投递或聊天窗口未开启）'
                     print(f"  ⚠ 无法输入招呼语")
 
             except Exception as e:
@@ -825,97 +862,186 @@ def _get_resume_file(
     return resume_file_path
 
 
-def _input_greeting(dp: WebPage, greeting: str) -> bool:
-    """在聊天输入框中输入招呼语（优先使用 JS 直接注入，避免逐键模拟丢字）"""
-    import json as _json
+def _norm(text: str) -> str:
+    """归一化：去掉所有空白，便于跨 DOM 渲染比对文本"""
+    return re.sub(r'\s+', '', text or '')
 
-    # 策略 A：直接用 JS 注入文本 + 派发完整事件链（适合 contenteditable div）
+
+def _greeting_probe(greeting: str, length: int = 14) -> str:
+    """
+    从招呼语中取一段稳定的特征串，用于回读聊天记录时判定是否真的发出去了。
+    跳过开头的括号类标点（BOSS 渲染时可能改写），取正文前 length 个字符。
+    """
+    s = _norm(greeting)
+    core = re.sub(r'^[【\[（(“"\'’‘]+', '', s)
+    return core[:length] if len(core) >= length else core
+
+
+def _read_chat_record(dp: WebPage) -> str:
+    """读取当前聊天记录的纯文本。注意：图片消息在 innerText 中不可见。"""
     try:
-        greeting_js = _json.dumps(greeting)
-        result = dp.run_js(f"""
-            const sel = '#chat-input, [contenteditable="true"], textarea, [placeholder*="消息"], [placeholder*="输入"]';
-            const el = document.querySelector(sel);
-            if (el) {{
-                el.focus();
-                el.click();
-                if (el.contentEditable === 'true') {{
-                    el.innerText = {greeting_js};
-                }} else {{
-                    el.value = {greeting_js};
-                }}
-                // 派发完整事件链，确保 Vue/React 绑定生效
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                el.dispatchEvent(new Event('compositionend', {{bubbles: true}}));
-                return 'ok';
-            }}
-            return 'not found';
-        """)
-        if result and 'ok' in str(result):
-            time.sleep(0.5)
-            return True
+        return dp.run_js("""
+            const m = document.querySelector(
+                '[class*="chat-message-list"], [class*="message-list"], .chat-record');
+            return m ? m.innerText : '';
+        """) or ''
     except Exception:
-        pass
+        return ''
 
-    # 策略 B：通过 DrissionPage 查找元素后逐键输入（中文长文本备选）
+
+def _read_chat_input(dp: WebPage) -> str:
+    """回读聊天输入框的当前内容，用于确认文字真的落进了框架 state"""
+    try:
+        return dp.run_js("""
+            const el = document.querySelector('#chat-input, [contenteditable="true"], textarea');
+            return el ? (el.innerText || el.value || '') : '';
+        """) or ''
+    except Exception:
+        return ''
+
+
+def _count_chat_images(dp: WebPage) -> int:
+    """
+    统计聊天记录中的图片消息数量。
+    只数 img.message-image，排除界面图标（msg-blur）和头像。
+    """
+    try:
+        n = dp.run_js("""
+            const m = document.querySelector(
+                '[class*="chat-message-list"], [class*="message-list"], .chat-record');
+            if (!m) return -1;
+            return m.querySelectorAll('img.message-image').length;
+        """)
+        return int(n) if n is not None else -1
+    except Exception:
+        return -1
+
+
+def _input_greeting(dp: WebPage, greeting: str) -> bool:
+    """
+    在聊天输入框中输入招呼语，并**回读校验文字是否真的落地**。
+
+    只使用 DrissionPage 的 .input()（底层走 CDP 真实输入事件，浏览器视为可信输入，
+    BOSS 前端框架必然更新内部 state）。
+
+    ⚠ 绝不要用 JS 直接赋值 el.innerText / el.value：
+      BOSS 聊天框是框架受控组件，JS 赋值 + 派发合成事件不会更新框架 state，
+      界面上看着有字但 model 为空，点发送会发出空内容 —— 这是历史上误报
+      「投递成功」的根因（2026-08-13 实测确认）。
+    """
+    if not greeting:
+        return False
+
+    probe = _greeting_probe(greeting)
+
     input_selectors = [
         XPATH_CHAT_INPUT,
         'css:#chat-input',
-        'css:.chat-input',
         'css:div[contenteditable="true"]',
         'css:[contenteditable="true"]',
+        'css:textarea',
+        'css:.chat-input',
         'css:[placeholder*="消息"]',
         'css:[placeholder*="输入"]',
-        'css:textarea',
-        'css:.input-area textarea',
-        'css:.chat-input-area textarea',
-        'css:div.chat-input',
     ]
 
     for selector in input_selectors:
+        el = None
         try:
             el = dp.ele(selector, timeout=2)
-            if el:
-                el.click()
-                time.sleep(0.3)
-                el.input(greeting)
-                time.sleep(1.0)  # 等待逐键输入完成
-                return True
         except Exception:
             # 尝试在 iframe 中查找
             try:
                 iframe = dp.get_frame(1)
-                if iframe:
-                    el = iframe.ele(selector, timeout=1)
-                    if el:
-                        el.click()
-                        time.sleep(0.3)
-                        el.input(greeting)
-                        time.sleep(1.0)
-                        return True
+                el = iframe.ele(selector, timeout=1) if iframe else None
             except Exception:
-                continue
+                el = None
+        if not el:
+            continue
+
+        try:
+            el.click()
+            time.sleep(0.3)
+            try:
+                el.clear()
+                time.sleep(0.2)
+            except Exception:
+                pass
+            el.input(greeting)          # CDP 真实输入
+            time.sleep(1.2)
+        except Exception:
+            continue
+
+        # ── 回读校验：文字必须真的在输入框里 ──
+        typed = _norm(_read_chat_input(dp))
+        if probe and probe in typed:
+            print(f"  ✓ 输入框已确认落地 {len(typed)} 字 ({selector})")
+            return True
+        print(f"  ⚠ {selector} 输入未落地（实际 {len(typed)} 字），换下一个选择器")
 
     return False
 
 
-def _click_send(dp: WebPage) -> bool:
-    """点击发送按钮"""
-    send_selectors = [
+
+def _click_send(dp: WebPage, greeting: Optional[str] = None) -> bool:
+    """
+    发送聊天框内已输入的内容，并**回读聊天记录校验消息气泡是否出现**。
+
+    实测（2026-08-13）：
+      - `//button[@type='send']` 点击**无效**，不会真的发送；
+      - 回车（Enter）**有效**。
+    因此回车为主，按钮为备。
+
+    Args:
+        greeting: 已输入的招呼语。传入则回读校验，未在聊天记录中命中即返回 False；
+                  不传则退化为「点了就算」的旧行为（不推荐）。
+
+    Returns:
+        True 仅代表消息气泡已确认出现在聊天记录中。
+    """
+    probe = _greeting_probe(greeting) if greeting else ''
+
+    def _verify() -> bool:
+        if not probe:
+            return True          # 无法校验时不谎报，由调用方决定
+        return probe in _norm(_read_chat_record(dp))
+
+    # 已经发出去了（重试场景），直接返回
+    if probe and _verify():
+        return True
+
+    # ── 方式 1：回车（实测有效）──
+    try:
+        el = dp.ele(XPATH_CHAT_INPUT, timeout=2) or dp.ele('css:[contenteditable="true"]', timeout=2)
+        if el:
+            el.click()
+            time.sleep(0.3)
+        dp.actions.type('\n')
+        time.sleep(3)
+        if _verify():
+            print(f"  ✓ 发送已校验（回车）")
+            return True
+        print(f"  ⚠ 回车后未见消息气泡，尝试发送按钮")
+    except Exception as e:
+        print(f"  ⚠ 回车发送异常: {e}")
+
+    # ── 方式 2：发送按钮（备用）──
+    for selector in [
         XPATH_SEND_BUTTON,
         'css:button[type="send"]',
         'css:.btn-send',
         'css:.send-btn',
-        'css:button:contains("发送")',
-    ]
-
-    for selector in send_selectors:
+    ]:
         try:
             el = dp.ele(selector, timeout=2)
             if el:
                 el.click()
-                return True
+                time.sleep(3)
+                if _verify():
+                    print(f"  ✓ 发送已校验（按钮 {selector}）")
+                    return True
         except Exception:
             continue
 
     return False
+

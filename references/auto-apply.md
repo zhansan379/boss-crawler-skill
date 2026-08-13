@@ -390,7 +390,33 @@ path reused for every job), the rendered per-job `<姓名>-<应聘岗位>.png` (
 4. Log results to `{run_dir}/apply_log.json`
 
 `send_resume_attachment()` tries three upload strategies (direct file input → JS injection → button
-click fallback) after the greeting is sent.
+click fallback) after the greeting is sent. It uploads to **one** file input at a time and verifies
+before moving on — pushing the file into every input at once sends duplicates.
+
+### Send verification — never trust a click
+
+Every send is confirmed by **reading the message back out of the chat DOM**. `status: 'applied'`
+means a bubble was found; nothing else does.
+
+| Signal | Meaning |
+|---|---|
+| `_input_greeting()` returns True | text was found *inside the input box* on re-read |
+| `_click_send(dp, greeting)` returns True | a `_greeting_probe()` substring was found in the message list |
+| `status: 'applied'` + `greeting_verified: True` | greeting bubble confirmed present |
+| `status: 'partial'` | text is in the input box but no bubble — **not sent**, user must press Enter |
+| `attachment_sent: True` | `img.message-image` count went **up** vs. the pre-send baseline |
+
+Hard-won specifics (2026-08-13, verified against live DOM):
+
+- **Never set `el.innerText` / `el.value` via JS.** BOSS's chat input is a framework-controlled
+  component; JS assignment plus synthetic events leaves the internal state empty — the box *looks*
+  filled and send dispatches nothing. Use `el.input()` (CDP real input) only.
+- **`//button[@type='send']` does not send.** Enter (`dp.actions.type('\n')`) does. Enter is primary,
+  the button is a fallback.
+- **Image messages are invisible to `innerText`.** Count `img.message-image` elements instead, and
+  exclude UI icons (`img.msg-blur`, 24×20) and avatars (72×72).
+- A conversation preview reading `您正在与Boss XXX沟通` in the chat list means **zero messages were
+  ever sent** in it. `[送达]` plus body text means the greeting landed.
 
 ## Greeting Fallback Chain
 
