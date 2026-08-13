@@ -199,6 +199,10 @@ Expect one greeting and one resume per job (minus whatever the 7c skip rules exe
 - **All present** → proceed to 7e immediately, regardless of which notifications arrived.
 - **Some missing** → re-dispatch only the missing ones. Do not re-run agents whose artifact exists;
   that burns tokens and can overwrite good output with a worse sample.
+- **Still missing after one re-dispatch** → **drop that job from the batch.** Mark it failed, leave it
+  out of the 7e render batch and out of the 7h apply list, and surface it in the 7g summary
+  ("N 个岗位材料生成失败，已跳过"). One retry, then move on — a stuck agent must not hold up the
+  other jobs' materials.
 - **Nothing arrived after a couple of minutes** → check the filesystem *before* concluding anything
   is still running. A missing notification and a slow agent look identical from the inside.
 

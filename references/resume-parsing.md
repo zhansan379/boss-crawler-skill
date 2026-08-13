@@ -118,9 +118,14 @@ Even if the script reports "no differences", Claude must:
 Result: 3 omissions fixed, profile updated.
 ```
 
-### Step 4: User Confirmation
+### Step 4: User Confirmation (only when there is something to confirm)
 
-Use `AskUserQuestion` to show the final profile summary and get user approval before proceeding.
+If Step 1's exit code was 0 **and** the line-by-line scan in Step 2 found nothing, report that in one
+line and continue — no `AskUserQuestion`. A question whose only honest answer is "yes, nothing was
+wrong" spends a user turn to buy nothing.
+
+Otherwise use `AskUserQuestion` to show what you changed (or what stayed ambiguous) and get approval
+before proceeding.
 
 ---
 
@@ -143,4 +148,4 @@ Map resume fields to crawl CLI arguments:
 | `awards` | (annotation only) | Mark as bonus points in match report, don't affect crawl params |
 | Company size | `--scale` | Do NOT auto-infer; let user decide |
 
-After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling**. Users may adjust keywords, add cities, or modify filters.
+After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling** — one call, with the full inferred set as the first option marked recommended, so accepting costs a single click. Users may adjust keywords, add cities, or modify filters. This gate stays even when the inference looks unambiguous: the crawl runs through the user's own logged-in browser, wrong parameters waste a long crawl, and nothing about it can be undone afterwards.

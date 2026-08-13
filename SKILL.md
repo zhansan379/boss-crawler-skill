@@ -42,15 +42,11 @@ Copy this checklist and check off items as you complete them:
 Progress:
 - [ ] Stage 0: Launch resume editor (path D — terminal step)
 - [ ] Stage 1: Crawl jobs (paths A, C)
-- [ ] Stage 2: Read resume file
-- [ ] Stage 3: Parse resume → profile.json
+- [ ] Stage 2-3: Read resume file → parse → profile.json
 - [ ] Stage 3.5b: Cross-validate profile (MANDATORY gate)
 - [ ] Stage 3.5: Infer crawl params from resume (path C only)
-- [ ] Stage 4: Load job data from CSVs
-- [ ] Stage 5: Match analysis (quick or deep mode)
-- [ ] Stage 6: Generate HTML report + open in browser
+- [ ] Stage 4-6: Match analysis (quick or deep) → report written and opened
 - [ ] Stage 7: Confirm jobs → parallel per-job material generation → confirm → apply
-- [ ] Stage 8: Resume optimization (optional)
 ```
 
 ### Stage 0: Launch Resume Editor (path D)
@@ -160,29 +156,22 @@ python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 
 
 Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages — critical for matching quality), `-y` (skip confirmation prompt). Login state persists via `assets/chrome_user_data/`.
 
-### Stage 2: Read Resume
+### Stage 2-3: Read & Parse Resume
 
-Ask for the resume file path. For PDF/Word, parse via:
-
-```python
-from resume_matcher import parse_resume_file
-resume_text = parse_resume_file(file_path)
-```
-
-### Stage 3: Parse Resume
-
-Claude reads `scripts/prompts/resume_parse.st`, fills in the resume text, and outputs structured JSON. See [references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and extraction rules.
-
-Create the run directory and save outputs:
+Reading the file and structuring it are one pass, not two stages. Ask for the resume file path, then:
 
 ```python
-from resume_matcher import create_run_dir
-from resume_matcher.deep_analysis import serialize_profile
-import json, os
+from resume_matcher import parse_resume_file, create_run_dir
 
+resume_text = parse_resume_file(file_path)   # PDF / Word / txt
 run_dir = create_run_dir()
-# Save resume_text.txt and profile.json to run_dir
+# write resume_text.txt into run_dir
 ```
+
+Then read `scripts/prompts/resume_parse.st`, fill in the resume text, and save the structured output
+to `{run_dir}/profile.json`. See
+[references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and
+extraction rules.
 
 ### Stage 3.5b: Cross-Validate Profile (MANDATORY)
 
@@ -191,24 +180,36 @@ Quality gate — must execute before any downstream stage. See [references/resum
 1. Run `python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json`
 2. Claude manually scans original resume line-by-line against profile
 3. Report findings, fix all omissions, update profile.json
-4. Confirm with user via `AskUserQuestion`
+4. **Only if something was found or is ambiguous**, confirm the corrections via `AskUserQuestion`.
+   Exit code 0 plus a clean line-by-line scan → say so in one line and move on; don't spend a
+   question on "nothing was wrong"
+
+**Do not replace step 1 with self-review.** `validate_profile.py` is a dictionary + regex extractor
+(`KNOWN_TECH_TERMS`), so it is the one signal here that is *independent of the model that produced
+the JSON*. The failure it catches is "the parse dropped a skill" — and the model that dropped it is
+the least likely to notice. Step 2 complements the script, it doesn't substitute for it.
 
 ### Stage 3.5: Infer Crawl Params (path C only)
 
 Claude maps resume fields to crawl parameters. See [references/resume-parsing.md](references/resume-parsing.md) for the inference mapping table.
 
-Present the inferred parameters to the user, confirm with `AskUserQuestion`, then execute Stage 1 crawl with the confirmed parameters.
+Confirm with **one** `AskUserQuestion` whose first option is the full inferred parameter set, labelled
+recommended — so accepting is a single click, and correcting is still one step away. Then run the
+Stage 1 crawl with the confirmed parameters.
 
-### Stage 4: Load Job Data
+**Keep this gate even when the inference looks unambiguous.** The crawl is an outward-facing action
+driven through the user's own logged-in browser: wrong parameters cost a long crawl plus a batch of
+useless data, and there is nothing to undo afterwards. The ambiguity is rarely just "the resume lists
+two cities" — expected salary, seniority, and which keyword to search (`Python` vs `后端开发`) are all
+judgement calls. What gets collapsed here is a round of typing, not the confirmation itself.
 
-```python
-from resume_matcher import list_available_job_files, load_job_data
-job_files = list_available_job_files()
-csv_paths = [jf['path'] for jf in job_files]
-jobs = load_job_data(csv_paths)
-```
+### Stage 4-6: Match Analysis & Report
 
-### Stage 5: Match Analysis
+`run_matcher.py` does all three in one process — loads the CSVs, scores and classifies, then writes
+`matching_report.html` and `scored_jobs.json` itself.
+
+**Do not call `generate_html_report()` yourself.** It already runs inside the script, and after a CLI
+run you don't hold the `classification` object it needs anyway.
 
 Ask the user to choose a mode. See [references/matching.md](references/matching.md) for mode details, scoring dimensions, and classification logic.
 
@@ -224,18 +225,11 @@ python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top
 
 # Phase 2: Claude reads deep_candidates.json, analyzes each job, writes deep_results.json
 
-# Phase 3: Merge rule scores (40%) + Claude scores (60%), reclassify, generate report
+# Phase 3: Merge rule scores (40%) + Claude scores (60%), reclassify, regenerate report
 python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
 ```
 
-### Stage 6: Generate HTML Report
-
-```python
-from resume_matcher import generate_html_report
-html_path = generate_html_report(profile, classification, output_dir=run_dir)
-```
-
-Open in browser: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or `start {run_dir}/matching_report.html` (Bash).
+Then open the report: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or `start {run_dir}/matching_report.html` (Bash).
 
 ### Stage 7: Confirm & Apply
 
@@ -253,6 +247,16 @@ flowchart, subagent contracts, the ShowCV rendering pipeline, and the directory 
 | **7f** | Write `{run_dir}/applications/{company}-{position}/` per job, then notify the user to review |
 | **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
 | **7h** | On 全部投递, execute `auto_apply_jobs()` with the confirmed greetings and attachments |
+
+**7d → 7e → 7f is one uninterrupted batch.** Once 7c's preferences are in, generate, render, and
+archive without stopping to ask anything — the two gates are 7b and 7g, and a question in between
+turns material preparation into an interrogation. Report once at the end of 7f.
+
+**A job whose material fails is dropped from the batch, not retried forever.** If a resume agent
+produces no artifact, mark that job failed, exclude it from the 7e render batch and from 7h, and list
+it for the user at 7g. Judge this by **whether the artifact is on disk** — never by whether a
+completion notification arrived. Missing notifications are common here (6 agents dispatched, 3
+notifications received), and a slow agent looks identical to a dead one from the inside.
 
 **Which subagents actually launch** in 7d — the non-AI options resolve inline and need no agent:
 
