@@ -66,9 +66,10 @@ def get_latest_run_dir(base_dir: Optional[str] = None) -> Optional[str]:
 
 # CSV字段（与 boss_crawler/config.py 的 CSV_FIELDS 必须逐字一致）
 CSV_FIELDS = [
-    'link', '职位', '城市', '区域', '商圈', '公司', '薪资', '经验', '学历',
+    'link', '职位', '城市', '区域', '商圈', '地址', '公司', '薪资', '经验', '学历',
     '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
-    'HR活跃度', 'HR在线', 'HR职位'
+    '已失效', '代招',
+    'HR活跃度', 'HR在线', 'HR职位', 'HR姓名', 'HR公司'
 ]
 
 

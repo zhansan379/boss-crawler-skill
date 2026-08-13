@@ -51,10 +51,16 @@ def process_job_list(job_list, file_path, existing_links, csv_writer):
             '位置': str(job.get('gps', '')),
             '岗位要求和职责': '',
             '公司信息': '',
-            # HR 活跃度只存在于详情 API，列表阶段一律留空，由 crawl_job_details 回填
+            # 以下字段只存在于详情 API，列表阶段一律留空，由 crawl_job_details 回填。
+            # 空串 = 未采集，不要写成 '否'
+            '地址': '',
+            '已失效': '',
+            '代招': '',
             'HR活跃度': '',
             'HR在线': '',
-            'HR职位': ''
+            'HR职位': '',
+            'HR姓名': '',
+            'HR公司': ''
         }
 
         csv_writer.writerow(dit)
@@ -236,13 +242,21 @@ def get_single_job_detail(dp, url):
             if val:
                 post_desc += '\n' + val
 
-        # 提取公司信息
+        # 提取公司信息。
+        #
+        # 真实键名是 `introduce`（2026-08-13 对 job_detail.json 实测确认）。
+        # 这里原先只试了 content / companyInfo / introduction —— 差两个字母，
+        # 于是 15/15 的岗位公司简介全是空的，而同批 HR 活跃度全部正常，
+        # 看起来像「BOSS 没提供简介」而不是「键名取错了」。所以 introduce 放第一位，
+        # 其余保留作兜底（不同版本的接口可能换名）。
         brand_info = zp.get('brandComInfo', {})
         comp_info = ''
         if isinstance(brand_info, dict):
-            comp_info = brand_info.get('content', '') or brand_info.get('companyInfo', '')
-            if not comp_info:
-                comp_info = brand_info.get('introduction', '')
+            for key in ('introduce', 'content', 'companyInfo', 'introduction'):
+                value = brand_info.get(key, '')
+                if value and str(value).strip():
+                    comp_info = str(value).strip()
+                    break
         elif isinstance(brand_info, str):
             comp_info = brand_info
 
@@ -251,6 +265,8 @@ def get_single_job_detail(dp, url):
             return {
                 'jd': post_desc,
                 'company_info': comp_info if comp_info else '',
+                **_extract_job_extras(job_info),
+                **_extract_brand_extras(brand_info),
                 **_extract_hr_info(zp),
             }
 
@@ -264,31 +280,87 @@ def get_single_job_detail(dp, url):
         return None
 
 
+def _tri_state(value):
+    """布尔字段 → '是'/'否'/''。
+
+    取不到时留空串而非 '否' —— 「未采集」不能被读成「不是」。
+    整个技能里 hr_online、已失效、代招 都用这一个语义。
+    """
+    return '' if value is None else ('是' if value else '否')
+
+
+# 详情缺失时的空值集。DOM 兜底路径和 API 路径必须返回同一套键，
+# 否则 crawl_job_details 回填时会 KeyError。
+EMPTY_DETAIL_EXTRAS = {
+    'address': '', 'invalid': '', 'proxy': '', 'welfare': '',
+    'hr_active': '', 'hr_online': '', 'hr_title': '', 'hr_name': '', 'hr_company': '',
+}
+
+
+def _extract_job_extras(job_info):
+    """从 zpData.jobInfo 提取列表页拿不到的岗位事实。
+
+    - invalidStatus：岗位是否已失效。失效岗位投了也是白投，值得单独一列。
+    - proxyJob：代招标记。为 1 时跟你聊的是猎头/外包，不是用人公司自己的 HR。
+    - address：具体上班地址（列表页只有经纬度）。
+    """
+    if not isinstance(job_info, dict):
+        return {'address': '', 'invalid': '', 'proxy': ''}
+
+    return {
+        'address': (job_info.get('address') or '').strip(),
+        'invalid': _tri_state(job_info.get('invalidStatus')),
+        'proxy': _tri_state(job_info.get('proxyJob')),
+    }
+
+
+def _extract_brand_extras(brand_info):
+    """从 zpData.brandComInfo 提取完整福利标签。
+
+    详情里的 labels 通常比列表页的 welfareList 全得多（实测 20 条 vs 几条），
+    所以单独取出来，由调用方在列表页值为空时回填。
+    """
+    if not isinstance(brand_info, dict):
+        return {'welfare': ''}
+
+    labels = brand_info.get('labels')
+    if not isinstance(labels, list):
+        return {'welfare': ''}
+
+    return {'welfare': ' '.join(str(x).strip() for x in labels if str(x).strip())}
+
+
 def _extract_hr_info(zp):
     """
-    从详情 API 的 zpData.bossInfo 提取招聘者活跃度。
+    从详情 API 的 zpData.bossInfo 提取招聘者信息。
 
-    快照语义：这三项是爬取瞬间的状态。bossOnline 波动极快，
+    快照语义：活跃度是爬取瞬间的状态。bossOnline 波动极快，
     投递时基本已过期；activeTimeDesc 粒度粗但相对稳定，是排序的主要依据。
 
-    hr_online 取不到时留空串而非 '否' —— 「未采集」不能被读成「不在线」。
+    hr_company 是 HR **自己**所属的公司，和岗位挂的公司可能不是一家 ——
+    实测见过岗位公司「深圳某大型ICT…」而 HR 是「途聚人力」的猎头。
+    两者不一致就是代招的旁证，所以单独存一列。
     """
     boss = zp.get('bossInfo') or {}
     if not isinstance(boss, dict):
-        return {'hr_active': '', 'hr_online': '', 'hr_title': ''}
+        return {'hr_active': '', 'hr_online': '', 'hr_title': '',
+                'hr_name': '', 'hr_company': ''}
 
-    online = boss.get('bossOnline')
     return {
         'hr_active': boss.get('activeTimeDesc') or '',
-        'hr_online': '' if online is None else ('是' if online else '否'),
+        'hr_online': _tri_state(boss.get('bossOnline')),
         'hr_title': boss.get('title') or '',
+        'hr_name': boss.get('name') or '',
+        'hr_company': boss.get('brandName') or '',
     }
 
 
 def _extract_detail_from_dom(dp):
-    """兜底方案：从 DOM 中提取详情（需要等 JS 渲染完成）"""
-    empty_hr = {'hr_active': '', 'hr_online': '', 'hr_title': ''}
+    """兜底方案：从 DOM 中提取详情（需要等 JS 渲染完成）
 
+    DOM 里只有 JD 和公司简介两段文本，其余字段一律留空 ——
+    空串的语义是「未采集」，下游据此显示，不会被误读成「否」。
+    """
     if dp.wait.ele_displayed('css:.job-sec-text', timeout=15):
         pass  # 元素已出现
 
@@ -300,10 +372,10 @@ def _extract_detail_from_dom(dp):
 
     if len(res) == 1:
         time_stats.end_request(True, 'DOM解析')
-        return {'jd': res[0].text, 'company_info': '', **empty_hr}
+        return {'jd': res[0].text, 'company_info': '', **EMPTY_DETAIL_EXTRAS}
     elif len(res) == 2:
         time_stats.end_request(True, 'DOM解析')
-        return {'jd': res[0].text, 'company_info': res[1].text, **empty_hr}
+        return {'jd': res[0].text, 'company_info': res[1].text, **EMPTY_DETAIL_EXTRAS}
     else:
         time_stats.end_request(False, '未找到详情元素')
         return None
@@ -370,9 +442,19 @@ def crawl_job_details(dp, file_path, existing_links):
                 if row['link'] == link:
                     row['岗位要求和职责'] = detail['jd']
                     row['公司信息'] = detail['company_info']
-                    row['HR活跃度'] = detail['hr_active']
-                    row['HR在线'] = detail['hr_online']
-                    row['HR职位'] = detail['hr_title']
+                    row['地址'] = detail.get('address', '')
+                    row['已失效'] = detail.get('invalid', '')
+                    row['代招'] = detail.get('proxy', '')
+                    row['HR活跃度'] = detail.get('hr_active', '')
+                    row['HR在线'] = detail.get('hr_online', '')
+                    row['HR职位'] = detail.get('hr_title', '')
+                    row['HR姓名'] = detail.get('hr_name', '')
+                    row['HR公司'] = detail.get('hr_company', '')
+                    # 详情的福利列表比列表页全得多，但只在列表页没采到时才覆盖，
+                    # 避免用一份可能为空的详情数据抹掉已有值
+                    welfare = detail.get('welfare', '')
+                    if welfare and not (row.get('福利标签') or '').strip():
+                        row['福利标签'] = welfare
                     break
             success_count += 1
             existing_links.add(link)

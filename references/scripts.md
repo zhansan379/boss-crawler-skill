@@ -40,16 +40,24 @@ matcher reads columns by name and silently sees empty strings for any it doesn't
 
 ```python
 CSV_FIELDS = [
-    'link', '职位', '城市', '区域', '商圈', '公司', '薪资', '经验', '学历',
+    'link', '职位', '城市', '区域', '商圈', '地址', '公司', '薪资', '经验', '学历',
     '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
-    'HR活跃度', 'HR在线', 'HR职位',
+    '已失效', '代招',
+    'HR活跃度', 'HR在线', 'HR职位', 'HR姓名', 'HR公司',
 ]
 ```
 
-The last five columns come from the detail API and are empty without `-d`. **Only append** new
-columns at the end: the crawl phase writes rows in `'a'` append mode, so `init_csv_file` migrates an
-existing file's header to this exact order before any row is written. Without that migration, new
-20-column rows would land under an old 17-column header and shift silently.
+`地址`, `已失效`, `代招`, `公司信息` and all five `HR*` columns come from the detail API
+(`zpData.jobInfo` / `brandComInfo` / `bossInfo`) and are empty without `-d`. `已失效` / `代招` /
+`HR在线` are tri-state via `_tri_state()`: `'是'` / `'否'` / `''` where empty means **未采集**, not
+`否`. `HR公司` is the HR's own employer and can differ from `公司` — that combination (or `代招=是`)
+means a headhunter posting.
+
+**Only append** new columns at the end: the crawl phase writes rows in `'a'` append mode, so
+`init_csv_file` migrates an existing file's header to this exact order before any row is written.
+Without that migration, new 25-column rows would land under an old 20-column header and shift
+silently. Old CSVs stay readable — `csv.DictWriter(restval='')` and `DictReader` yield `''` for
+absent columns, which renders as 未采集.
 
 ### Adding a Job Field
 
@@ -127,6 +135,7 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `run_matcher.py` | Matching pipeline entry point (`--mode quick\|deep`) |
 | `validate_profile.py` | Cross-validation: diff raw resume vs profile.json |
 | `check_artifacts.py` | 7d→7e barrier: verify each subagent's artifact landed in `generated/`. Exit 1 + names on any miss. Use this instead of waiting on completion notifications, which are not guaranteed to arrive |
+| `write_application_md.py` | 7f: write `applications/<公司>-<岗位>/岗位信息+招呼语.md` with all 25 crawled fields + the greeting. Re-reads the original crawl CSV by `link`, because `build_job_view()` drops `区域` `商圈` `领域` `性质` `位置` `地址` `已失效` `代招` `HR姓名` `HR公司` and truncates `公司信息` / JD. Flags 已失效 and 代招 岗位 with a banner. Exit 1 when a job's CSV row can't be found |
 
 ---
 
