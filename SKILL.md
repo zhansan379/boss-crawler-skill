@@ -244,7 +244,7 @@ flowchart, subagent contracts, the ShowCV rendering pipeline, and the directory 
 | **7c** | `AskUserQuestion` — both independent questions in **one** call: 招呼语生成方式 (自定义 / 默认 / AI生成) and 是否发送图片 (自定义上传 / AI调整 / 不发送) |
 | **7d** | Launch subagents **in parallel, one pair per confirmed job**. Neither subagent touches a browser |
 | **7e** | Render adjusted resumes to flat images — **serial, one batch covering all jobs** (ShowCV) |
-| **7f** | Write `{run_dir}/applications/{company}-{position}/` per job, then notify the user to review |
+| **7f** | Write `{run_dir}/applications/{company}-{position}/` per job via `python scripts/write_application_md.py "{run_dir}" --all` (all 25 crawled fields + greeting — never hand-write it), then notify the user to review |
 | **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
 | **7h** | On 全部投递, execute `auto_apply_jobs()` with the confirmed greetings and attachments |
 

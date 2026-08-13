@@ -312,29 +312,40 @@ One directory per job, under the run directory:
 7e. Both live in the job directory, so the same 姓名 and a repeated position title never collide.
 
 `岗位信息+招呼语.md` holds the job facts and the greeting together, so one file answers "what did I
-send to whom":
+send to whom". **Generate it with the script — do not hand-write it:**
 
-```markdown
-# XX科技 - Java开发
+```bash
+# every job in qualified_jobs.json (greetings auto-discovered from generated/)
+python scripts/write_application_md.py "{run_dir}" --all
 
-| 字段 | 值 |
-|---|---|
-| 公司 | XX科技 |
-| 岗位 | Java开发 |
-| 薪资 | 15-25K |
-| 城市 | 北京 |
-| 匹配度 | 85% |
-| 链接 | https://www.zhipin.com/job_detail/... |
-
-## 匹配理由
-技能高度匹配：Spring Boot / MySQL / Redis 全部命中 JD 要求。
-
-## 招呼语（285 字）
-您好，我是冯雷霆，2026 届计算机科学与技术专业本科应届生，
-对贵公司的「Java开发」岗位非常感兴趣。
-...
-希望能有机会进一步沟通，期待您的回复！
+# one job; supply the greeting explicitly for the 自定义 / 默认 branches
+python scripts/write_application_md.py "{run_dir}" --index 1 --greeting "您好，我是…"
 ```
+
+It writes `applications/<company>-<position>/岗位信息+招呼语.md` with **all 25 crawled fields**
+grouped into sections — 岗位信息 / 公司信息 (+ 公司介绍全文) / 招聘者 / 岗位要求和职责全文 /
+匹配分析 / 招呼语 — plus a 其他采集字段 catch-all so a new CSV column shows up instead of vanishing.
+Two fields also get a banner above the tables, because burying them in a table row loses the
+decision: `已失效=是` (🚫 applying is wasted — BOSS returned `invalidStatus=true`) and `代招=是` or
+`HR公司 ≠ 公司` (⚠️ the contact is a headhunter/outsourcer, not the employer's own HR).
+
+**Why a script instead of the agent writing it.** Twenty-five fields written by hand fail silently — a
+missed field is just an absent line, not an error. The 2026-08-13 run produced 11 of them and dropped
+商圈/领域/性质/规模/技能标签/福利标签/位置/公司信息/JD/HR×3, and the field set differed per job.
+
+**Why it re-reads the crawl CSV instead of using `qualified_jobs.json`.** `build_job_view()`
+(`scoring.py:725`) is the only field mapper, and it **drops `区域` `商圈` `领域` `性质` `位置`
+`地址` `已失效` `代招` `HR姓名` `HR公司` entirely** while truncating `公司信息` to 500 and `岗位要求和职责` to 1000 (300/500 on the HTML
+path). `领域` (industry) and `性质` (financing stage) are core company facts. So the script resolves
+each job's original CSV row by `link` — details are written back into that same CSV
+(`crawler.py:368-399`), so its values are complete and untruncated. It falls back to
+`job['source_file']`, then to a recursive scan of `assets/post_data/`, and if no row matches it
+**warns and exits 1** rather than quietly emitting a thin file.
+
+Empty cells render as `未采集`, never as blank or `否` — `HR在线` empty means *not collected*, not
+offline (`crawler.py:274`), and the same trap already produced a report where collected activity
+displayed as 「未采集」 on every card. `已失效` and `代招` share that tri-state via `_tri_state()`.
+Match-analysis fields use `未裁定` instead.
 
 Also keep the adjusted resume's Markdown source in the job directory when the resume agent ran — the
 PNG is not editable, and a later 返回修改 should not have to regenerate from scratch.
