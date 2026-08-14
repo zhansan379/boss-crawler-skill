@@ -5,6 +5,7 @@
 """
 
 import csv
+import json
 import math
 import os
 import time
@@ -855,3 +856,19 @@ def run_crawl_cli(args):
     dp.quit()
     time_stats.stop()
     print_crawl_summary(total_stats)
+
+    # 把爬取统计落到 run-dir，供 Claude 主代理在爬取后读取，判断是否达到最低岗位数量。
+    # 主代理读不到 stdout（后台任务），所以这里显式写盘；crawl_summary.json 是约定的文件名。
+    run_dir = getattr(args, 'run_dir', None)
+    if run_dir:
+        try:
+            os.makedirs(run_dir, exist_ok=True)
+            with open(os.path.join(run_dir, 'crawl_summary.json'), 'w', encoding='utf-8') as f:
+                json.dump({
+                    'written': total_stats.get('written', 0),
+                    'total': total_stats.get('total', 0),
+                    'skipped': total_stats.get('skipped', 0),
+                    'run_dups': total_stats.get('run_dups', 0),
+                }, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            print(f"[警告] 写入爬取统计失败: {e}")

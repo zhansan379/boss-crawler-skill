@@ -51,7 +51,7 @@ def prefs_path():
 
 # 三组允许的键。不在这里的键会被 load() 丢弃 —— 见模块开头的「安全边界」。
 LIST_KEYS = ('keywords', 'cities', 'degree', 'experience', 'salary', 'job_type', 'scale')
-INT_KEYS = ('count', 'top_n')
+INT_KEYS = ('count', 'top_n', 'min_count')
 STR_KEYS = ('mode', 'match_mode')
 BOOL_KEYS = ('detail',)
 META_KEYS = ('saved_at', 'version')
@@ -63,7 +63,7 @@ SCHEMA_VERSION = 1
 # 中文标签，只用于 show 的输出
 LABELS = {
     'cities': '城市', 'keywords': '关键词', 'mode': '爬取模式', 'count': '每关键词条数',
-    'detail': '爬详情', 'match_mode': '匹配模式', 'top_n': 'TopN',
+    'detail': '爬详情', 'match_mode': '匹配模式', 'top_n': 'TopN', 'min_count': '最低岗位数',
     'degree': '学历', 'experience': '经验', 'salary': '薪资',
     'job_type': '工作类型', 'scale': '公司规模',
 }
@@ -238,7 +238,7 @@ def cmd_show(_args):
         return 1
 
     print('已保存的爬取/匹配预设:')
-    for key in ('cities', 'keywords', 'mode', 'count', 'detail',
+    for key in ('cities', 'keywords', 'mode', 'count', 'min_count', 'detail',
                 'match_mode', 'top_n', 'degree', 'experience',
                 'salary', 'job_type', 'scale'):
         if key not in prefs:
@@ -280,6 +280,7 @@ def cmd_save(args):
         detail=None if args.no_detail is None else (not args.no_detail),
         match_mode=args.match_mode,
         top_n=args.top,
+        min_count=args.min_count,
         degree=args.degree,
         experience=args.experience,
         salary=args.salary,
@@ -332,6 +333,7 @@ def build_parser():
                         help='不爬详情（默认爬，匹配质量依赖 JD）')
     p_save.add_argument('--match-mode', choices=['quick', 'deep'], help='匹配模式')
     p_save.add_argument('--top', type=int, help='deep 模式的预筛选条数')
+    p_save.add_argument('--min-count', type=int, help='最低岗位数量：爬完后实际条数低于此值时，主代理应停下来问用户')
     p_save.add_argument('--degree', '-deg', action='append')
     p_save.add_argument('--experience', '-e', action='append')
     p_save.add_argument('--salary', '-s', action='append')

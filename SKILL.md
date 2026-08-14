@@ -49,14 +49,16 @@ Progress:
 - [ ] Stage 1: Check preset (`preferences.py show`) → crawl jobs (paths A, C)
 - [ ] Stage 2-3: Read resume file → parse → profile.json
 - [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
-- [ ] Stage 3.5: Infer crawl params (path C, no preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模
+- [ ] Stage 3.5: Infer crawl params (path C, no preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模, then + (3) 最低岗位数量
+- [ ] Stage 1b check: read crawl_summary.json → if written < min_count, stop & ask (换关键词/放宽/接受)
 - [ ] Stage 4-6: Match analysis (mode/TopN already known) → report written and opened
 - [ ] Stage 7: 7bc one question (jobs+greeting+image) → parallel generation → 7g gate → apply
 ```
 
 **Four stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
 interaction round-trips. The stops that remain: the resume file path, the Stage 3.5 confirmation
-(two batched `AskUserQuestion` calls — skipped entirely when a preset exists), 7bc, and 7g. **7g is
+(two batched `AskUserQuestion` calls + a small `min_count` follow-up — all skipped when a preset
+exists), the Stage 1b `min_count` floor check (only when written < the floor), 7bc, and 7g. **7g is
 never removed** — it is the only thing in front of an irreversible action.
 
 **Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
@@ -210,8 +212,8 @@ script printed:
 ```
 
 Presets never expire — the age is reported so the user can interrupt, not so you can gate on it.
-Exit 1 → no preset, take the two confirmation questions in Stage 3.5 (core + filters), then save the
-answer.
+Exit 1 → no preset, take the two confirmation questions in Stage 3.5 (core + filters) plus the
+`min_count` follow-up, then save the answer.
 
 This is the single biggest saving for a returning user: the 2026-08-14 run stopped to ask 6 times,
 and Stage 1 plus the two gates burned 12 minutes (30% of the run) mostly on interaction round-trips.
@@ -238,6 +240,14 @@ Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages
 **Always pass `--run-dir`** — it writes a real `crawl` span (with `status=error` if the round dies
 partway) instead of leaving this stage to be inferred from the gap between two marks. Omitting it
 silently degrades to no timing, and this stage is the most expensive one in the whole run.
+
+**After the crawl, check the `min_count` floor** (if a `min_count` preset was set): read
+`{run_dir}/crawl_summary.json` (the crawler writes `written` / `total` / `skipped` / `run_dups`
+there because the main agent can't read the background task's stdout). If `written < min_count`,
+**stop and ask the user** — 换关键词 / 放宽筛选 / 接受现状（继续） — instead of silently proceeding
+on a thin pool. A small-city / few-keyword crawl can legitimately end early with "no new data" even
+below the floor; that's the case this check exists to surface, not to override. `min_count` of 0 or
+unset skips the check.
 
 ### Stage 2-3: Read & Parse Resume
 
@@ -303,14 +313,19 @@ Claude maps resume fields to crawl parameters. See [references/resume-parsing.md
 in 太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
 And spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
 
-Confirm in **two** `AskUserQuestion` calls. One call is capped at 4 questions, so the eight
-params split as:
+Confirm in **two** `AskUserQuestion` calls plus one small follow-up. One call is capped at 4
+questions, so the eight params split as:
 
 1. **爬取与匹配核心** — city, keywords (multi-select), matching mode (quick/deep), and deep's Top-N.
    All four are known before the crawl starts and none constrains the others, so one call.
-2. **列表筛选** — experience (应届/不限), job type (校招/实习/社招), salary floor, and company scale.
+2. **列表筛选** — experience (应届/不限), job type (实习/全职), salary floor, and company scale.
    Also four questions in one call. First option in each is the candidate-appropriate default, so
    accepting is one click; leave a filter empty to skip it (crawl unfiltered on that axis).
+
+Then a **third, single-question** `AskUserQuestion` for **最低岗位数量 (`min_count`)** — the floor
+below which a crawl is "thin" and the run should stop to ask, rather than silently proceeding on a
+handful of jobs. Default ~10, or 0 to disable the check. It is a separate question because it is a
+sufficiency threshold, not a list filter, and it seed the crawl-confidence gate in Stage 1 (below).
 
 Splitting is deliberate: eight questions will not fit one `AskUserQuestion`, and the four filters
 are independent of the four core params — none constrains the others, so batching each set into one
@@ -321,8 +336,14 @@ Then save it, so the next run skips this entirely:
 ```bash
 python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
       --match-mode deep --top 10 --count 20 --degree 本科 \
-      --experience "应届生" --job-type 实习,全职 --salary "5-10K"
+      --experience "应届生" --job-type 实习,全职 --salary "5-10K" --min-count 10
 ```
+
+`--min-count` is the lowest acceptable job count (`min_count`): after the crawl, read
+`{run_dir}/crawl_summary.json` and if `written` is below `min_count`, stop and ask the user
+(换关键词 / 放宽筛选 / 接受现状) rather than proceeding on a thin pool. 0 or omitted = no check.
+It is stored in the preset but **not** passed to the crawler — the crawler CLI has no such flag; the
+main agent judges the floor after reading the summary file.
 
 The four filter flags (`--experience` / `--job-type` / `--salary` / `--scale`) are optional — omit any
 you want left unfiltered. Accepted values are the Chinese labels in `boss_crawler/config.py`
