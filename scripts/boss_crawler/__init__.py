@@ -7,6 +7,8 @@ BOSS直聘岗位爬虫包
 城市筛选、高级筛选条件、详情爬取等功能。
 """
 
+from contextlib import contextmanager
+
 # ── 配置与常量
 from .config import (
     PER_PAGE,
@@ -115,10 +117,41 @@ from .crawler import run_crawl_process, run_crawl_cli
 from .data_loader import update_json_data
 from .menu import list_all_positions, list_all_cities
 
+# ── 计时埋点
+# 埋点绝不能因为自己失败而带崩爬取，所以导入和调用两层都兜住。
+# scripts/ 通常已在 sys.path（入口是 scripts/boss_post_interactive.py），
+# 换个 cwd 或被别处 import 时兜底补一次路径。
+try:
+    import stage_timer
+except ImportError:                                          # pragma: no cover
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    try:
+        import stage_timer
+    except ImportError:
+        stage_timer = None
+
+
+@contextmanager
+def _crawl_timing(run_dir, name='crawl'):
+    """给整轮爬取计时。
+
+    没传 --run-dir 或埋点模块缺失时退化成空操作 —— 计时是诊断手段，不该成为
+    爬取的前置条件。stage_timer.stage 内部已经保证异常照抛、但落盘 status=error，
+    所以「爬到一半崩了」也能在 report 里看见耗时。
+    """
+    if not run_dir or stage_timer is None:
+        yield
+        return
+    with stage_timer.stage(run_dir, name):
+        yield
+
 
 def main():
     """主入口函数"""
     args = parse_args()
+    run_dir = getattr(args, 'run_dir', None)
 
     # 处理查询类命令
     if args.update_data:
@@ -139,7 +172,8 @@ def main():
 
     # 如果提供了岗位和城市参数，走 CLI 模式
     if args.positions and args.cities:
-        run_crawl_cli(args)
+        with _crawl_timing(run_dir):
+            run_crawl_cli(args)
         return
 
     # 否则走原有交互式流程
@@ -147,7 +181,8 @@ def main():
         choice = show_main_menu()
 
         if choice == 1:
-            run_crawl_process()
+            with _crawl_timing(run_dir):
+                run_crawl_process()
         elif choice == 2:
             update_json_data()
         elif choice == 3:

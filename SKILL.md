@@ -182,10 +182,15 @@ python scripts/boss_post_interactive.py --ensure-login
 **Phase 1b — Execute crawl:**
 
 ```bash
-python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 -d -y
+python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 -d -y \
+    --run-dir "{run_dir}"
 ```
 
 Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages — critical for matching quality), `-y` (skip confirmation prompt). Login state persists via `assets/chrome_user_data/`.
+
+**Always pass `--run-dir`** — it writes a real `crawl` span (with `status=error` if the round dies
+partway) instead of leaving this stage to be inferred from the gap between two marks. Omitting it
+silently degrades to no timing, and this stage is the most expensive one in the whole run.
 
 ### Stage 2-3: Read & Parse Resume
 

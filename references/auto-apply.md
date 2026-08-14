@@ -265,7 +265,7 @@ python scripts/showcv/import_md.py --url <url> {run_dir}/showcv_staging/*.md
 
 # 3. one export, flat mode, addressed by the staged names
 python scripts/showcv/export_images.py --url <url> --mode flat \
-    --out {run_dir}/showcv_exports \
+    --out {run_dir}/showcv_exports --run-dir {run_dir} \
     --name "XX科技-Java开发__20260813-1430" --name "YY公司-全栈工程师__20260813-1430"
 
 # 4. distribute the PNGs into the job dirs (renaming to <姓名>-<应聘岗位>.png), then remove the

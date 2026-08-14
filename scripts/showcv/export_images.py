@@ -43,6 +43,21 @@ from urllib.parse import urlencode, urljoin
 from _browser import SKILL_ROOT, connect, open_app, real_profile, use_utf8_output
 from _resumes import format_list, read_resumes, resolve
 
+# 计时埋点：stage_timer 在 scripts/ 下，而本脚本的 sys.path[0] 是 scripts/showcv/，
+# 所以要往上补一层。导入失败一律退化成不计时，绝不影响导出。
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    import stage_timer
+except ImportError:                                          # pragma: no cover
+    stage_timer = None
+
+# main() 解析出 --run-dir 后写进这里，供 __main__ 的计时读取。
+# 之所以用模块级变量而不是把 main() 整体包进 with：main() 里那个大 try/finally
+# 负责标签页清理，为了加计时给它做整体缩进改动，风险远大于收益。
+_RUN_DIR = None
+
 use_utf8_output()
 
 # 落在 assets/ 下：导出的是个人简历，而 assets/* 已被 .gitignore 覆盖
@@ -135,7 +150,13 @@ def main() -> None:
     parser.add_argument('--keep-page', action='store_true', help='导完保留标签页，便于手动重试')
     parser.add_argument('--browser', help='浏览器可执行文件，默认自动探测')
     parser.add_argument('--headless', action='store_true', help='无头模式')
+    parser.add_argument('--run-dir', dest='run_dir', default=None,
+                        help='运行目录（assets/<时间戳>/）。传了就把本次导出耗时写进该目录的 '
+                             'run_timings.jsonl，供 stage_timer.py report 排行；不传则不计时')
     args = parser.parse_args()
+
+    global _RUN_DIR
+    _RUN_DIR = args.run_dir
 
     ids = [part.strip() for value in args.id for part in value.split(',') if part.strip()]
     names = [value for value in args.name if value.strip()]
@@ -236,4 +257,16 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    _started = time.monotonic()
+    _status = 'ok'
+    try:
+        main()
+    except BaseException:
+        # SystemExit 也算失败：这个脚本用 raise SystemExit(msg) 报所有导出错误，
+        # 只捕 Exception 会把「没找到简历」「出图超时」这些真失败记成 ok。
+        _status = 'error'
+        raise
+    finally:
+        if _RUN_DIR and stage_timer is not None:
+            stage_timer.span(_RUN_DIR, 'showcv_export',
+                             time.monotonic() - _started, status=_status)

@@ -18,11 +18,25 @@ import json
 import re
 import time
 import random
+import functools
 from typing import List, Dict, Any, Optional, Union
 
 from .config import ResumeProfile, OUTPUT_DIR, get_latest_run_dir, create_run_dir
 from .utils import ensure_output_dir
 from .scoring import hr_activity_rank, hr_activity_sort_key
+
+# 计时埋点：stage_timer 在 scripts/ 下（本模块是 scripts/resume_matcher/）。
+# 导入失败一律退化成不计时，绝不影响投递。
+try:
+    import stage_timer
+except ImportError:                                          # pragma: no cover
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    try:
+        import stage_timer
+    except ImportError:
+        stage_timer = None
 
 # 尝试导入浏览器自动化库
 try:
@@ -555,7 +569,26 @@ def check_login_status(page) -> bool:
     return False
 
 
-def auto_apply_jobs(
+def auto_apply_jobs(*args, **kwargs):
+    """`_auto_apply_jobs_impl` 的计时包装。
+
+    只有显式传了 output_dir 才计时：impl 在 output_dir 为空时会自行定位最近运行目录
+    或新建一个，在这里重复那套逻辑有可能多建一个空目录 —— 宁可不计时，也不让埋点
+    产生副作用。
+
+    崩了也要留下耗时：stage_timer.stage 会照抛异常但落盘 status=error。投递是整个
+    流程里唯一不可逆的一步，「投到第几个崩的、崩之前跑了多久」是复盘时最要紧的信息。
+    """
+    run_dir = kwargs.get('output_dir')
+    if run_dir is None and len(args) >= 7:
+        run_dir = args[6]                    # 第 7 个位置参数就是 output_dir
+    if not run_dir or stage_timer is None:
+        return _auto_apply_jobs_impl(*args, **kwargs)
+    with stage_timer.stage(run_dir, 'apply'):
+        return _auto_apply_jobs_impl(*args, **kwargs)
+
+
+def _auto_apply_jobs_impl(
     qualified_jobs: List[Dict[str, Any]],
     _profile: ResumeProfile,
     max_applications: int = 10,
@@ -818,6 +851,13 @@ def auto_apply_jobs(
     print(f"{'='*60}")
 
     return results
+
+
+# 让计时包装对外表现得和实现一致：inspect.signature / help() / IDE 提示都能看到
+# 真实参数表，而不是 (*args, **kwargs)。放在这里是因为 wraps 需要实现已定义。
+# 副作用：包装函数的 __doc__ 被换成实现的 —— 这是想要的，计时是实现细节，
+# 调用方该看到的是投递流程的说明。
+functools.update_wrapper(auto_apply_jobs, _auto_apply_jobs_impl)
 
 
 # ==================== 内部辅助函数 ====================

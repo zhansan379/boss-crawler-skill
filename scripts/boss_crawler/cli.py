@@ -49,6 +49,9 @@ def parse_args():
                         help='列出所有可用城市名称后退出')
 
     # 爬取参数
+    parser.add_argument('--run-dir', dest='run_dir', default=None,
+                        help='运行目录（assets/<时间戳>/）。传了就把整轮爬取耗时写进该目录的 '
+                             'run_timings.jsonl，供 stage_timer.py report 排行；不传则不计时')
     parser.add_argument('--mode', '-m', choices=['list', 'custom'], default='list',
                         help='岗位选择模式: list=从岗位列表选择(默认), custom=关键词搜索')
     parser.add_argument('--position', '-p', action='append', dest='positions', default=None,
