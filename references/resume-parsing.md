@@ -174,5 +174,23 @@ Map resume fields to crawl CLI arguments:
 | Resume mentions "实习"/"在校生" | `-j` | Set to `实习` |
 | `awards` | (annotation only) | Mark as bonus points in match report, don't affect crawl params |
 | Company size | `--scale` | Do NOT auto-infer; let user decide |
+| (keyword count) × `-c` | `-p` | Budget by market size — see below |
+
+**Keyword count is budgeted by the city's market size, not by how many you can think of.**
+Crawl time is linear in keyword count, and in a small market extra keywords buy nothing but
+duplicates: a 太原 run with 5 keywords produced 117 rows containing only 53 unique jobs (54%
+duplicates). Budget:
+
+| City | Keywords |
+|---|---|
+| 一线 / 新一线 (the `hotCitySites` list in `assets/weizhi.json`) | up to 5 |
+| Everywhere else | 2-3 |
+
+Within the budget, spend keywords on **distinct concepts, not synonyms**. `AI应用开发` and
+`大模型应用开发` are one concept in any market small enough to matter — they return the same
+pool. `Python` + `后端开发` + `数据分析` are three. The crawler now detects this at runtime
+(it skips a keyword's remaining pages once a page is ≥80% jobs already collected this run, and
+prints a 跨关键词重复 count in the summary), but a synonym still costs one wasted page load per
+keyword — pick well up front.
 
 After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling** — one call, with the full inferred set as the first option marked recommended, so accepting costs a single click. Users may adjust keywords, add cities, or modify filters. This gate stays even when the inference looks unambiguous: the crawl runs through the user's own logged-in browser, wrong parameters waste a long crawl, and nothing about it can be undone afterwards.

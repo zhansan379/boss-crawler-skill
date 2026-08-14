@@ -231,6 +231,10 @@ Read hints, don't obey them, and don't let one turn into a gate.
 
 Claude maps resume fields to crawl parameters. See [references/resume-parsing.md](references/resume-parsing.md) for the inference mapping table.
 
+**Budget keywords by city, not by imagination.** Crawl time is linear in keyword count: 5 keywords
+in 太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
+And spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
+
 Confirm with **one** `AskUserQuestion` whose first option is the full inferred parameter set, labelled
 recommended — so accepting is a single click, and correcting is still one step away. Then run the
 Stage 1 crawl with the confirmed parameters.

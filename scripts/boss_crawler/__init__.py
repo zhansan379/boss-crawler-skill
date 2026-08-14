@@ -14,6 +14,8 @@ from .config import (
     PER_DETAIL_TIME,
     WAIT_TIMEOUT,
     ENCODING,
+    DUP_PAGE_RATIO,
+    DUP_PAGE_MIN_LINKS,
     IS_WINDOWS,
     JOB_TYPE_MAP,
     SALARY_MAP,
@@ -95,6 +97,7 @@ from .menu import (
 # ── 爬取引擎
 from .crawler import (
     process_job_list,
+    should_skip_remaining_pages,
     crawl_jobs_by_position,
     crawl_jobs_by_query,
     get_single_job_detail,
@@ -158,6 +161,7 @@ __all__ = [
     # Config
     "PER_PAGE", "PER_PAGE_TIME", "PER_DETAIL_TIME", "WAIT_TIMEOUT",
     "ENCODING", "IS_WINDOWS",
+    "DUP_PAGE_RATIO", "DUP_PAGE_MIN_LINKS",
     "JOB_TYPE_MAP", "SALARY_MAP", "EXPERIENCE_MAP", "DEGREE_MAP", "SCALE_MAP",
     "FILTER_MAPS", "FILTER_PARAM_NAMES", "FILTER_LABELS",
     "CSV_FIELDS", "co", "USER_DATA_DIR", "ASSETS_DIR",
@@ -184,7 +188,8 @@ __all__ = [
     "ask_detail_option", "ask_sleep_option", "ask_filter_options",
     "show_summary_and_confirm", "list_all_positions", "list_all_cities",
     # Crawler
-    "process_job_list", "crawl_jobs_by_position", "crawl_jobs_by_query",
+    "process_job_list", "should_skip_remaining_pages",
+    "crawl_jobs_by_position", "crawl_jobs_by_query",
     "get_single_job_detail", "crawl_job_details",
     "execute_crawl_iteration", "print_crawl_summary",
     "run_crawl_process", "run_crawl_cli",

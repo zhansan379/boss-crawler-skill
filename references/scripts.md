@@ -159,6 +159,7 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `test_job_view.py` | `build_job_view()` field parity against `CSV_FIELDS` |
 | `test_null_profile.py` | JSON nulls in `profile.json` (`salary_expectation`, `total_years`, and per-category `skills`). All four paths crash on `get(key, default)` because the key *exists* with a null value — the rule is `or`, never the second arg to `get` |
 | `test_deep_shards.py` | Sharding, shard collection (bare arrays, corrupt shards, rank conflicts), the `deep_shards` barrier, and `stage_timer` |
+| `test_crawl_dedup.py` | Run-scoped link dedup across keywords, the ≥80%-duplicate page skip, and `load_job_data()`'s fallback dedup. The load-bearing case is `test_resume_deeper_crawl_not_interrupted`: the skip must key on `run_dups` (seen elsewhere *this run*), never on total `skipped` — a file with 200 existing rows makes page 1 of a deeper re-crawl 100% duplicates, and keying on `skipped` would break out before reaching any new page |
 
 ---
 

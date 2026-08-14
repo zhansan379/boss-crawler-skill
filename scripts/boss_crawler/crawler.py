@@ -13,7 +13,10 @@ import urllib.parse
 from DrissionPage import WebPage
 
 from .auth import check_login_elements, check_login_status, check_page_status, wait_for_user_action
-from .config import CSV_FIELDS, ENCODING, ASSETS_DIR, co, sleep_config
+from .config import (
+    CSV_FIELDS, ENCODING, ASSETS_DIR, DUP_PAGE_MIN_LINKS, DUP_PAGE_RATIO,
+    co, sleep_config,
+)
 from .data_loader import load_existing_links, init_csv_file
 from .menu import print_header, estimate_time
 from .state import time_stats
@@ -21,16 +24,35 @@ from .state import time_stats
 
 # ==================== 列表数据处理 ====================
 
-def process_job_list(job_list, file_path, existing_links, csv_writer):
-    """处理岗位列表数据（去重写入 CSV）"""
+def process_job_list(job_list, file_path, existing_links, csv_writer, run_seen=None):
+    """处理岗位列表数据（去重写入 CSV）
+
+    两个去重集合语义不同，不要合并：
+      existing_links —— 本文件已有的行 + 本文件本次新写入的，决定是否写盘。
+      run_seen       —— 本轮运行（所有关键词 × 城市）遇到过的全部 link。
+                        既参与写盘决策，也是「这一页全是同义关键词的重复」的判据。
+
+    run_seen 为 None 时行为与拆分前完全一致（本函数是 __init__ 导出的公开 API）。
+
+    Returns:
+        (written, skipped, run_dups)
+        run_dups 只数「本轮其他地方已见过」的，是 skipped 的子集。
+    """
     written = 0
     skipped = 0
+    run_dups = 0
 
     for job in job_list:
         job_link = f"https://www.zhipin.com/job_detail/{job['encryptJobId']}.html"
 
-        if job_link in existing_links:
+        seen_this_run = run_seen is not None and job_link in run_seen
+        if seen_this_run:
+            run_dups += 1
+
+        if job_link in existing_links or seen_this_run:
             skipped += 1
+            if run_seen is not None:
+                run_seen.add(job_link)
             continue
 
         dit = {
@@ -65,20 +87,33 @@ def process_job_list(job_list, file_path, existing_links, csv_writer):
 
         csv_writer.writerow(dit)
         existing_links.add(job_link)
+        if run_seen is not None:
+            run_seen.add(job_link)
         written += 1
 
-    return written, skipped
+    return written, skipped, run_dups
 
 
 # ==================== 单页爬取循环（共用） ====================
 
-def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
+def should_skip_remaining_pages(page_size, run_dups):
+    """本页是否已经基本全是本轮其他关键词采过的岗位 → 跳到下一个关键词。
+
+    只看 run_dups（本轮其他关键词已采），不看总重复数 —— 理由见
+    config.DUP_PAGE_RATIO 的注释：用总重复数会打断「同一关键词续爬更深的页」。
+    """
+    if page_size < DUP_PAGE_MIN_LINKS:
+        return False
+    return run_dups / page_size >= DUP_PAGE_RATIO
+
+
+def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=None):
     """
     通用的翻页爬取循环。
     两个爬取函数（by_position / by_query）共用此翻页逻辑。
 
     Returns:
-        (total_processed, total_written, total_skipped)
+        (total_processed, total_written, total_skipped, total_run_dups)
     """
     dp.get(url)
     dp.listen.start('zpgeek/search/joblist.json')
@@ -86,6 +121,7 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
 
     total_written = 0
     total_skipped = 0
+    total_run_dups = 0
     page_num = 1
     consecutive_no_data = 0
 
@@ -134,12 +170,21 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
 
             try:
                 job_list = r.response.body.get('zpData', {}).get('jobList', [])
-                written, skipped = process_job_list(job_list, file_path, existing_links, csv_writer)
+                written, skipped, run_dups = process_job_list(
+                    job_list, file_path, existing_links, csv_writer, run_seen
+                )
                 total_written += written
                 total_skipped += skipped
+                total_run_dups += run_dups
 
                 time_stats.end_request(True, f"获取{len(job_list)}条,写入{written}条")
                 print(f"[第{page_num}页] 获取到 {len(job_list)} 条数据，已写入 {written} 条（跳过 {skipped} 条重复）")
+
+                if should_skip_remaining_pages(len(job_list), run_dups):
+                    pct = round(run_dups / len(job_list) * 100)
+                    print(f"[第{page_num}页] 本页 {len(job_list)} 条中 {run_dups} 条"
+                          f"已由本轮其他关键词采过（{pct}%），跳过剩余分页")
+                    break
             except Exception as e:
                 time_stats.end_request(False, str(e))
                 print(f"[第{page_num}页] 处理数据失败: {e}")
@@ -148,12 +193,13 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
             sleep_config.sleep('page')
 
     dp.listen.stop()
-    return total_written + total_skipped, total_written, total_skipped
+    return total_written + total_skipped, total_written, total_skipped, total_run_dups
 
 
 # ==================== 按岗位 code 爬取 ====================
 
-def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit, existing_links, filter_query=''):
+def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit,
+                           existing_links, filter_query='', run_seen=None):
     """按岗位code爬取"""
     init_csv_file(file_path)
 
@@ -161,12 +207,13 @@ def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit,
     print(f"\n访问: {url}")
     time_stats.start_request('page', url)
 
-    return _crawl_paginated(dp, url, file_path, count_limit, existing_links)
+    return _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen)
 
 
 # ==================== 按关键词爬取 ====================
 
-def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit, existing_links, filter_query=''):
+def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit,
+                        existing_links, filter_query='', run_seen=None):
     """按关键词爬取"""
     init_csv_file(file_path)
 
@@ -175,7 +222,7 @@ def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit, existing_l
     print(f"\n访问: {url}")
     time_stats.start_request('page', url)
 
-    return _crawl_paginated(dp, url, file_path, count_limit, existing_links)
+    return _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen)
 
 
 # ==================== 详情爬取 ====================
@@ -503,10 +550,16 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
         filter_query: URL 筛选参数字符串
 
     Returns:
-        {'total': int, 'written': int, 'skipped': int}
+        {'total': int, 'written': int, 'skipped': int, 'run_dups': int}
     """
-    total_stats = {'total': 0, 'written': 0, 'skipped': 0}
+    total_stats = {'total': 0, 'written': 0, 'skipped': 0, 'run_dups': 0}
     detail_existing_links = set()
+
+    # 整轮运行共享一个 link 集合。没有它时，每个关键词只认自己那个 CSV 里的 link，
+    # 于是同义关键词把同一批岗位重复爬、重复写、下游再重复解析一遍
+    # （实测太原 5 个关键词写出 117 行，只有 53 个唯一 link）。
+    # 它同时是 should_skip_remaining_pages 的判据来源。
+    run_seen = set()
 
     for pos_path, pos_code, pos_name in positions:
         for city_name, city_code in cities:
@@ -523,14 +576,17 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
 
             if is_custom:
                 stats = crawl_jobs_by_query(dp, pos_name, city_code, file_path,
-                                            count_limit, existing_links, filter_query)
+                                            count_limit, existing_links, filter_query,
+                                            run_seen)
             else:
                 stats = crawl_jobs_by_position(dp, pos_code, city_code, file_path,
-                                               count_limit, existing_links, filter_query)
+                                               count_limit, existing_links, filter_query,
+                                               run_seen)
 
             total_stats['total'] += stats[0]
             total_stats['written'] += stats[1]
             total_stats['skipped'] += stats[2]
+            total_stats['run_dups'] += stats[3]
 
             if with_detail and stats[1] > 0:
                 detail_success = crawl_job_details(dp, file_path, detail_existing_links)
@@ -546,6 +602,14 @@ def print_crawl_summary(total_stats):
     print(f"  获取数据: {total_stats['total']} 条")
     print(f"  写入数据: {total_stats['written']} 条")
     print(f"  跳过重复: {total_stats['skipped']} 条")
+
+    # 把「关键词之间撞了多少」当场摆出来。这个数字高就说明关键词选成同义词了，
+    # 下次该减关键词而不是加 —— 不打出来就得等事后翻 CSV 才发现。
+    run_dups = total_stats.get('run_dups', 0)
+    if run_dups:
+        print(f"    其中跨关键词重复: {run_dups} 条"
+              f"（关键词命中同一批岗位，可考虑减少关键词数量）")
+
     time_stats.print_summary()
 
 
