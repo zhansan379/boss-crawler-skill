@@ -146,10 +146,11 @@ def survey(run_dir):
     # ── Stage 7bc: 用户确认岗位 + 素材方式（一次问齐）──
     jobs = _load(os.path.join(run_dir, 'qualified_jobs.json'))
     if not jobs:
-        return done, ('Stage 7a-7bc 给用户看榜单、一轮问齐，然后写 qualified_jobs.json', [
+        return done, ('Stage 7a-7bc 给用户看榜单、一轮问齐', [
             '打开 %s/matching_report.html' % run_dir,
             '7bc 单次 AskUserQuestion：投递哪些岗位 + 招呼语方式 + 图片方式（auto-apply.md 的 7bc）',
-        ]), ['缺 qualified_jobs.json（这个由主 agent 写，没有脚本）']
+        ]), ['缺 qualified_jobs.json（正常应已由 run_matcher.py --merge 自动生成；若确实缺失，' +
+             '用 read_thin.py --kind deep 读 deep_results.json 并据此写一个，或重跑 --merge）']
     n = len(jobs)
     done.append('Stage 7bc 确认：%d 个岗位' % n)
 

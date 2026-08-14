@@ -336,6 +336,11 @@ def merge_deep_results(
     qualified = []
     need_optimization = []
     cannot_apply = []
+    # 原始岗位 dict（candidate['job']）随分类同步收集，供写出 qualified_jobs.json。
+    # qualified_jobs.json 是 Stage 7 的默认投递候选池，用原始爬取字段（link/公司/职位/…），
+    # 与 write_application_md.py 按 link 回查 CSV 的约定一致；不再由主代理手写。
+    qualified_raw = []
+    need_optimization_raw = []
 
     for candidate in candidates_data.get('candidates', []):
         job = candidate.get('job', {})
@@ -418,10 +423,12 @@ def merge_deep_results(
 
         if category == CATEGORY_QUALIFIED:
             qualified.append(job_result)
+            qualified_raw.append(job)
         elif category == CATEGORY_CANNOT_APPLY:
             cannot_apply.append(job_result)
         else:
             need_optimization.append(job_result)
+            need_optimization_raw.append(job)
 
     # ── 按分数降序排序 ──
     for lst in [qualified, need_optimization, cannot_apply]:
@@ -449,5 +456,14 @@ def merge_deep_results(
     print(f"  需优化: {len(need_optimization)}")
     print(f"  不可投递: {len(cannot_apply)}")
     print(f"  HTML 报告: {html_path}")
+
+    # ── 写出 qualified_jobs.json（Stage 7 默认投递候选池）──
+    # 含「符合+需优化」两类，按置信度（符合在前）排序；7bc 询问投递范围后，
+    # 主代理如需收窄，直接覆盖此文件即可。字段为原始爬取 dict，供
+    # write_application_md.py 按 link 回查 CSV。
+    qualified_path = os.path.join(output_dir, 'qualified_jobs.json')
+    with open(qualified_path, 'w', encoding='utf-8') as f:
+        json.dump(qualified_raw + need_optimization_raw, f, ensure_ascii=False, indent=2)
+    print(f"  ✅ 已生成投递候选池: {qualified_path}（{len(qualified_raw) + len(need_optimization_raw)} 个岗位，含符合+需优化）")
 
     return classification
