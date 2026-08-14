@@ -51,6 +51,20 @@ def _load(path):
     return data
 
 
+def _preset():
+    """已保存的爬取预设，没有或读不出来时返回 {}。
+
+    本脚本退出码恒为 0，所以这里吞掉一切异常——预设读不出来只该让下一步退回
+    「交互式采集」，不该让状态查询本身失败。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import preferences
+        return preferences.load()
+    except Exception:
+        return {}
+
+
 def survey(run_dir):
     """返回 (已完成阶段列表, 下一步 (标题, 命令列表), 备注列表)。"""
     has = lambda *parts: os.path.exists(os.path.join(run_dir, *parts))
@@ -62,10 +76,19 @@ def survey(run_dir):
     if csvs:
         done.append('Stage 1 采集：%d 个 CSV' % len(csvs))
     else:
+        prefs = _preset()
+        if prefs:
+            # 有预设就不必再问城市/关键词/模式——直接给出可执行的那条命令。
+            return done, ('Stage 1 采集岗位（已有预设，无需提问）', [
+                'python scripts/boss_post_interactive.py --ensure-login',
+                'python scripts/preferences.py crawl-args   # 打印命令后直接执行',
+            ]), ['assets/post_data/ 下没有 CSV',
+                 '预设：%s / %s' % (','.join(prefs.get('cities') or ['?']),
+                                    ','.join(prefs.get('keywords') or ['?']))]
         return done, ('Stage 1 采集岗位', [
             'python scripts/boss_post_interactive.py --ensure-login',
             'python scripts/boss_post_interactive.py',
-        ]), ['assets/post_data/ 下没有 CSV']
+        ]), ['assets/post_data/ 下没有 CSV', '无预设 → 走 Stage 3.5 的合并提问']
 
     # ── Stage 2-3: 解析简历 ──
     if has('profile.json') and has('resume_text.txt'):
@@ -120,15 +143,15 @@ def survey(run_dir):
             % run_dir,
         ]), ['缺 matching_report.html']
 
-    # ── Stage 7b/7c: 用户确认岗位 ──
+    # ── Stage 7bc: 用户确认岗位 + 素材方式（一次问齐）──
     jobs = _load(os.path.join(run_dir, 'qualified_jobs.json'))
     if not jobs:
-        return done, ('Stage 7a-7c 给用户看榜单、确认岗位，然后写 qualified_jobs.json', [
+        return done, ('Stage 7a-7bc 给用户看榜单、一轮问齐，然后写 qualified_jobs.json', [
             '打开 %s/matching_report.html' % run_dir,
-            '7b 确认岗位 + 7c 一次问齐招呼语/简历两个问题（auto-apply.md 的 7c）',
+            '7bc 单次 AskUserQuestion：投递哪些岗位 + 招呼语方式 + 图片方式（auto-apply.md 的 7bc）',
         ]), ['缺 qualified_jobs.json（这个由主 agent 写，没有脚本）']
     n = len(jobs)
-    done.append('Stage 7b-7c 确认：%d 个岗位' % n)
+    done.append('Stage 7bc 确认：%d 个岗位' % n)
 
     # ── Stage 7d: 逐岗位生成素材 ──
     gen = os.path.join(run_dir, 'generated')

@@ -2,7 +2,12 @@
 
 ## Mode Selection
 
-Ask user to choose via `AskUserQuestion`:
+**Do not ask here.** The mode and Top-N arrive already answered — either from the merged Stage 3.5
+question (city + keywords + mode + Top-N in one `AskUserQuestion` call) or from a saved preset's
+`match_mode` / `top_n`. Asking again at Stage 4 is the round-trip that Stage 3.5 exists to avoid.
+
+The table below is what you use to pick the *recommended* option when you compose that Stage 3.5
+question — not a prompt to raise a new one:
 
 | Scenario | Recommended mode | Reason |
 |----------|-----------------|--------|
@@ -10,7 +15,7 @@ Ask user to choose via `AskUserQuestion`:
 | < 50 jobs | Deep | Precision gain worth the tokens |
 | User says "fast" | Quick | Respect user preference |
 | User says "detailed" | Deep | Respect user preference |
-| Unclear | Ask user | Let user decide |
+| Unclear | Deep, Top 10 | The balanced default; mark it 推荐 and let the one question settle it |
 
 ---
 
@@ -32,9 +37,10 @@ HTML report shows `🚀 快速模式` badge. Matching reasons are rule-based ("�
 
 Three phases. For jobs where you want semantic matching and per-job personalized optimization advice.
 
-### Phase 0: Ask User for Top-N
+### Phase 0: Top-N Is Already Known
 
-Use `AskUserQuestion`:
+N came from Stage 3.5's merged question or from the preset's `top_n` — **do not ask again here.**
+The choices offered back at 3.5, for reference:
 
 > Deep mode sorts jobs by rule score, then sends the top N to Claude for per-job LLM analysis. Choose pre-filter count:
 > - Top 5 — fastest, lowest token cost
@@ -42,6 +48,9 @@ Use `AskUserQuestion`:
 > - Top 15 — broader coverage
 > - Top 20 — maximum coverage, highest token cost
 > - Custom — enter any number
+
+If N is somehow missing (no preset and no 3.5 answer — e.g. the user jumped straight to
+「深度匹配」 on an existing report), use 10 and say so in one line rather than opening a gate for it.
 
 ### Phase 1: Python Pre-Filter
 

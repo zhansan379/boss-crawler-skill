@@ -1,17 +1,19 @@
 # Auto-Apply Reference
 
 Stage 7 turns confirmed matches into per-job application materials, then applies. Two user gates
-bracket the generation phase: **7b** picks the jobs, **7g** approves what was generated. Never apply
-without passing both.
+bracket the generation phase: **7bc** picks the jobs and the material options, **7g** approves what
+was generated. Never apply without passing both.
 
 ## Stage 7 Flow
 
 ```mermaid
 flowchart TD
     Start[Stage 7: Confirm & Apply] --> J1[7a 展示推荐岗位表]
-    J1 --> J2{7b 门禁一：投递哪些岗位}
-    J2 --> |取消| End[结束]
-    J2 --> |已选 N 个岗位| Q[7c 单次 AskUserQuestion<br>同时问两个独立问题]
+    J1 --> Q{7bc 门禁一：单次 AskUserQuestion<br>三个独立问题一轮问完}
+    Q --> |取消| End[结束]
+
+    Q --> Q0{投递哪些岗位}
+    Q0 --> |全部/已选 N 个| Scope[选定岗位集合]
 
     Q --> Q1{招呼语生成方式}
     Q1 --> |自定义| Opt1[用户输入一段<br>全岗位共用，不启子智能体]
@@ -27,7 +29,8 @@ flowchart TD
     Opt1 & Opt2 & Opt3 --> GreetingReady[招呼语方式确定]
     Upload & AIAdjust & NoPic --> PicReady[图片方式确定]
 
-    GreetingReady --> Fan[7d 准备就绪，按岗位并行]
+    Scope --> Fan[7d 准备就绪，按岗位并行]
+    GreetingReady --> Fan
     PicReady --> Fan
 
     Fan --> GreetingAgent[子智能体：生成招呼语<br>仅 AI生成 分支]
@@ -51,9 +54,14 @@ flowchart TD
 
 Two shapes in that diagram are load-bearing:
 
-- **7c asks both questions in one `AskUserQuestion` call.** They are independent — greeting method
-  does not constrain image method — so asking them separately costs the user an extra round trip
-  for nothing. `AskUserQuestion` takes 1–4 questions per call; use two.
+- **7bc is one `AskUserQuestion` call carrying three questions.** Job scope, greeting method, and
+  image method are mutually independent — picking `AI生成` does not constrain the image choice, and
+  the job set does not change which options are legal. `AskUserQuestion` takes 1–4 questions per
+  call, so all three fit in one round trip. They used to be two stops (7b, then 7c with two
+  questions); the 2026-08-14 run spent 30% of its wall clock on interaction round-trips, and this
+  merge removes one of them. The follow-ups that genuinely *depend* on an answer — validating a
+  `自定义上传` path, offering a different base resume for `AI调整` — still come after, because they
+  cannot be asked before the answer exists.
 - **7e is a barrier, 7d is not.** Resume agents fan out per job with no synchronization, but the
   rendering step waits for all of them, because one import/export/delete batch covers every job.
   **The barrier is settled by checking that the artifact files exist — never by waiting for
@@ -73,17 +81,21 @@ Two shapes in that diagram are load-bearing:
 
 Include: match strengths, potential gaps, total application count, and priority order.
 
-## 7b: Gate 1 — Confirm Jobs
-
-`AskUserQuestion`: apply to all qualified, or select specific ones? The selected set drives
-everything downstream — one directory, one greeting, and (usually) one adjusted resume per job.
-
-## 7c: Ask Both Questions in One Call
+## 7bc: Gate 1 — One Call, Three Questions
 
 | Question | Options |
 |---|---|
+| 投递哪些岗位 | `全部合格岗位` / `我来选` (indices via "Other") / `取消` |
 | 招呼语生成方式 | `自定义` (user text, shared by all jobs) / `默认` (`generate_greeting()` template) / `AI生成` (subagent per job) |
 | 是否发送图片 | `自定义上传` (user's image path) / `AI调整` (render an adjusted resume) / `不发送` |
+
+The selected job set drives everything downstream — one directory, one greeting, and (usually) one
+adjusted resume per job. Cancelling here ends Stage 7; nothing has been generated yet, so there is
+nothing to clean up.
+
+**Do not split this back into separate calls.** If you find yourself wanting to ask the job scope
+first "so the next question can mention the count", write the count into the greeting question's
+description instead — it is available from 7a's table.
 
 **`自定义` greeting is one text for every selected job**, supplied via the "Other" field. Per-job
 custom text is not offered — that is what `AI生成` plus 7g's 返回修改 is for.
@@ -187,7 +199,7 @@ forwarded onward only adds leakage. `optimized_resume` therefore starts at the f
 (教育背景 / 专业技能 / …) — no name heading, no contact line. Do not override this in the agent
 prompt.
 
-| 7c answer | Content base (`resume_text` slot) |
+| 7bc answer | Content base (`resume_text` slot) |
 |---|---|
 | `AI调整` | the original resume text (`{run_dir}/resume_text.txt`, or the user's override) — keep its section set and ordering, re-weight the wording toward this JD |
 | `不发送` | a generic resume structure (基本信息 / 教育背景 / 技能 / 项目经历 / 工作经历), populated from `profile.json` |
@@ -233,7 +245,7 @@ So `--wait` is the default and a bare snapshot (`--wait 0`) is only for re-check
 established the agent is no longer running. The script also ignores 0-byte files, since an agent that
 has just `open()`ed its output would otherwise pass the barrier and send an empty resume into 7e.
 
-Expect one greeting and one resume per job (minus whatever the 7c skip rules exempt). Then:
+Expect one greeting and one resume per job (minus whatever the 7bc skip rules exempt). Then:
 
 - **All present** → proceed to 7e immediately, regardless of which notifications arrived.
 - **Missing after the full wait elapsed** → now you may treat them as dead. Re-dispatch only those.
@@ -253,7 +265,7 @@ notifications.
 ## 7e: Batch-Render Flat Images (serial)
 
 Runs once, after every resume agent's artifact is confirmed on disk (see above). Skip entirely when
-the 7c answer was `自定义上传`.
+the 7bc answer was `自定义上传`.
 
 ```bash
 # 1. ensure ShowCV is up — Stage 0 steps 1–2. Reuse a running instance; do not pick a new port
@@ -414,6 +426,13 @@ PNG is not editable, and a later 返回修改 should not have to regenerate from
 
 ## 7g: Gate 2 — Approve
 
+**This gate is not mergeable, not skippable, and not presetable.** Every other stop in the skill has
+been merged away or moved into `assets/preferences.json`; this one cannot be, because it is the only
+thing standing in front of an irreversible action — a sent greeting cannot be unsent. `preferences.py`
+has no field that reaches it, and its whitelist drops any key a user hand-writes into the file trying
+to add one (see `references/crawl-commands.md` → 配置预设). Do not add a `--yes` flag here, and do not
+treat "the user already said 全部投递 last run" as an answer for this run.
+
 Notify with the directory paths, then one `AskUserQuestion` covering all jobs at once:
 
 ```
@@ -426,7 +445,7 @@ Notify with the directory paths, then one `AskUserQuestion` covering all jobs at
 | Answer | Next |
 |---|---|
 | ✅ 全部投递 | proceed to 7h |
-| ✏️ 返回修改 | ask which jobs, then re-run 7c → 7f for just those. Untouched jobs keep their materials |
+| ✏️ 返回修改 | ask which jobs, then re-ask only 7bc's material questions (scope is already settled) → 7f for just those. Untouched jobs keep their materials |
 | ❌ 取消投递 | stop. The generated directories stay on disk |
 
 Per-job approval is deliberately not offered: the materials are already on disk for inspection, and
@@ -443,14 +462,14 @@ results = auto_apply_jobs(
     _profile=profile,
     max_applications=len(selected_jobs),
     greetings=greetings,              # keyed by job link
-    resume_file_path=resume_images,   # keyed by job link; None when 7c answered 不发送
+    resume_file_path=resume_images,   # keyed by job link; None when 7bc answered 不发送
     output_dir=run_dir,
 )
 ```
 
 `resume_file_path` takes either a single path (whole batch shares one attachment) or a
 `{job_link: path}` dict (per-job attachment) — pass the dict, since each job has its own
-`<姓名>-<应聘岗位>.png`. It resolves per the 7c answer: the user's uploaded image (`自定义上传`, one
+`<姓名>-<应聘岗位>.png`. It resolves per the 7bc answer: the user's uploaded image (`自定义上传`, one
 path reused for every job), the rendered per-job `<姓名>-<应聘岗位>.png` (`AI调整`), or `None`
 (`不发送`).
 
@@ -519,8 +538,8 @@ the effect only appears when a caller sets a smaller cap.
 
 | Priority | Source | When |
 |----------|--------|------|
-| 1 | User-confirmed greeting | 7c `自定义`, or a 7d/7g-approved generation |
-| 2 | `generate_greeting()` template | 7c `默认`, or an `AI生成` agent that returned nothing usable |
+| 1 | User-confirmed greeting | 7bc `自定义`, or a 7d/7g-approved generation |
+| 2 | `generate_greeting()` template | 7bc `默认`, or an `AI生成` agent that returned nothing usable |
 | 3 | `_default_greeting()` | Minimal greeting with position name only |
 
 ## Safety Rules

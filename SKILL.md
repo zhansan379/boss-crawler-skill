@@ -24,7 +24,12 @@ Four entry paths. Choose based on what data the user already has:
 
 **Path D terminates at launch.** It opens the editor and reports the URL — nothing else. Don't chain it into matching on your own. It commonly serves as a precursor: the user writes a resume in the editor, exports a PDF, then re-enters at path A/B/C. If they'd rather skip the PDF round-trip, the editor's stored Markdown can feed Stage 3 directly — see [references/resume-editor.md](references/resume-editor.md) — but only do that when the user asks.
 
-> **Confirmation rule**: for paths A/B/C, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7b (which jobs) and 7g (approve the generated materials). Never apply without both.
+> **Confirmation rule**: for paths A/B/C, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7bc (which jobs) and 7g (approve the generated materials). Never apply without both.
+>
+> **Presets never reach these gates.** `assets/preferences.json` covers crawl and matching parameters
+> only — it has no field for which jobs, what greeting, or whether to send, and `load()` drops any key
+> outside its whitelist. Merging questions saves typing; it never removes 7g, which is the only thing
+> standing in front of an irreversible action.
 
 ## Run Directory
 
@@ -41,13 +46,18 @@ Copy this checklist and check off items as you complete them:
 ```
 Progress:
 - [ ] Stage 0: Launch resume editor (path D — terminal step)
-- [ ] Stage 1: Crawl jobs (paths A, C)
+- [ ] Stage 1: Check preset (`preferences.py show`) → crawl jobs (paths A, C)
 - [ ] Stage 2-3: Read resume file → parse → profile.json
 - [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
-- [ ] Stage 3.5: Infer crawl params from resume (path C only)
-- [ ] Stage 4-6: Match analysis (quick or deep) → report written and opened
-- [ ] Stage 7: Confirm jobs → parallel per-job material generation → confirm → apply
+- [ ] Stage 3.5: Infer crawl params (path C, no preset) — ONE question: city+keywords+mode+TopN
+- [ ] Stage 4-6: Match analysis (mode/TopN already known) → report written and opened
+- [ ] Stage 7: 7bc one question (jobs+greeting+image) → parallel generation → 7g gate → apply
 ```
+
+**Three stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
+interaction round-trips. The stops that remain: the resume file path, one merged parameter question
+(skipped entirely when a preset exists), 7bc, and 7g. **7g is never removed** — it is the only thing
+in front of an irreversible action.
 
 **Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
 state.** Ask the filesystem instead:
@@ -169,6 +179,25 @@ locally. Unlike `/export`, a missing `id` is never taken to mean "the current re
 
 Two-phase CLI approach. See [references/crawl-commands.md](references/crawl-commands.md) for the full parameter table and more examples.
 
+**Phase 0 — Check for a saved preset. Do this first, before asking anything.**
+
+```bash
+python scripts/preferences.py show      # exit 0 = preset found, exit 1 = none
+```
+
+Exit 0 → **do not ask.** State the parameters and their age in one line, then run the command the
+script printed:
+
+```
+用上次的参数（74 天前存的）：太原 / AI应用开发,Python / deep / Top10，开始爬取。
+```
+
+Presets never expire — the age is reported so the user can interrupt, not so you can gate on it.
+Exit 1 → no preset, take the merged question in Stage 3.5, then save the answer.
+
+This is the single biggest saving for a returning user: the 2026-08-14 run stopped to ask 6 times,
+and Stage 1 plus the two gates burned 12 minutes (30% of the run) mostly on interaction round-trips.
+
 **Phase 1a — Ensure login:**
 
 ```bash
@@ -240,15 +269,29 @@ Claude maps resume fields to crawl parameters. See [references/resume-parsing.md
 in 太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
 And spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
 
-Confirm with **one** `AskUserQuestion` whose first option is the full inferred parameter set, labelled
-recommended — so accepting is a single click, and correcting is still one step away. Then run the
-Stage 1 crawl with the confirmed parameters.
+Confirm with **one** `AskUserQuestion` that asks everything decidable at this moment — **city,
+keywords, matching mode (quick/deep), and deep's Top-N** — in a single call. All four are known
+before the crawl starts and none constrains the others, so asking them separately costs three extra
+round-trips for nothing. First option = the full inferred set, labelled recommended, so accepting is
+one click.
 
-**Keep this gate even when the inference looks unambiguous.** The crawl is an outward-facing action
-driven through the user's own logged-in browser: wrong parameters cost a long crawl plus a batch of
-useless data, and there is nothing to undo afterwards. The ambiguity is rarely just "the resume lists
-two cities" — expected salary, seniority, and which keyword to search (`Python` vs `后端开发`) are all
-judgement calls. What gets collapsed here is a round of typing, not the confirmation itself.
+Then save it, so the next run skips this entirely:
+
+```bash
+python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
+      --match-mode deep --top 10 --count 20 --degree 本科
+```
+
+**Skip this whole stage when `preferences.py show` exited 0.** The saved parameters were confirmed by
+the user in an earlier run — re-confirming them is the round-trip this preset exists to remove.
+Announce what you're using (with its age) and crawl.
+
+**When there is no preset, keep the gate even if the inference looks unambiguous.** The crawl is an
+outward-facing action driven through the user's own logged-in browser: wrong parameters cost a long
+crawl plus a batch of useless data, and there is nothing to undo afterwards. The ambiguity is rarely
+just "the resume lists two cities" — expected salary, seniority, and which keyword to search (`Python`
+vs `后端开发`) are all judgement calls. What gets collapsed here is rounds of typing, not the
+confirmation itself.
 
 ### Stage 4-6: Match Analysis & Report
 
@@ -258,7 +301,10 @@ judgement calls. What gets collapsed here is a round of typing, not the confirma
 **Do not call `generate_html_report()` yourself.** It already runs inside the script, and after a CLI
 run you don't hold the `classification` object it needs anyway.
 
-Ask the user to choose a mode. See [references/matching.md](references/matching.md) for mode details, scoring dimensions, and classification logic.
+**Do not ask for the mode or Top-N here.** Both arrived with Stage 3.5's merged question or the saved
+preset (`match_mode`, `top_n`). Asking again is the duplicate round-trip this consolidation removed.
+Only ask if neither source has them. See [references/matching.md](references/matching.md) for mode
+details, scoring dimensions, and classification logic.
 
 **Quick mode** — single command, rule-based 6-dimension scoring (0-115 pts), zero token cost:
 ```bash
@@ -267,7 +313,7 @@ python scripts/run_matcher.py --mode quick --profile {run_dir}/profile.json --ou
 
 **Deep mode** — three phases, rule pre-filter + per-job LLM semantic analysis:
 ```bash
-# Phase 1: Python pre-filter (ask user for top-N first)
+# Phase 1: Python pre-filter (N came from Stage 3.5 or the preset — don't re-ask)
 python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top <N> --output-dir {run_dir}
 
 # Phase 2: shard, then dispatch one subagent per shard (never analyze in the main context —
@@ -283,24 +329,34 @@ Then open the report: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) 
 
 ### Stage 7: Confirm & Apply
 
-Two user gates — 7b picks the jobs, 7g approves the generated materials — with a parallel per-job
-generation phase in between. See [references/auto-apply.md](references/auto-apply.md) for the
-flowchart, subagent contracts, the ShowCV rendering pipeline, and the directory layout.
+Two user gates — 7bc picks the jobs and the material preferences, 7g approves what was generated —
+with a parallel per-job generation phase in between. See
+[references/auto-apply.md](references/auto-apply.md) for the flowchart, subagent contracts, the ShowCV
+rendering pipeline, and the directory layout.
 
 | Sub-step | Action |
 |---|---|
 | **7a** | Display recommended jobs table with match scores and reasons |
-| **7b** | `AskUserQuestion` — **gate 1**: which jobs to apply to |
-| **7c** | `AskUserQuestion` — both independent questions in **one** call: 招呼语生成方式 (自定义 / 默认 / AI生成) and 是否发送图片 (自定义上传 / AI调整 / 不发送) |
+| **7bc** | `AskUserQuestion` — **gate 1**, all three independent questions in **one** call: 投递范围 (which jobs), 招呼语生成方式 (自定义 / 默认 / AI生成), 是否发送图片 (自定义上传 / AI调整 / 不发送) |
 | **7d** | Launch subagents **in parallel, one pair per confirmed job — every `Agent` call in ONE message, or they run serially**. Neither subagent touches a browser |
 | **7e** | Render adjusted resumes to flat images — **serial, one batch covering all jobs** (ShowCV) |
 | **7f** | Write `{run_dir}/applications/{company}-{position}/` per job via `python scripts/write_application_md.py "{run_dir}" --all` (all 25 crawled fields + greeting — never hand-write it), then notify the user to review |
 | **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
 | **7h** | On 全部投递, execute `auto_apply_jobs()` with the confirmed greetings and attachments |
 
-**7d → 7e → 7f is one uninterrupted batch.** Once 7c's preferences are in, generate, render, and
-archive without stopping to ask anything — the two gates are 7b and 7g, and a question in between
+**7bc is one call, not three.** Which jobs, greeting method, and image method are mutually
+independent — the job selection does not change the greeting options and vice versa. They used to be
+two stops (7b then 7c); merging them removes a round-trip from the stage that cost 12 minutes of the
+2026-08-14 run. The follow-ups that *depend* on an answer stay where they are: validating a
+`自定义上传` path, and the `AI调整` base-resume override.
+
+**7d → 7e → 7f is one uninterrupted batch.** Once 7bc's answers are in, generate, render, and
+archive without stopping to ask anything — the two gates are 7bc and 7g, and a question in between
 turns material preparation into an interrogation. Report once at the end of 7f.
+
+**7g is not mergeable and not presetable.** It is the last thing before an irreversible outward-facing
+action, and it must see the materials that actually landed on disk — so it cannot move earlier, and no
+saved preference may stand in for it.
 
 **A job whose material fails is dropped from the batch, not retried forever.** If a resume agent
 produces no artifact, mark that job failed, exclude it from the 7e render batch and from 7h, and list
@@ -310,7 +366,7 @@ notifications received), and a slow agent looks identical to a dead one from the
 
 **Which subagents actually launch** in 7d — the non-AI options resolve inline and need no agent:
 
-| 7c answer | 7d subagent | 7h attachment |
+| 7bc answer | 7d subagent | 7h attachment |
 |---|---|---|
 | 招呼语 **自定义** | none — one user-supplied text reused for every job | — |
 | 招呼语 **默认** | none — `generate_greeting()` per job | — |

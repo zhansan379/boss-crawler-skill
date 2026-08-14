@@ -25,7 +25,7 @@ agent 干了同一件事，白烧 4 分钟和一倍 token。简历优化实测�
     python scripts/check_artifacts.py <run_dir> [--greeting] [--resume]
     python scripts/check_artifacts.py <run_dir> --kinds deep_shards   # 阶段 2 分片
 
-不带 --greeting/--resume 时两者都查。按 7c 的 skip 规则，
+不带 --greeting/--resume 时两者都查。按 7bc 的 skip 规则，
 `自定义上传` 不产简历、只有 `AI生成` 才产招呼语，此时用开关缩小范围。
 
 `--kinds deep_shards` 是另一套：查深度分析并行分片（deep_shards/shard_NN.md

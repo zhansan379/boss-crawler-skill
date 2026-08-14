@@ -65,6 +65,54 @@ python scripts/boss_post_interactive.py -m custom -p "数据分析" -c "北京,�
 python scripts/boss_post_interactive.py -u
 ```
 
+## 配置预设 (`scripts/preferences.py`)
+
+The single biggest time saver for a returning user. The 2026-08-14 run spent 12 of its 46 minutes
+(30%) on interaction round-trips, most of it re-answering the same city / keyword / degree / mode
+questions from the previous run. A preset makes Stage 1 ask nothing.
+
+```bash
+# Stage 1 Phase 0 — always run this first. Exit 0 = preset exists, 1 = none.
+python scripts/preferences.py show
+
+# Emit the ready-to-run crawl command from the saved preset
+python scripts/preferences.py crawl-args
+
+# Save after the user answers Stage 3.5's merged question
+python scripts/preferences.py save --keywords "AI应用开发,大模型应用开发" --city "太原" \
+    --count 20 --degree "本科" --match-mode deep --top 10
+
+# Forget it (the user asks to reset, or the market/target changed)
+python scripts/preferences.py clear
+```
+
+| Subcommand | Exit code | Use |
+|---|---|---|
+| `show` | `1` when no preset | Branch on the exit code, not on parsing the text |
+| `crawl-args` | `1` when no preset | Prints one `boss_post_interactive.py …` line — run it as-is |
+| `save` | `0` | Overwrites; there is only ever one preset. Short forms mirror the crawler's own flags (`-c -p -m -n -deg -e -s -j`). Detail crawling is on by default — pass `--no-detail` to turn it off |
+| `clear` | `0` | Idempotent — no error when the file is already gone |
+
+Stored at `assets/preferences.json`, keyed by `SCHEMA_VERSION`, stamped with `saved_at`.
+
+**Presets never expire.** `show` reports the age (`已保存 23 天`) and stops there. An expiry rule
+would be a gate that fires on a calendar rather than on anything the user did — and re-confirming an
+unchanged city every 30 days is exactly the round-trip this feature removes. The age is printed so
+the user can notice a stale preset themselves and say so.
+
+**The key whitelist is a security boundary, not typo protection.** `preferences.json` is a plain
+file a user (or anything with write access to the repo) can edit. `load()` drops every key outside
+`ALLOWED_KEYS` and every value of the wrong type, which is what keeps a hand-added
+`{"auto_apply": true}` or `{"skip_gate_7g": true}` from becoming an off switch for 7g. The preset
+schema has **no** field for which jobs to apply to, what greeting to send, or whether to send —
+those live only in 7bc and 7g, in-session, every run. `scripts/test_preferences.py` group [3]
+locks this; if you add a key, that test is the thing that must still pass.
+
+**`-y` is always set in `crawl-args`, and that is not a bypass.** `-y` only suppresses
+`boss_post_interactive.py`'s own stdin prompt, which a Claude-driven run cannot answer anyway (there
+is no terminal attached). Crawling is a read operation. The confirmation that matters is 7g, and no
+preset field reaches it.
+
 ## Important Notes
 
 - `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly. It is also the only source of the three HR-activity columns (`HR活跃度` / `HR在线` / `HR职位`): they come from `zpData.bossInfo` on the detail API, so a crawl without `-d` leaves them empty, the report shows 活跃度未采集, and Stage 7's apply ordering falls back to pure `match_score`
