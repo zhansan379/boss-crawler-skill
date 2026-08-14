@@ -71,9 +71,12 @@ It infers the current stage from the run directory's artifacts and prints the ne
 five times, twice purely because compaction had discarded the earlier read. Consult a reference doc
 only for the *one* section `where_am_i.py` points you at, and read that section, not the whole file.
 
-**Two habits that keep a run cheap.** The 2026-08-13 run took 46 minutes to deliver a single
-application; 65% of that was model inference across 97 round trips. Both rules below exist to keep
-bulk text out of *your* context, because that is what triggers compaction:
+**Three habits that keep a run cheap.** The 2026-08-13 run took 46 minutes to deliver a single
+application; 65% of that was model inference across 97 round trips. The 2026-08-14 run hit context
+compaction mid-way because the main agent read full `qualified_jobs.json` (52 lines with JDs and
+company profiles), `shard_01.md` (190 lines of full JDs), and `resume_1_SmallRig.json` (34 lines of
+optimized resume). All three rules below exist to keep bulk text out of *your* context, because
+that is what triggers compaction:
 
 1. **Fan bulk analysis out to subagents; keep only the verdicts.** Deep-mode Phase 2 is sharded for
    this reason (`scripts/shard_deep_candidates.py`) — N full JDs never enter the main context. When
@@ -81,6 +84,20 @@ bulk text out of *your* context, because that is what triggers compaction:
    payload back.
 2. **Never `Read` a rendered resume image.** Use `scripts/verify_image.py`. One 0.5 MB PNG cost
    638,960 input tokens — 79% of that session's fresh input, in a single tool call.
+3. **Never `Read` full data files — use `read_thin.py` instead.** One `qualified_jobs.json` with
+   full JDs and company descriptions is ~50 lines of context. One `shard_*.md` is ~190 lines. One
+   `profile.json` is ~30 lines. The main agent only needs the "thin" fields: link, company, position,
+   score, verdicts. For everything else, use `python scripts/read_thin.py`:
+
+   ```bash
+   python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → table fields
+   python scripts/read_thin.py {run_dir}/profile.json --kind profile         # → summary stats
+   python scripts/read_thin.py {run_dir}/deep_results.json --kind deep       # → verdicts only
+   ```
+
+   **Shard files (`shard_*.md`) are for sub-agents only.** The main agent never reads them — it
+   dispatches sub-agents, waits for the barrier, and proceeds to `--merge`. The sub-agents' output
+   (`deep_results.json`) is your source of truth; trust it without re-reading the shards.
 
 Drop a timing mark at each stage boundary so the next run can be profiled from a file rather than
 from a session transcript:
@@ -233,9 +250,21 @@ run_dir = create_run_dir()
 # write resume_text.txt into run_dir
 ```
 
-Then read `scripts/prompts/resume_parse.st`, fill in the resume text, and save the structured output
-to `{run_dir}/profile.json`. See
-[references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and
+The resume text now enters your context once (~2-3 KB). That's unavoidable — you need it to write
+the file. But the heavy Claude inference on the full text must NOT happen in the main context.
+**Fan it out to a sub-agent:**
+
+> **Dispatch a sub-agent** (type: general-purpose, no schema needed):
+>
+> 1. Read `{run_dir}/resume_text.txt` and `scripts/prompts/resume_parse.st`
+> 2. Fill the template with the resume text, generate `profile.json`
+> 3. Write `profile.json` to `{run_dir}/profile.json`
+> 4. Reply: `done {run_dir}/profile.json — {skills_count} skills, {experience_count} experiences`
+>
+> The sub-agent handles the full resume text in its own context. You receive only the one-line
+> summary.
+
+See [references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and
 extraction rules.
 
 ### Stage 3.5b: Cross-Validate Profile
@@ -244,12 +273,12 @@ Always run it; it is cheap and almost always ends in one line. See
 [references/resume-parsing.md](references/resume-parsing.md) for the full procedure.
 
 1. Run `python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json`
-2. Claude scans the original resume against the profile for anything the dictionary can't see
-   (projects, experience bullets, awards, the skills paragraph)
-3. Fix whatever either step found, update profile.json
-4. Report in one line and move on. Only spend an `AskUserQuestion` when a correction was
-   *judgement*, not transcription — a skill you added that the resume only implies, a project you
-   merged or split. Exit code 0 plus a clean scan → one line, no question
+2. **If exit 0 and no hints worth reviewing**: done. Report in one line and move on.
+3. **If exit 1 (missing skill) or serious hints**: **dispatch a sub-agent** to cross-validate.
+   The sub-agent reads `resume_text.txt` + `profile.json`, checks for skills/experiences/projects
+   the parse missed or misrepresented, fixes `profile.json` if needed, and replies with a one-line
+   summary of changes. Only escalate to `AskUserQuestion` when the sub-agent flags a *judgement*
+   call (a skill the resume implies but doesn't name, a project it merged or split).
 
 **Do not replace step 1 with self-review.** `validate_profile.py`'s skill check is a dictionary
 lookup (`KNOWN_TECH_TERMS`), so it is the one signal here that is *independent of the model that
@@ -260,6 +289,10 @@ dropped it is the least likely to notice. Step 2 complements the script, it does
 (unmatched project names, unmatched company names, thin skill categories) comes from loose regex and
 exact set-difference, so a wording difference between resume and profile is enough to trigger it.
 Read hints, don't obey them, and don't let one turn into a gate.
+
+**The cross-validation sub-agent keeps the full resume text out of the main context.** The main
+agent never reads `resume_text.txt` or `profile.json` in full. Use `read_thin.py --kind profile`
+if you need to confirm a specific field.
 
 ### Stage 3.5: Infer Crawl Params (path C only)
 
@@ -312,12 +345,14 @@ python scripts/run_matcher.py --mode quick --profile {run_dir}/profile.json --ou
 ```
 
 **Deep mode** — three phases, rule pre-filter + per-job LLM semantic analysis:
+
 ```bash
 # Phase 1: Python pre-filter (N came from Stage 3.5 or the preset — don't re-ask)
 python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top <N> --output-dir {run_dir}
 
-# Phase 2: shard, then dispatch one subagent per shard (never analyze in the main context —
-# N full JDs there is what forced a 167 s compaction). The script prints the dispatch prompts.
+# Phase 2: shard, then dispatch one subagent per shard. The script prints the dispatch prompts.
+# NEVER read shard_*.md files in the main context — they contain full JDs (~190 lines each).
+# The sub-agents read them in their own contexts; you only wait for the barrier.
 python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
 python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360   # timeout: 380000
 
@@ -326,6 +361,15 @@ python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
 ```
 
 Then open the report: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or `start {run_dir}/matching_report.html` (Bash).
+
+**For Stage 7a, use `read_thin.py` to get the job table — never `Read` the full `qualified_jobs.json`:**
+
+```bash
+python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs
+```
+
+This gives you the link, company, position, salary, score, match reasons, and missing items — everything
+you need to display the table and run the 7bc gate. The full JDs and company descriptions stay on disk.
 
 ### Stage 7: Confirm & Apply
 
