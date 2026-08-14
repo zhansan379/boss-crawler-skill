@@ -186,6 +186,11 @@ def find_cities_by_name(city_data, names):
     """
     all_cities = city_data['hot'] + city_data['other']
 
+    # 全国/不限：直接映射到 BOSS 的全国城市代码，无需再问用户确认具体城市
+    NATIONAL_ALIASES = {'不限', '全国', '100010000'}
+    if len(names) == 1 and names[0].strip() in NATIONAL_ALIASES:
+        return [('全国', '100010000')]
+
     # 检查是否全部选择
     if len(names) == 1 and names[0].lower() == 'all':
         return [(c['name'], c['code']) for c in all_cities]
