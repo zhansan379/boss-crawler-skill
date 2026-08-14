@@ -112,6 +112,20 @@ One pair of subagents per confirmed job, all launched in parallel. **Neither sub
 browser** — they return text, and every browser action happens in the main agent (7e, 7h). This is
 what makes unrestricted parallelism safe.
 
+**Parallel means every `Agent` call sits in ONE assistant message.** That single mechanic is the only
+thing that makes them concurrent — a message carrying one `Agent` call blocks until that agent
+returns, so N messages give you N serial agents no matter how many times this file says "parallel".
+Cost is then the *sum* of the agents instead of one cold start plus the slowest.
+
+This has already gone wrong once. In the 2026-08-13 run all 4 tasks (2 greetings + 2 resumes) were
+dispatched one per message: 318 s wall clock, with `generated/` mtimes landing 46 s / 67 s / 41 s
+apart. Parallel would have been ~110-150 s. Note the failure is invisible while it happens — each
+agent looks fast on its own, and only the gap between the 7d/7e marks shows the loss.
+
+**Self-check when the barrier settles:** `generated/` mtimes should be *clustered within seconds*.
+Staggered by tens of seconds ⇒ the dispatch was serial. Report that as serial dispatch, not as a
+"slow" stage — the distinction is the whole difference between a fixable bug and an inherent cost.
+
 Skip rules (from the table in `SKILL.md`): the greeting agent launches only for `AI生成`; the resume
 agent launches for `AI调整` and `不发送`, but not for `自定义上传`.
 
