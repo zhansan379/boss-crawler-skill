@@ -14,6 +14,7 @@
 """
 
 import os
+import sys
 import json
 import re
 import time
@@ -717,6 +718,15 @@ def _auto_apply_jobs_impl(
     Returns:
         投递结果列表
     """
+    # Windows 控制台默认 GBK，打印 emoji 会抛 UnicodeEncodeError；统一重配为 UTF-8。
+    # check_artifacts.py / write_application_md.py 都这么干，本模块此前漏了，导致投递在
+    # 打印 emoji 时崩掉一次。reconfigure 失败（如非标准 stdout）不阻断投递。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
     if not HAS_DRISSION:
         print("错误: DrissionPage 未安装，无法自动投递。pip install DrissionPage")
         return []

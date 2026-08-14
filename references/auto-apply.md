@@ -300,7 +300,7 @@ python scripts/showcv/delete_resumes.py --url <url> --yes \
 the filename minus extension, and duplicates become `名字 (2)`, `(3)` … — which silently breaks the
 name → id resolution that steps 3 and 4 depend on. So write staging copies as
 `{run_dir}/showcv_staging/<company>-<position>__<run-stamp>.md`, with the stamp guaranteeing
-uniqueness, and sanitize `/ \ : * ? " < > |` out of company and position for both the filename and
+uniqueness, and replace `/ \ : * ? " < > |` with `_` in company and position for both the filename and
 the directory name.
 
 **Read the output naming before hunting for missing files**: one resume in `flat` mode downloads as
@@ -322,7 +322,8 @@ Both files that represent the resume itself use one base name, `<姓名>-<应聘
   recruiter sees on the attachment, so do not guess it and do not fall back to a placeholder.
 - **`应聘岗位`** is that job's position title, no company name. Two postings with the same title
   don't collide because they sit in different `<company>-<position>/` directories.
-- Sanitize `/ \ : * ? " < > |` out of both halves, same as for the directory name.
+- Replace `/ \ : * ? " < > |` with `_` in both halves, same as for the directory name (this matches
+  `write_application_md.py`'s `sanitize()` — keep them identical so the three files land in one dir).
 - The `.md` is the same Markdown that was staged for ShowCV — copy it in, don't regenerate it, so the
   image and the Markdown can never disagree.
 
