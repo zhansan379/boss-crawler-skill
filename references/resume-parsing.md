@@ -9,7 +9,10 @@ Claude reads `scripts/prompts/resume_parse.st` and outputs this structure:
     "basic_info": {
         "name": "...", "phone": "...", "email": "...",
         "gender": "男/女", "age": null,
-        "expected_city": "...", "expected_position": "..."
+        "expected_city": "...", "expected_position": "...",
+        "availability": {
+            "can_start": null, "duration": null, "days_per_week": null
+        }
     },
     "education": {
         "school": "...", "degree": "...", "major": "...",
@@ -45,6 +48,7 @@ Claude reads `scripts/prompts/resume_parse.st` and outputs this structure:
 - **highlights**: never merge bullet points; preserve every original bullet with all quantitative metrics (percentages, seconds, counts)
 - **awards / publications / social_links**: must be extracted; use `[]` or `{}` if absent
 - **skills.summary**: preserve the original skills description paragraph verbatim — do not tag-ify or split
+- **basic_info.availability**: `null` unless the resume states it outright. These three (到岗时间 / 可实习时长 / 每周出勤) get written straight into a greeting sent to a real HR, who schedules a desk and a start date around them — so a value inferred from a graduation year or a course load is a broken promise, not a lucky guess. Missing is fine; `greeting.st` has a formula that carries no availability claim, and `test_greeting.py` asserts nothing about 到岗 appears when the field is absent
 
 ## Saving Profile
 

@@ -12,7 +12,12 @@
         "gender": "性别（男/女）",
         "age": "年龄（数字）",
         "expected_city": "期望城市",
-        "expected_position": "期望职位"
+        "expected_position": "期望职位",
+        "availability": {{
+            "can_start": "可到岗时间（原文，如 随时 / 下周一 / 8月23日；简历没写就填 null）",
+            "duration": "可实习时长（原文，如 6个月；简历没写就填 null）",
+            "days_per_week": "每周可出勤天数（原文，如 5天；简历没写就填 null）"
+        }}
     }},
     "education": {{
         "school": "最高学历学校名称",
@@ -84,4 +89,5 @@
 - **publications**：捕获所有学术发表、期刊论文。
 - **social_links**：提取所有个人主页链接。
 - **skills.summary**：保留简历中关于技能描述的原文段落，不要拆成标签。
+- **basic_info.availability**：这三项是「对方会照着安排工位和排期」的承诺，会被直接写进给 HR 的招呼语。简历里没有明确写的一律填 null —— **不要从入学/毕业年份、课程安排或实习经历去推算一个日期**。宁可缺，不能猜。
 - 缺失信息填 null 或空数组 []。请准确提取，不要编造。

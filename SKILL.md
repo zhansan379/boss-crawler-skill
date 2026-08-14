@@ -338,7 +338,7 @@ rendering pipeline, and the directory layout.
 |---|---|
 | **7a** | Display recommended jobs table with match scores and reasons |
 | **7bc** | `AskUserQuestion` — **gate 1**, all three independent questions in **one** call: 投递范围 (which jobs), 招呼语生成方式 (自定义 / 默认 / AI生成), 是否发送图片 (自定义上传 / AI调整 / 不发送) |
-| **7d** | Launch subagents **in parallel, one pair per confirmed job — every `Agent` call in ONE message, or they run serially**. Neither subagent touches a browser |
+| **7d** | Launch subagents **in parallel, one pair per confirmed job — every `Agent` call in ONE message, or they run serially**. Neither subagent touches a browser. Greeting agents get `scripts/prompts/greeting.st` (via `prompts.get_greeting_prompt()`) — don't re-state its rules in the dispatch prompt |
 | **7e** | Render adjusted resumes to flat images — **serial, one batch covering all jobs** (ShowCV) |
 | **7f** | Write `{run_dir}/applications/{company}-{position}/` per job via `python scripts/write_application_md.py "{run_dir}" --all` (all 25 crawled fields + greeting — never hand-write it), then notify the user to review |
 | **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
@@ -353,6 +353,13 @@ two stops (7b then 7c); merging them removes a round-trip from the stage that co
 **7d → 7e → 7f is one uninterrupted batch.** Once 7bc's answers are in, generate, render, and
 archive without stopping to ask anything — the two gates are 7bc and 7g, and a question in between
 turns material preparation into an interrogation. Report once at the end of 7f.
+
+**The first 15 characters of a greeting are the only part most HR ever see.** BOSS's message-list
+preview truncates there, so an opening of `您好，我是…` spends the whole window on nothing. The rules
+and the per-scenario formulas live in `scripts/prompts/greeting.st` (one copy, don't paraphrase);
+`auto_apply.has_wasted_preview(text)` is the one-line check to run on each greeting before 7f,
+including a `自定义` text the user typed — if it fails, say so and offer to re-front-load it, but
+**don't rewrite a user-supplied greeting silently.**
 
 **7g is not mergeable and not presetable.** It is the last thing before an irreversible outward-facing
 action, and it must see the materials that actually landed on disk — so it cannot move earlier, and no

@@ -162,6 +162,7 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `test_deep_shards.py` | Sharding, shard collection (bare arrays, corrupt shards, rank conflicts), the `deep_shards` barrier, and `stage_timer` |
 | `test_crawl_dedup.py` | Run-scoped link dedup across keywords, the ≥80%-duplicate page skip, and `load_job_data()`'s fallback dedup. The load-bearing case is `test_resume_deeper_crawl_not_interrupted`: the skip must key on `run_dups` (seen elsewhere *this run*), never on total `skipped` — a file with 200 existing rows makes page 1 of a deeper re-crawl 100% duplicates, and keying on `skipped` would break out before reaching any new page |
 | `test_preferences.py` | Preset round-trip, `crawl_args()` flag mapping, graceful degradation (missing / corrupt / non-dict file → `{}` → "go ask the user", never a crash), and `age_days`. Group [3] `test_unknown_keys_dropped` is a security lock, not a typo check: it writes `auto_apply` / `send_without_confirm` / `skip_gate_7g` / `greeting` / `jobs` straight into the JSON and asserts `load()` drops them all, that `set(prefs) <= set(ALLOWED_KEYS)`, and that the CLI help exposes no `--auto-apply` / `--send` / `--greeting` / `--jobs` flag. If you add a preset key, this is the test that must still pass |
+| `test_greeting.py` | The greeting rules. Two things it stops from being reverted: (1) the first 15 characters must not be a pleasantry — `has_wasted_preview()` catches `您好，我是…`, which is what the old template opened with and what makes a message invisible in HR's list; (2) 到岗/时长/出勤 must not be invented — a profile with no `availability` (missing key, explicit `null`, or a hand-corrupted non-dict) must produce a greeting containing none of 到岗/可实习/每周/随时 |
 
 ---
 
@@ -190,10 +191,11 @@ Template files (`.st`) — Claude reads and uses directly:
 
 | Template | Purpose |
 |----------|---------|
-| `resume_parse.st` | Resume parsing prompt |
+| `resume_parse.st` | Resume parsing prompt. `basic_info.availability` (到岗时间 / 可实习时长 / 每周出勤) must be `null` unless the resume states it outright — those three go straight into a greeting as a commitment the employer schedules around, so inferring one from a graduation year is a broken promise, not a guess |
 | `job_analysis.st` | Job requirement analysis prompt |
 | `match_analysis.st` | Match analysis prompt (deep mode Phase 2) |
 | `resume_optimize.st` | Resume optimization prompt |
+| `greeting.st` | 7d's greeting prompt (`AI生成` branch). Holds the whole writing standard: the **first-15-character** rule (BOSS's message-list preview shows only that much, so it is a headline, not a greeting), the per-scenario formulas for those 15 characters, quantified-results-over-self-assessment, the 校招-vs-社招 split on whether to mention 出勤 at all, and the no-fabrication rule for 到岗/时长/出勤. Load via `prompts.get_greeting_prompt()`; this file is the single copy of these rules |
 
 ---
 

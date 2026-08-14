@@ -98,7 +98,9 @@ first "so the next question can mention the count", write the count into the gre
 description instead — it is available from 7a's table.
 
 **`自定义` greeting is one text for every selected job**, supplied via the "Other" field. Per-job
-custom text is not offered — that is what `AI生成` plus 7g's 返回修改 is for.
+custom text is not offered — that is what `AI生成` plus 7g's 返回修改 is for. Run
+`has_wasted_preview()` on it too and mention it if the first 15 characters are a pleasantry, but
+**do not rewrite what the user typed** — offer, don't edit.
 
 **`自定义上传` needs a valid path**, so validate before fanning out in 7d:
 
@@ -155,6 +157,11 @@ to see it afterwards was parsing a 30 MB JSONL.
 
 ### Greeting agent contract
 
+**The prompt lives in `scripts/prompts/greeting.st`** — load it via
+`resume_matcher.prompts.get_greeting_prompt(job, name=…, resume_summary=…, match_reasons=…,
+availability=…, scene_hint=…)`. Do not restate its rules in the dispatch prompt: the writing
+guidance used to be a 5-row table right here, which meant two places to edit and one to forget.
+
 Input: the job's row from the match results (company, position, JD, match reasons), plus
 `profile.json`. Output: the greeting text only — no commentary.
 
@@ -162,21 +169,24 @@ Input: the job's row from the match results (company, position, JD, match reason
 returning it** (`{i}` is the job's 1-based index in `qualified_jobs.json`). The file is the artifact;
 the return value is only a convenience. See 「7d→7e 交接」 for why.
 
-**5-Paragraph Greeting Structure:**
+**The first 15 characters are the whole game.** BOSS Zhipin's message list preview shows only the
+first 15 characters (punctuation and brackets included), and that is what an HR scans in a screen of
+unread threads to decide whether to open yours. So those 15 characters are a headline, not a
+greeting — `您好，我是张三，我对贵司…` spends the entire preview on nothing. The per-scenario formulas
+(internship → availability date first; 社招 → years + one hard number; 校招 → cohort + school) are in
+the template. `auto_apply.has_wasted_preview(text)` is the cheap check: it returns True when the
+preview still starts with a pleasantry, and is worth running on each agent's output before 7f.
 
-| Paragraph | Content | Source |
-|-----------|---------|--------|
-| Opening | "您好，我是{name}，对贵公司「{position}」感兴趣" | `profile.basic_info` |
-| Education + experience | "毕业于{school}，{degree}（{major}），{years}年经验" | `profile.education` + `profile.experience` |
-| Skills match | "熟练掌握{skills}，与岗位要求高度匹配" | `highlight` + JD-overlapping skills |
-| Project highlights | "曾主导{project}，具备落地经验" | `optimization_points` project achievements |
-| Closing | "希望能有机会进一步沟通，期待您的回复！" | Fixed |
+**Three things the agent must never invent: 到岗日期, 可实习时长, 每周出勤.** These are commitments
+the employer schedules a desk and a start date around — a wrong one is a broken promise, not a
+wording problem. They come only from `basic_info.availability`, which `resume_parse.st` fills with
+`null` unless the resume states them outright. When absent, the template falls back to a formula that
+carries no availability claim. Same rule as always for skills and numbers: only what the resume says.
 
-**Rules:**
-
-- Keep under 300 characters (BOSS Zhipin chat limit)
-- Only use skills and experience actually in the resume — never fabricate
-- Prioritize skills that appear in the JD
+**Also scenario-dependent: whether to mention 出勤 at all.** For 校招 (signing a 三方 / full-time on
+graduation) mentioning "每周3天" reads as "still has classes, unstable" and gets an instant reject —
+the template spells out which scenario wants it and which forbids it. `scene_hint` is a hint from the
+caller, not an override; the agent may correct it from the resume.
 
 ### Resume agent contract
 

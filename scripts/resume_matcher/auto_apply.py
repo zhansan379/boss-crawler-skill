@@ -84,6 +84,83 @@ CSS_FILE_INPUT = "css:input[type='file']"
 XPATH_SEND_RESUME = "//span[contains(text(),'发简历')]"
 
 
+# BOSS 直聘消息列表的预览框只显示前 15 个字（含标点）。HR 是在一屏几十条未读里扫
+# 这 15 个字决定点不点开，所以它是标题、不是开场白 —— 「您好，我是XXX」开头等于把
+# 整个预览框让给客套话，HR 划过去看不到任何有效信息。
+#
+# 分场景的前 15 字公式（实习看到岗时间、社招看成果数字、校招看学校奖项）在
+# prompts/greeting.st 里，那是 AI 模式的口径。这里只做模板模式能做的那件机械事：
+# 把事实顶到最前面，问候语挪到 15 字之后。改口径时两处一起改。
+PREVIEW_LEN = 15
+
+# 出现在开头就等于浪费预览框的词。
+_WASTED_OPENERS = ('您好', '你好', '我是', '我对', '还招', '虽然', '尊敬的', '贵公司', '贵司')
+
+
+def preview(text: str) -> str:
+    """消息在 HR 列表里露出的那一截。"""
+    return (text or '').strip().replace('\n', '')[:PREVIEW_LEN]
+
+
+def has_wasted_preview(text: str) -> bool:
+    """前 15 个字是不是被客套话占掉了。自检用，也给招呼语子智能体的产物做校验。"""
+    return preview(text).startswith(_WASTED_OPENERS)
+
+
+def _lead(profile: ResumeProfile, key_skills: List[str]) -> str:
+    """拼前 15 个字：只用简历里确有的事实，按场景把最硬的一条顶到最前面。
+
+    到岗日期 / 可实习时长 / 每周出勤这三样，是对方会照着安排工位和排期的**承诺**，
+    简历没写就不能替用户猜一个 —— 猜错了是失信，不是文案问题。所以只在
+    basic_info.availability 里明确给了才用，否则退到年限/学校/技能的公式。
+    """
+    avail = (profile.basic_info or {}).get('availability')
+    if not isinstance(avail, dict):
+        avail = {}
+    can_start = str(avail.get('can_start') or '').strip()
+    duration = str(avail.get('duration') or '').strip()
+    days = str(avail.get('days_per_week') or '').strip()
+
+    edu = profile.education or {}
+    school = str(edu.get('school') or '').strip()
+    degree = str(edu.get('degree') or '').strip()
+    grad = str(edu.get('graduation_year') or '').strip()
+    top = key_skills[0] if key_skills else ''
+
+    # `or 0` 而非 get 的默认值：应届简历里 total_years 是显式 null（见本文件 142 行）
+    try:
+        years = int(float(profile.experience.get('total_years') or 0))
+    except (TypeError, ValueError):
+        years = 0
+
+    # 实习岗：到岗时间 > 时长/出勤 > 学校。实习生技能大多差不多，HR 最怕招到随时
+    # 跑路的人，谁能最快补上缺口谁占先 —— 学校只在极好时才值得占这 15 个字。
+    if can_start:
+        return f"【{can_start}到岗】{school or degree}"
+    if duration or days:
+        parts = []
+        if duration:
+            parts.append(f"可实习{duration}")
+        if days:
+            parts.append(f"周{days}")
+        return "/".join(parts) + (f" {school}" if school and len("/".join(parts)) < 10 else "")
+
+    if years > 0:                                  # 社招：年限 + 最匹配的那项技能
+        lead = f"{years}年{top}经验" if top else f"{years}年工作经验"
+    elif grad and school:                          # 校招：届别 + 学校学历
+        lead = f"{grad[-2:]}届{school}{degree}"
+    elif top:                                      # 兜底：技能顶上去，也比「您好」强
+        lead = f"{top}方向"
+    else:
+        return ""
+
+    # 预览框还有空位就再塞一项技能，但必须整个塞得进 15 个字 —— 被截断的半个技能名
+    # （「/Pyt」）比留白更难读，那还不如让「，应聘「」自然占掉尾巴。
+    if top and top not in lead and len(lead) + 1 + len(top) <= PREVIEW_LEN:
+        lead = f"{lead}/{top}"
+    return lead
+
+
 def generate_greeting(
     profile: Optional[ResumeProfile] = None,
     job: Optional[Dict[str, Any]] = None,
@@ -147,13 +224,18 @@ def generate_greeting(
     # 构建招呼语
     lines = []
 
-    # 开头
-    lines.append(f"您好，我是{name}，对贵公司的「{position}」岗位非常感兴趣。")
+    # 开头 —— 事实顶到最前面，问候语跟在后面。顺序是有意的：这一行的前 15 个字
+    # 就是 HR 在列表里唯一看得到的东西。
+    lead = _lead(profile, key_skills)
+    if lead:
+        lines.append(f"{lead}，应聘「{position}」。您好，我是{name}。")
+    else:
+        lines.append(f"您好，我是{name}，应聘贵公司「{position}」。")
 
     # 学历 + 专业
     lines.append(f"我毕业于{school}，{degree}学历（{major}专业），有{exp_desc}开发经验。")
 
-    # 技能匹配
+    # 技能匹配 —— 点名 JD 里的关键词，证明不是海投
     if key_skills:
         skills_str = "、".join(key_skills[:6])
         lines.append(f"技术栈方面，熟练掌握{skills_str}，与岗位要求高度匹配。")
@@ -162,8 +244,9 @@ def generate_greeting(
     if relevant_project:
         lines.append(f"曾主导{relevant_project}，具备实际落地经验。")
 
-    # 收尾
-    lines.append("希望能有机会进一步沟通，期待您的回复！")
+    # 收尾 —— 委婉请求发简历，留沟通空间。不用「期待您的回复！」：那句放在任何
+    # 岗位上都成立，等于没说。
+    lines.append("已附简历，方便看一下吗？")
 
     greeting = "\n".join(lines)
 
@@ -282,18 +365,29 @@ def _pick_relevant_project(projects: List[Dict], job: Dict[str, Any]) -> Optiona
 
 
 def _default_greeting(job: Optional[Dict[str, Any]] = None) -> str:
-    """默认招呼语"""
+    """默认招呼语（连 profile 都没有时的兜底）
+
+    没有简历事实可用，就把岗位名顶到最前面 —— 至少预览框里露出的是「应聘XXX」，
+    HR 知道你在说哪个岗，而不是一句 15 个字的客套话。
+    """
     position = job.get('职位', '该岗位') if job else '该岗位'
-    return f"您好，我对「{position}」非常感兴趣。我的技术背景与该岗位高度匹配，希望能有机会进一步沟通。期待您的回复！"
+    return (
+        f"应聘「{position}」，技术背景与岗位要求匹配。"
+        f"您好，我看到贵公司这个岗位，已附简历，方便看一下吗？"
+    )
 
 
 def _compact_greeting(greeting: str, name: str, position: str, skills: List[str]) -> str:
-    """精简招呼语到 300 字以内"""
+    """精简招呼语到 300 字以内
+
+    同样保持事实前置。原来这里硬编码了「AI应用项目落地经验」—— 那是从某次实跑里
+    带出来的领域词，投任何非 AI 岗都会变成一句假话，已去掉。
+    """
     skills_str = "、".join(skills[:4])
+    head = f"熟练{skills_str}" if skills_str else "技术栈匹配"
     return (
-        f"您好，我是{name}，对贵公司的「{position}」岗位非常感兴趣。"
-        f"我的技术栈（{skills_str}）与岗位要求高度匹配，且有完整的AI应用项目落地经验。"
-        f"希望能有机会进一步沟通，期待您的回复！"
+        f"{head}，应聘「{position}」，与岗位要求高度匹配。"
+        f"您好，我是{name}，已附简历，方便看一下吗？"
     )
 
 
