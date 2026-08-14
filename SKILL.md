@@ -49,15 +49,15 @@ Progress:
 - [ ] Stage 1: Check preset (`preferences.py show`) → crawl jobs (paths A, C)
 - [ ] Stage 2-3: Read resume file → parse → profile.json
 - [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
-- [ ] Stage 3.5: Infer crawl params (path C, no preset) — ONE question: city+keywords+mode+TopN
+- [ ] Stage 3.5: Infer crawl params (path C, no preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模
 - [ ] Stage 4-6: Match analysis (mode/TopN already known) → report written and opened
 - [ ] Stage 7: 7bc one question (jobs+greeting+image) → parallel generation → 7g gate → apply
 ```
 
-**Three stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
-interaction round-trips. The stops that remain: the resume file path, one merged parameter question
-(skipped entirely when a preset exists), 7bc, and 7g. **7g is never removed** — it is the only thing
-in front of an irreversible action.
+**Four stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
+interaction round-trips. The stops that remain: the resume file path, the Stage 3.5 confirmation
+(two batched `AskUserQuestion` calls — skipped entirely when a preset exists), 7bc, and 7g. **7g is
+never removed** — it is the only thing in front of an irreversible action.
 
 **Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
 state.** Ask the filesystem instead:
@@ -206,11 +206,12 @@ Exit 0 → **do not ask.** State the parameters and their age in one line, then 
 script printed:
 
 ```
-用上次的参数（74 天前存的）：太原 / AI应用开发,Python / deep / Top10，开始爬取。
+用上次的参数（74 天前存的）：太原 / AI应用开发,Python / deep / Top10 / 应届生·本科，开始爬取。
 ```
 
 Presets never expire — the age is reported so the user can interrupt, not so you can gate on it.
-Exit 1 → no preset, take the merged question in Stage 3.5, then save the answer.
+Exit 1 → no preset, take the two confirmation questions in Stage 3.5 (core + filters), then save the
+answer.
 
 This is the single biggest saving for a returning user: the 2026-08-14 run stopped to ask 6 times,
 and Stage 1 plus the two gates burned 12 minutes (30% of the run) mostly on interaction round-trips.
@@ -302,18 +303,34 @@ Claude maps resume fields to crawl parameters. See [references/resume-parsing.md
 in 太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
 And spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
 
-Confirm with **one** `AskUserQuestion` that asks everything decidable at this moment — **city,
-keywords, matching mode (quick/deep), and deep's Top-N** — in a single call. All four are known
-before the crawl starts and none constrains the others, so asking them separately costs three extra
-round-trips for nothing. First option = the full inferred set, labelled recommended, so accepting is
-one click.
+Confirm in **two** `AskUserQuestion` calls. One call is capped at 4 questions, so the eight
+params split as:
+
+1. **爬取与匹配核心** — city, keywords (multi-select), matching mode (quick/deep), and deep's Top-N.
+   All four are known before the crawl starts and none constrains the others, so one call.
+2. **列表筛选** — experience (应届/不限), job type (校招/实习/社招), salary floor, and company scale.
+   Also four questions in one call. First option in each is the candidate-appropriate default, so
+   accepting is one click; leave a filter empty to skip it (crawl unfiltered on that axis).
+
+Splitting is deliberate: eight questions will not fit one `AskUserQuestion`, and the four filters
+are independent of the four core params — none constrains the others, so batching each set into one
+call still saves the round-trips. The filters are optional and all-first-option-accept is a fast path.
 
 Then save it, so the next run skips this entirely:
 
 ```bash
 python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
-      --match-mode deep --top 10 --count 20 --degree 本科
+      --match-mode deep --top 10 --count 20 --degree 本科 \
+      --experience "应届生" --job-type 实习,全职 --salary "5-10K"
 ```
+
+The four filter flags (`--experience` / `--job-type` / `--salary` / `--scale`) are optional — omit any
+you want left unfiltered. Accepted values are the Chinese labels in `boss_crawler/config.py`
+(`EXPERIENCE_MAP` / `JOB_TYPE_MAP` / `SALARY_MAP` / `SCALE_MAP`), e.g. `应届生`, `实习`, `5-10K`.
+They map straight onto the crawler's `-e -j -s --scale` flags. Note there is **no `校招` job-type code**
+(`JOB_TYPE_MAP` is 全职/实习/兼职) — an unknown value is warned about and skipped by
+`resolve_filter_values`, so don't put one in. `不限` is likewise skipped (means "no filter on that axis"),
+so prefer omitting the flag to passing `不限`.
 
 **Skip this whole stage when `preferences.py show` exited 0.** The saved parameters were confirmed by
 the user in an earlier run — re-confirming them is the round-trip this preset exists to remove.
@@ -334,7 +351,7 @@ confirmation itself.
 **Do not call `generate_html_report()` yourself.** It already runs inside the script, and after a CLI
 run you don't hold the `classification` object it needs anyway.
 
-**Do not ask for the mode or Top-N here.** Both arrived with Stage 3.5's merged question or the saved
+**Do not ask for the mode or Top-N here.** Both arrived with Stage 3.5's confirmation or the saved
 preset (`match_mode`, `top_n`). Asking again is the duplicate round-trip this consolidation removed.
 Only ask if neither source has them. See [references/matching.md](references/matching.md) for mode
 details, scoring dimensions, and classification logic.
