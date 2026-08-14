@@ -23,6 +23,7 @@ Stage 1 一次不用问，这是回访路径上最大的一笔省时。
 
 用法：
   python scripts/preferences.py show          # 有预设 → 打印 + 退出 0；没有 → 退出 1
+  python scripts/preferences.py missing       # 预设缺了哪些可补问字段；有缺失 → 退出 1
   python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
         --match-mode deep --top 10 --degree 本科 --count 20
   python scripts/preferences.py crawl-args    # 打印 boss_post_interactive.py 的完整命令
@@ -67,6 +68,18 @@ LABELS = {
     'degree': '学历', 'experience': '经验', 'salary': '薪资',
     'job_type': '工作类型', 'scale': '公司规模',
 }
+
+# 「预设存在、但缺了这些可选字段时，主代理应当问用户」的字段集。
+# Stage 3.5 正常会问这些；预设存在时若缺失，说明上一轮没填 —— 不能当「不筛选」静默放行，
+# 薪资/规模/最低岗位数尤其如此。必填核心（cities/keywords/mode/count）不在此列：它们缺了
+# 不是「补问」而是「等于没有可用预设」，由 show 的退出码和 crawl-args 各自兜底。
+ASKABLE_IF_MISSING = ('match_mode', 'top_n', 'degree', 'experience',
+                      'salary', 'scale', 'job_type', 'min_count')
+
+
+def missing_fields(prefs, fields=ASKABLE_IF_MISSING):
+    """预设里缺失的可补问字段名列表（按 fields 顺序）。缺值即算缺失。"""
+    return [f for f in fields if not prefs.get(f)]
 
 
 def _split(value):
@@ -266,6 +279,26 @@ def cmd_show(_args):
     return 0
 
 
+def cmd_missing(_args):
+    """打印预设缺失的可补问字段。有缺失 → 退出 1（主代理据此去问用户）。
+
+    show 只回答「有没有预设」；missing 回答「预设差了什么」。预设存在但某字段
+    缺失时，主代理不能当「不筛选」静默放行 —— 薪资/规模/最低岗位数这类本应被
+    确认的值，缺了就该问。字段名打到 stdout（每行一个），说明打到 stderr，
+    退出码 1 给主代理分支。
+    """
+    prefs = load()
+    missing = missing_fields(prefs)
+    if not missing:
+        print('[完整] 预设覆盖了所有可补问字段')
+        return 0
+    for key in missing:
+        print(key)
+    print('[缺失] 以上 %d 个字段未存于预设，主代理应询问用户并合并回预设'
+          % len(missing), file=sys.stderr)
+    return 1
+
+
 def cmd_save(args):
     for value in (args.keywords or '') + (args.city or ''):
         if '"' in value:
@@ -323,6 +356,7 @@ def build_parser():
     subs = parser.add_subparsers(dest='command')
 
     subs.add_parser('show', help='打印预设；无预设时退出码 1').set_defaults(func=cmd_show)
+    subs.add_parser('missing', help='打印预设缺失的可补问字段；有缺失时退出码 1').set_defaults(func=cmd_missing)
 
     p_save = subs.add_parser('save', help='保存预设（覆盖式）')
     p_save.add_argument('--city', '-c', action='append', help='城市，可重复或逗号分隔')

@@ -93,6 +93,36 @@ def test_show_exit_codes():
     check('有预设 → 退出 0', preferences.main(['show']) == 0)
 
 
+# ==================== 2b. missing：预设缺字段 → 主代理该问 ====================
+
+def test_missing_fields():
+    """预设存在但缺字段时，missing 要报出来（退出 1），好让主代理补问而不是静默放行。"""
+    print('\n[2b] missing —— 预设缺失的可补问字段')
+    import preferences
+
+    preferences.clear()
+    check('没有预设 → 全部可补问字段缺失',
+          preferences.main(['missing']) == 1)
+
+    # 只填核心：cities/keywords 不在可补问集里，所以 missing 应报其余全部
+    preferences.save(cities='太原', keywords='Python', count=20, mode='custom')
+    missing = preferences.missing_fields(preferences.load())
+    check('核心字段不算缺失',
+          'cities' not in missing and 'keywords' not in missing
+          and 'mode' not in missing and 'count' not in missing, missing)
+    check('薪资/规模/最低岗位数被报为缺失',
+          all(k in missing for k in ('salary', 'scale', 'min_count')), missing)
+    check('有缺失 → missing 子命令退出 1',
+          preferences.main(['missing']) == 1)
+
+    # 补上全部可补问字段 → 退出 0
+    preferences.save(cities='太原', keywords='Python', count=20, mode='custom',
+                     match_mode='deep', top_n=10, degree='本科', experience='应届生',
+                     salary='5-10K', scale='100-499', job_type='全职', min_count=10)
+    check('全部覆盖 → 退出 0', preferences.main(['missing']) == 0)
+    check('missing_fields 返回空', preferences.missing_fields(preferences.load()) == [])
+
+
 # ==================== 3. 白名单：安全边界 ====================
 
 def test_unknown_keys_dropped():
@@ -231,6 +261,7 @@ def main():
     try:
         test_roundtrip()
         test_show_exit_codes()
+        test_missing_fields()
         test_unknown_keys_dropped()
         test_bad_types_dropped()
         test_crawl_args()

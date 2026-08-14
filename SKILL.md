@@ -5,13 +5,19 @@ description: Crawls BOSS Zhipin job listings via DrissionPage, parses resumes, m
 
 # BOSS Zhipin Job Crawling & Matching
 
+> **⚠️ 语言强制要求（最高优先级）**：本 skill 面向中文用户。所有对用户的输出——包括提问（AskUserQuestion 的 question/header/option 文案）、说明、进度、报告、确认、错误提示——**一律使用简体中文**。术语、命令、脚本名、文件路径、代码片段可保留英文；除此之外的用户可见文本必须为中文。与用户的任何对话都不允许用英文正文。
+
 Integrates job crawling (DrissionPage + Chrome CDP), resume parsing (Claude), job matching (rule-based pre-filter + LLM deep analysis), HTML reporting, auto-apply, and an embedded Markdown resume editor into one end-to-end workflow.
 
 All scripts live under `scripts/` relative to this skill directory.
 
 ## Path Selection
 
-Four entry paths. Choose based on what data the user already has:
+**Always ask the user to choose a path at the start of every invocation** — one `AskUserQuestion`
+offering A/B/C/D/E. Do not auto-select from a saved preset or from whatever data happens to be on
+disk; a preset supplies parameters *after* a path is chosen, it is not a license to skip this
+question. A returning user who wants the preset picks E; someone who picks A/C goes through Stage 3.5
+fresh (the preset pre-fills those questions as one-click defaults). Five entry paths:
 
 | Path | When | Flow |
 |------|------|------|
@@ -19,12 +25,18 @@ Four entry paths. Choose based on what data the user already has:
 | **B: Match-existing** | Already have job CSVs | Parse resume → Match → Report → Apply |
 | **C: Resume-driven** ✨ | Have resume, want precision | Parse resume → Infer params → Crawl → Match → Report → Apply |
 | **D: Editor-only** | No resume file yet, wants to write or edit one | Launch resume editor → **stop there** |
+| **E: Preset-replay** | Want to re-run with the saved preset, no re-declaring | `show` → `missing` (ask & merge absent fields) → Crawl → Parse resume → Match → Report → Apply |
 
 **Path C is recommended** for matching: the resume tells you what to search — skills, expected city, salary range. Crawled jobs are naturally aligned with the candidate's background, yielding higher match rates than guessing keywords.
 
 **Path D terminates at launch.** It opens the editor and reports the URL — nothing else. Don't chain it into matching on your own. It commonly serves as a precursor: the user writes a resume in the editor, exports a PDF, then re-enters at path A/B/C. If they'd rather skip the PDF round-trip, the editor's stored Markdown can feed Stage 3 directly — see [references/resume-editor.md](references/resume-editor.md) — but only do that when the user asks.
 
-> **Confirmation rule**: for paths A/B/C, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7bc (which jobs) and 7g (approve the generated materials). Never apply without both.
+**Path E is the preset path.** Pick it when you want to reuse the saved params instead of re-declaring
+them. It runs `preferences.py show`, then `preferences.py missing` — any askable field absent from the
+preset (薪资/规模/最低岗位数 and their siblings) is asked and merged back before crawling. If `show`
+finds no preset, fall back to path A's fresh-param flow rather than erroring.
+
+> **Confirmation rule**: for paths A/B/C/E, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7bc (which jobs) and 7g (approve the generated materials). Never apply without both.
 >
 > **Presets never reach these gates.** `assets/preferences.json` covers crawl and matching parameters
 > only — it has no field for which jobs, what greeting, or whether to send, and `load()` drops any key
@@ -45,21 +57,23 @@ Copy this checklist and check off items as you complete them:
 
 ```
 Progress:
+- [ ] Path selection: ask the user to choose A/B/C/D/E (always, even with a preset)
 - [ ] Stage 0: Launch resume editor (path D — terminal step)
-- [ ] Stage 1: Check preset (`preferences.py show`) → crawl jobs (paths A, C)
+- [ ] Stage 1: Check preset (`preferences.py show` + `missing`) → crawl jobs (paths A, C, E)
 - [ ] Stage 2-3: Read resume file → parse → profile.json
 - [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
-- [ ] Stage 3.5: Infer crawl params (path C, no preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模, then + (3) 最低岗位数量
+- [ ] Stage 3.5: Infer crawl params (paths A/C, not E; E reuses the preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模, then + (3) 最低岗位数量
 - [ ] Stage 1b check: read crawl_summary.json → if written < min_count, stop & ask (换关键词/放宽/接受)
 - [ ] Stage 4-6: Match analysis (mode/TopN already known) → report written and opened
 - [ ] Stage 7: 7bc one question (jobs+greeting+image) → parallel generation → 7g gate → apply
 ```
 
-**Four stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
-interaction round-trips. The stops that remain: the resume file path, the Stage 3.5 confirmation
-(two batched `AskUserQuestion` calls + a small `min_count` follow-up — all skipped when a preset
-exists), the Stage 1b `min_count` floor check (only when written < the floor), 7bc, and 7g. **7g is
-never removed** — it is the only thing in front of an irreversible action.
+**Five stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
+interaction round-trips. The stops that remain: the path-selection question (always asked, even with
+a preset), the resume file path, the Stage 3.5 confirmation (two batched `AskUserQuestion` calls + a
+small `min_count` follow-up — skipped when path E reuses the preset), the Stage 1b `min_count` floor
+check (only when written < the floor), 7bc, and 7g. **7g is never removed** — it is the only thing in
+front of an irreversible action.
 
 **Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
 state.** Ask the filesystem instead:
@@ -198,22 +212,37 @@ locally. Unlike `/export`, a missing `id` is never taken to mean "the current re
 
 Two-phase CLI approach. See [references/crawl-commands.md](references/crawl-commands.md) for the full parameter table and more examples.
 
-**Phase 0 — Check for a saved preset. Do this first, before asking anything.**
+**Phase 0 — Check for a saved preset.** This is where path E consumes the preset: the user already
+chose E at entry, so here the saved params are reused instead of re-asked. (For paths A/C this phase
+is skipped as a gate — the preset merely pre-fills Stage 3.5's batched questions as one-click
+defaults, and the user still confirms them.)
 
 ```bash
 python scripts/preferences.py show      # exit 0 = preset found, exit 1 = none
 ```
 
-Exit 0 → **do not ask.** State the parameters and their age in one line, then run the command the
-script printed:
+Exit 0 → a preset exists — but first check whether it is missing any askable field:
+
+```bash
+python scripts/preferences.py missing   # prints keys absent from the preset; exit 1 = some missing
+```
+
+- **`missing` exits 1** (prints keys) → ask the user about **exactly those fields** and merge the
+  answers back with `preferences.py save` before crawling. `show` only answers "is there a preset";
+  it cannot see that a preset exists yet lacks 薪资/规模/最低岗位数. Those are confirm-worthy values,
+  so a preset missing them must not silently run unfiltered — `missing` is the signal that surfaces
+  them. (Required core — cities/keywords/mode/count — is not in this set; if those are gone the
+  preset is effectively absent and `crawl-args` refuses to emit a command.)
+- **`missing` exits 0** (complete) → do not ask. State the parameters and their age in one line,
+  then run the command the script printed:
 
 ```
 用上次的参数（74 天前存的）：太原 / AI应用开发,Python / deep / Top10 / 应届生·本科，开始爬取。
 ```
 
 Presets never expire — the age is reported so the user can interrupt, not so you can gate on it.
-Exit 1 → no preset, take the two confirmation questions in Stage 3.5 (core + filters) plus the
-`min_count` follow-up, then save the answer.
+Exit 1 from `show` → no preset, take the two confirmation questions in Stage 3.5 (core + filters)
+plus the `min_count` follow-up, then save the answer.
 
 This is the single biggest saving for a returning user: the 2026-08-14 run stopped to ask 6 times,
 and Stage 1 plus the two gates burned 12 minutes (30% of the run) mostly on interaction round-trips.
