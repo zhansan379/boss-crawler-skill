@@ -24,12 +24,81 @@ Crawl logic split into independent modules. Import via `from boss_crawler import
 | `check_page_status(page, response)` | `auth` | Composite page status: `need_login`/`no_data`/`normal`/`verify` |
 | `crawl_jobs_by_query(dp, ...)` | `crawler` | Keyword-based paginated crawl |
 | `crawl_jobs_by_position(dp, ...)` | `crawler` | Category-code-based paginated crawl |
-| `crawl_job_details(dp, ...)` | `crawler` | Batch detail page crawl |
+| `crawl_job_details(dp, ...)` | `crawler` | Batch detail page crawl. Backfills JD, company info, and the three HR-activity columns |
+| `init_csv_file(path)` | `data_loader` | Write header, or rewrite an older header to the current `CSV_FIELDS` (see below) |
 | `run_crawl_cli(args)` | `crawler` | CLI mode full crawl flow |
 | `parse_args()` | `cli` | CLI argument parsing |
-| `load_position_data()` | `data_loader` | Load position category JSON |
-| `load_city_data()` | `data_loader` | Load city list JSON |
+| `load_position_data()` | `data_loader` | Load position category JSON (auto-inits on first use, see below) |
+| `load_city_data()` | `data_loader` | Load city list JSON (auto-inits on first use, see below) |
 | `update_json_data()` | `data_loader` | Online update of position and city data |
+
+### First-Use Auto-Init
+
+`post_data.json` / `weizhi.json` are not in the repo — they are fetched from zhipin.com. When either is
+missing or corrupt, the loader calls `update_json_data()` once and re-reads, so a fresh clone crawls
+without a manual `--update-data` step.
+
+The retry is capped at **one browser launch per process** (`_auto_init_done`). If the file is still
+unreadable afterwards the loader returns the same empty structure as before (`{}` /
+`{'hot': [], 'other': []}`) and tells the user to run `--update-data` by hand — a second launch would
+only re-hit whatever network or API problem broke the first one.
+
+### CSV Schema
+
+The CSV is the contract between crawler and matcher, so `CSV_FIELDS` is duplicated in
+`boss_crawler/config.py` and `resume_matcher/config.py` and **must stay byte-identical** — the
+matcher reads columns by name and silently sees empty strings for any it doesn't know about.
+
+```python
+CSV_FIELDS = [
+    'link', '职位', '城市', '区域', '商圈', '地址', '公司', '薪资', '经验', '学历',
+    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
+    '已失效', '代招',
+    'HR活跃度', 'HR在线', 'HR职位', 'HR姓名', 'HR公司',
+]
+```
+
+`地址`, `已失效`, `代招`, `公司信息` and all five `HR*` columns come from the detail API
+(`zpData.jobInfo` / `brandComInfo` / `bossInfo`) and are empty without `-d`. `已失效` / `代招` /
+`HR在线` are tri-state via `_tri_state()`: `'是'` / `'否'` / `''` where empty means **未采集**, not
+`否`. `HR公司` is the HR's own employer and can differ from `公司` — that combination (or `代招=是`)
+means a headhunter posting.
+
+**Only append** new columns at the end: the crawl phase writes rows in `'a'` append mode, so
+`init_csv_file` migrates an existing file's header to this exact order before any row is written.
+Without that migration, new 25-column rows would land under an old 20-column header and shift
+silently. Old CSVs stay readable — `csv.DictWriter(restval='')` and `DictReader` yield `''` for
+absent columns, which renders as 未采集.
+
+### Adding a Job Field
+
+A job is rebuilt once on its way from the CSV (Chinese column names) to the frontend (ASCII keys).
+**`scoring.build_job_view()` is the only place that enumerates job fields** — add new fields there
+and every output path picks them up:
+
+```
+CSV (中文列名)
+  ├─ quick mode → classify_jobs_advanced
+  │    ├─ tiers_to_classification ─→ generate_html_report → matching_report.html
+  │    └─ generate_bauhaus_json ────→ job_classification.json
+  └─ deep mode  → deep_analysis ────→ both of the above
+                        ↑
+              all three call build_job_view()
+```
+
+`build_job_view(job, fallback_category, *, company_info_len, jd_len, overrides)` reads both Chinese
+and ASCII keys, so it accepts a raw CSV row or an already-mapped job. Callers that computed their
+own values (deep mode's blended score) pass them via `overrides`; the JSON output only narrows the
+truncation lengths.
+
+This used to be **three independent whitelists** — one per path. Adding a field meant editing all
+three, and missing one silently dropped it on that path with no error. HR activity was lost exactly
+this way: the JSON was correct while every HTML card read 活跃度未采集 despite the data being
+collected — worse than not showing it at all. `scripts/test_job_view.py` now locks the invariant:
+
+```bash
+python scripts/test_job_view.py   # asserts both artifacts carry identical, complete field sets
+```
 
 ### Python API Example
 
@@ -59,12 +128,12 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| Config/dataclasses | `resume_matcher/config.py` | Constants + `ResumeProfile`, `JobRequirements`, `MatchResult`, `JobClassification`, `DifficultyPrediction` |
-| Utilities | `resume_matcher/utils.py` | `parse_education_level()`, `parse_experience_years()`, `parse_salary_range()`, `parse_company_size()`, `ensure_output_dir()` |
-| File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()` |
+| Config/dataclasses | `resume_matcher/config.py` | Constants + `ResumeProfile`, `JobClassification` |
+| Utilities | `resume_matcher/utils.py` | `parse_experience_years()`, `parse_company_size()`, `ensure_output_dir()`, `print_header()`, `print_section()` |
+| File parsers | `resume_matcher/parsers.py` | `parse_resume_file()`, `parse_pdf()`, `parse_docx()`, `parse_plain_text()` |
 | Prompts | `resume_matcher/prompts.py` | `load_prompt()`, `get_resume_parse_prompt()`, `get_job_analysis_prompt()`, `get_match_analysis_prompt()`, `get_optimize_prompt()` |
 | Data loading | `resume_matcher/data_loader.py` | `list_available_job_files()`, `load_job_data()` |
-| Scoring | `resume_matcher/scoring.py` | `analyze_job_requirements_quick()`, `score_job_advanced()` (6 dimensions), `classify_jobs_advanced()` (4 tiers), `predict_difficulty()` |
+| Scoring | `resume_matcher/scoring.py` | `score_job_advanced()` (6 dimensions, 0-115), `classify_jobs_advanced()` (4 tiers), `compute_difficulty()`, `tiers_to_classification()`, `build_job_view()` (the only field mapper), `hr_activity_rank()` / `hr_activity_sort_key()` (sort only, never scored) |
 | HTML report | `resume_matcher/report.py` | `generate_html_report()`, `generate_bauhaus_json()` |
 | Auto-apply | `resume_matcher/auto_apply.py` | `auto_apply_jobs()` |
 | Templates | `resume_matcher/templates/report.html` | HTML report template (dual-theme CSS) |
@@ -76,6 +145,43 @@ Resume matching toolkit. No external LLM API dependency. Import via `from resume
 | `boss_post_interactive.py` | Crawler CLI entry point (thin wrapper over `boss_crawler/`) |
 | `run_matcher.py` | Matching pipeline entry point (`--mode quick\|deep`) |
 | `validate_profile.py` | Cross-validation: diff raw resume vs profile.json |
+| `check_artifacts.py` | 7d→7e barrier: verify each subagent's artifact landed in `generated/`. Exit 1 + names on any miss. Use this instead of waiting on completion notifications, which are not guaranteed to arrive. **Defaults to `--wait 360`** — a missing artifact is not proof the agent is dead (a 47 s snapshot once caused a duplicate dispatch), and 0-byte files don't count as landed. `--kinds deep_shards` checks the Phase-2 shard results instead, with an extra JSON-parse gate so a half-written file counts as not-ready |
+| `shard_deep_candidates.py` | Deep mode Phase 2: split `deep_candidates.json` into self-contained prompt shards (`deep_shards/shard_NN.md`, 4 candidates each) for parallel subagents. Each shard carries the grading rules, resume summary and its own JDs, so an agent reads one file and nothing else; `raw_text` is excluded and long JDs are truncated at `--max-jd`. Keeps N full JDs out of the main context — that was the cause of the `preTokens=167,609` compaction. Prints the dispatch prompts, the barrier command, and the merge command |
+| `stage_timer.py` | Stage timing telemetry → `{run_dir}/run_timings.jsonl`. `mark` records a boundary (for stages Claude drives, where no single script wraps the work), `span`/the `stage()` context manager records a measured block and still writes on exception (`status=error`). `report` prints a duration ranking plus the gaps between marks. Exists so the next optimization reads a file instead of forensically parsing a session transcript |
+| `write_application_md.py` | 7f: write `applications/<公司>-<岗位>/岗位信息+招呼语.md` with all 25 crawled fields + the greeting. Re-reads the original crawl CSV by `link`, because `build_job_view()` drops `区域` `商圈` `领域` `性质` `位置` `地址` `已失效` `代招` `HR姓名` `HR公司` and truncates `公司信息` / JD. Flags 已失效 and 代招 岗位 with a banner. Exit 1 when a job's CSV row can't be found |
+| `verify_image.py` | Check a rendered resume PNG in ~8 lines of numbers: blank/solid detection, content-row count, bottom-margin overrun, and a cross-check against the sibling `.md`. **Use this instead of `Read` on the image** — one 0.5 MB PNG cost 639k input tokens (79% of a whole session's fresh input) and forced a compaction. `--all` sweeps an `applications/` tree |
+| `where_am_i.py` | Infer the current stage from the run directory's artifacts and print the next commands in ~500 chars. The recovery move after a context compaction — reconstructing state by re-reading the 25k-char `auto-apply.md` is what made that run expensive. Read-only, always exits 0 |
+| `preferences.py` | Crawl/matching parameter preset at `assets/preferences.json` (`show` / `save` / `crawl-args` / `clear`). Stage 1 Phase 0 runs `show` and branches on the exit code (1 = none), so a returning user skips Stage 3.5's question entirely — the largest single time saving for a repeat run. One preset, overwrite on save, never expires (`show` just reports its age). `load()` drops any key outside `ALLOWED_KEYS` and any wrong-typed value: the file is hand-editable, and that whitelist is what stops `{"auto_apply": true}` from becoming an off switch for the 7g gate. There is deliberately no field for jobs, greeting, or send |
+
+### Tests
+
+| Script | Covers |
+|--------|--------|
+| `test_job_view.py` | `build_job_view()` field parity against `CSV_FIELDS` |
+| `test_null_profile.py` | JSON nulls in `profile.json` (`salary_expectation`, `total_years`, and per-category `skills`). All four paths crash on `get(key, default)` because the key *exists* with a null value — the rule is `or`, never the second arg to `get` |
+| `test_deep_shards.py` | Sharding, shard collection (bare arrays, corrupt shards, rank conflicts), the `deep_shards` barrier, and `stage_timer` |
+| `test_crawl_dedup.py` | Run-scoped link dedup across keywords, the ≥80%-duplicate page skip, and `load_job_data()`'s fallback dedup. The load-bearing case is `test_resume_deeper_crawl_not_interrupted`: the skip must key on `run_dups` (seen elsewhere *this run*), never on total `skipped` — a file with 200 existing rows makes page 1 of a deeper re-crawl 100% duplicates, and keying on `skipped` would break out before reaching any new page |
+| `test_preferences.py` | Preset round-trip, `crawl_args()` flag mapping, graceful degradation (missing / corrupt / non-dict file → `{}` → "go ask the user", never a crash), and `age_days`. Group [3] `test_unknown_keys_dropped` is a security lock, not a typo check: it writes `auto_apply` / `send_without_confirm` / `skip_gate_7g` / `greeting` / `jobs` straight into the JSON and asserts `load()` drops them all, that `set(prefs) <= set(ALLOWED_KEYS)`, and that the CLI help exposes no `--auto-apply` / `--send` / `--greeting` / `--jobs` flag. If you add a preset key, this is the test that must still pass |
+| `test_greeting.py` | The greeting rules. Two things it stops from being reverted: (1) the first 15 characters must not be a pleasantry — `has_wasted_preview()` catches `您好，我是…`, which is what the old template opened with and what makes a message invisible in HR's list; (2) 到岗/时长/出勤 must not be invented — a profile with no `availability` (missing key, explicit `null`, or a hand-corrupted non-dict) must produce a greeting containing none of 到岗/可实习/每周/随时 |
+
+---
+
+## showcv/ Scripts
+
+Embedded ShowCV Markdown resume editor (path D / Stage 0). Standalone CLI scripts — run as
+scripts, not modules. Full documentation in [resume-editor.md](resume-editor.md).
+
+| Script | Purpose |
+|--------|---------|
+| `showcv/serve.py` | Static server for `app/` with SPA fallback; prints `SHOWCV_READY <url>` |
+| `showcv/launch.py` | Opens isolated Chromium (port 9333, profile `assets/showcv_profile/`) and verifies load |
+| `showcv/storage.py` | Resume data `dump`/`load`/`move` between origins and disk |
+| `showcv/import_md.py` | Batch-import `.md` files as resumes (standalone stage, on request only) |
+| `showcv/export_images.py` | Export resumes as PNG/zip via the `/export` direct link |
+| `showcv/delete_resumes.py` | Delete resumes via `/delete`; backs up first, needs `--yes` |
+| `showcv/sync_app.py` | Re-sync `app/` from a ShowCV repo `dist/` (upgrade only) |
+| `showcv/_browser.py` | Shared browser connection logic, incl. real-profile resolution |
+| `showcv/_resumes.py` | Shared resume list reader + `--id`/`--name` → id resolution |
 
 ---
 
@@ -85,10 +191,11 @@ Template files (`.st`) — Claude reads and uses directly:
 
 | Template | Purpose |
 |----------|---------|
-| `resume_parse.st` | Resume parsing prompt |
+| `resume_parse.st` | Resume parsing prompt. `basic_info.availability` (到岗时间 / 可实习时长 / 每周出勤) must be `null` unless the resume states it outright — those three go straight into a greeting as a commitment the employer schedules around, so inferring one from a graduation year is a broken promise, not a guess |
 | `job_analysis.st` | Job requirement analysis prompt |
 | `match_analysis.st` | Match analysis prompt (deep mode Phase 2) |
 | `resume_optimize.st` | Resume optimization prompt |
+| `greeting.st` | 7d's greeting prompt (`AI生成` branch). Holds the whole writing standard: the **first-15-character** rule (BOSS's message-list preview shows only that much, so it is a headline, not a greeting), the per-scenario formulas for those 15 characters, quantified-results-over-self-assessment, the 校招-vs-社招 split on whether to mention 出勤 at all, and the no-fabrication rule for 到岗/时长/出勤. Load via `prompts.get_greeting_prompt()`; this file is the single copy of these rules |
 
 ---
 
@@ -101,10 +208,24 @@ All outputs under `assets/<timestamp>/`:
 | `profile.json` | Structured resume parse result |
 | `resume_text.txt` | Raw resume text (for cross-validation) |
 | `deep_candidates.json` | Deep mode Phase 1 output: top N candidates |
-| `deep_results.json` | Deep mode Phase 2 output: Claude's per-job analysis |
+| `deep_shards/shard_NN.md` | Deep mode Phase 2: self-contained prompt for one parallel subagent |
+| `deep_shards/result_NN.json` | Deep mode Phase 2: that subagent's analysis, keyed by `rank` |
+| `deep_results.json` | Deep mode Phase 2 output: all per-job analyses, collected from the shards by the merge step |
+| `run_timings.jsonl` | Per-stage timings (`stage_timer.py`); `report` ranks them |
 | `scored_jobs.json` | Full job rule-scoring results (quick mode) |
 | `job_classification.json` | Structured classification result |
 | `matching_report.html` | HTML visualization report |
 | `resume_{company}_{position}.md` | Per-job optimized resume |
 | `apply_log.json` | Auto-apply record |
 | `LATEST.txt` (in `assets/`) | Pointer to most recent run timestamp |
+
+Not run outputs, but also under `assets/` (both gitignored):
+
+| Path | Description |
+|------|-------------|
+| `chrome_user_data/` | BOSS Zhipin login state (persists across runs) |
+| `showcv_profile/` | Resume editor's Chrome profile — **the resumes live in here** (~28MB) |
+| `showcv-resume.json` | Default `storage.py dump` target |
+| `showcv_exports/` | Default `export_images.py` download directory |
+| `showcv_backups/` | Automatic pre-delete backups from `delete_resumes.py` |
+

@@ -64,20 +64,13 @@ def get_latest_run_dir(base_dir: Optional[str] = None) -> Optional[str]:
         return os.path.abspath(run_dir)
     return None
 
-# CSV字段（与爬虫脚本一致）
+# CSV字段（与 boss_crawler/config.py 的 CSV_FIELDS 必须逐字一致）
 CSV_FIELDS = [
-    'link', '职位', '城市', '区域', '商圈', '公司', '薪资', '经验', '学历',
-    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息'
+    'link', '职位', '城市', '区域', '商圈', '地址', '公司', '薪资', '经验', '学历',
+    '领域', '性质', '规模', '技能标签', '福利标签', '位置', '岗位要求和职责', '公司信息',
+    '已失效', '代招',
+    'HR活跃度', 'HR在线', 'HR职位', 'HR姓名', 'HR公司'
 ]
-
-# 投递难度预测权重
-DIFFICULTY_WEIGHTS = {
-    'education': 0.25,
-    'experience': 0.30,
-    'skills': 0.25,
-    'company_size': 0.15,
-    'salary': 0.05
-}
 
 
 # ==================== 数据类定义 ====================
@@ -96,40 +89,6 @@ class ResumeProfile:
     salary_expectation: Dict[str, Any] = field(default_factory=dict)
     keywords: List[str] = field(default_factory=list)
     raw_text: str = ""
-
-
-@dataclass
-class JobRequirements:
-    """岗位要求分析结果"""
-    required_education: str = "不限"
-    required_experience_years: int = 0
-    required_skills: List[str] = field(default_factory=list)
-    preferred_skills: List[str] = field(default_factory=list)
-    other_requirements: List[str] = field(default_factory=list)
-    salary_range: Dict[str, int] = field(default_factory=dict)
-    company_size: str = "中厂"
-    key_keywords: List[str] = field(default_factory=list)
-
-
-@dataclass
-class MatchResult:
-    """匹配分析结果"""
-    education_match: Dict[str, Any] = field(default_factory=dict)
-    experience_match: Dict[str, Any] = field(default_factory=dict)
-    skills_match: Dict[str, Any] = field(default_factory=dict)
-    overall_match: int = 0
-    classification: str = ''  # 'cannot_apply', 'need_optimization', 'qualified'
-    classification_reason: str = ''
-    missing_items: List[str] = field(default_factory=list)
-    optimization_points: List[str] = field(default_factory=list)
-
-
-@dataclass
-class DifficultyPrediction:
-    """投递难度预测"""
-    difficulty_level: str = '中'  # '易', '中', '难'
-    factors: Dict[str, int] = field(default_factory=dict)
-    total_score: int = 0
 
 
 @dataclass

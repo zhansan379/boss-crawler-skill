@@ -344,6 +344,17 @@ nav {
 .tag-difficulty-medium { background: var(--primary-yellow); }
 .tag-difficulty-hard { background: var(--primary-red); color: white; }
 
+/* HR 活跃度：爬取瞬间的快照，后端 hr_activity_rank 分档，前端只查表 */
+.tag-hr-online { background: #00897B; color: white; border-color: #00897B; }
+.tag-hr-high { background: #B2DFDB; }
+.tag-hr-low { background: var(--muted); }
+.tag-hr-unknown { background: transparent; color: var(--border); border-style: dashed; }
+
+/* 投递建议分类：后端 application_category 字段直出，前端不做任何运算 */
+.tag-category-qualified { background: #1B5E20; color: white; border-color: #1B5E20; }
+.tag-category-need_optimization { background: #E65100; color: white; border-color: #E65100; }
+.tag-category-cannot_apply { background: #616161; color: white; border-color: #424242; }
+
 .tag-size-big { background: #FFEBEE; color: #C62828; border-color: #EF5350; }
 .tag-size-medium { background: var(--muted); }
 .tag-size-small { background: #E8F5E9; color: #2E7D32; border-color: #66BB6A; }
@@ -571,7 +582,8 @@ footer {
             </div>
             <div style="font-size:0.85rem;line-height:1.6;color:#444;">
                 <strong>匹配度</strong>：<span id="scoreRangeLabel">6维度综合评分 (0-115分)</span>，越高越匹配<br>
-                <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分
+                <strong>难度</strong>：Easy(易) / Medium(中) / Hard(难)，基于综合评分<br>
+                <strong>投递建议</strong>：可直接投递 / 优化后投递 / 不可投递，由后端按硬门槛裁定（学历、经验、薪资），不由分数换算
             </div>
         </div>
         <div style="margin-top: 2rem; display: flex; gap: 1rem;">
@@ -691,7 +703,14 @@ const IS_DEEP_MODE = ANALYSIS_MODE === 'deep';
 // ========================================
 // Initialization
 // ========================================
-(function init() {
+// ⚠ init 必须延迟执行，不能写成 (function init(){...})()。
+//   原因：本脚本里的 CATEGORY_LABELS 等是 `var` 声明，位置在 init 之后。
+//   var 只提升声明不提升赋值，所以立即执行的 init 里读到的是 undefined，
+//   getCategoryClass() 会抛 TypeError；该异常未被捕获会中断整个 <script>，
+//   导致后面的赋值语句全部不执行、岗位列表整体空白。
+//   （2026-08-13 实测复现：CATEGORY_LABELS 为 undefined，可投递/需优化计数恒为 0）
+//   实际调用见脚本末尾的 bootstrap 段。
+function init() {
     if (!REPORT_DATA || !REPORT_DATA.statistics) {
         showLoadingError();
         return;
@@ -699,8 +718,12 @@ const IS_DEEP_MODE = ANALYSIS_MODE === 'deep';
     classificationData = REPORT_DATA;
     renderData(REPORT_DATA);
     lucide.createIcons();
+    bindStaticHandlers();
+}
+
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
-document.addEventListener('DOMContentLoaded', function() {
+// init 已在 DOMContentLoaded 之后运行，这里直接绑定，不能再套一层 DOMContentLoaded
+function bindStaticHandlers() {
     // 导航链接
     document.querySelectorAll('.nav-link[href^="#"]').forEach(function(link) {
         link.addEventListener('click', function(e) {
@@ -714,9 +737,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (statsBtn && statsBtn.textContent.includes('查看结果')) {
         statsBtn.addEventListener('click', function() { scrollToSection('stats'); });
     }
-});
-
-})();
+}
 
 function showLoadingError() {
     document.getElementById('resumeCard').innerHTML =
@@ -913,7 +934,9 @@ function renderJobList(sectionId, jobs) {
             '<div class="job-position">' + escapeHtml(job.position) + '</div>' +
             '</div></div>' +
             '<div class="job-meta">' +
+            '<span class="job-tag ' + getCategoryClass(job.application_category) + '">' + escapeHtml(getCategoryLabel(job.application_category)) + '</span>' +
             '<span class="job-tag ' + getDifficultyClass(job.difficulty) + '">' + escapeHtml(job.difficulty || 'Medium') + '</span>' +
+            renderHrTag(job) +
             '<span class="job-tag">' + escapeHtml(job.salary || '') + '</span>' +
             (job.scale ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.scale) + '</span>' : (job.company_size ? '<span class="job-tag ' + getSizeClass(job.company_size) + '">🏢 ' + escapeHtml(job.company_size) + '</span>' : (job.company_info ? '<span class="job-tag" style="background:var(--muted);">🏢 ' + escapeHtml(job.company_info.substring(0, 30)) + '</span>' : ''))) +
             (job.city ? '<span class="job-tag">📍 ' + escapeHtml(job.city) + '</span>' : '') +
@@ -921,6 +944,12 @@ function renderJobList(sectionId, jobs) {
             welfareHtml +
             '</div>' +
             '<div class="job-details" id="job-' + job.job_id + '">' +
+            '<div class="detail-section">' +
+            '<div class="detail-title">投递建议</div>' +
+            '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(getCategoryLabel(job.application_category)) +
+            (job.application_category_reason ? ' —— ' + escapeHtml(job.application_category_reason) : '') +
+            '</p>' +
+            '<p style="font-weight:500;padding-left:1rem;">' + hrDetailLine(job) + '</p></div>' +
             '<div class="detail-section">' +
             '<div class="detail-title">分类原因</div>' +
             '<p style="font-weight:500;padding-left:1rem;">' + escapeHtml(job.classification_reason || '') + '</p></div>' +
@@ -976,6 +1005,67 @@ function getDifficultyClass(difficulty) {
     return '';
 }
 
+// ── HR 活跃度：纯查表渲染 ──
+// 分档由后端 hr_activity_rank 给出（scoring.py），前端只挑颜色和文案。
+// rank === null 表示未采集：爬取时没加 -d，详情 API 没被调用过。
+// 这必须显示成「未采集」而不是「不活跃」—— 两者对投递决策的含义完全不同。
+function renderHrTag(job) {
+    var rank = job.hr_activity_rank;
+    var desc = job.hr_active_desc || '';
+    var title = job.hr_title ? ' · ' + job.hr_title : '';
+
+    if (rank === null || rank === undefined) {
+        return '<span class="job-tag tag-hr-unknown" title="爬取时未加 -d，未采集活跃度">'
+            + '👤 活跃度未采集</span>';
+    }
+
+    var cls, icon;
+    if (job.hr_online === '是') { cls = 'tag-hr-online'; icon = '🟢 在线'; }
+    else if (rank >= 60) { cls = 'tag-hr-high'; icon = '🟡'; }
+    else { cls = 'tag-hr-low'; icon = '⚪'; }
+
+    var text = (job.hr_online === '是' && desc) ? (icon + '·' + desc)
+             : (desc ? icon + ' ' + desc : icon + ' 活跃度未知');
+
+    return '<span class="job-tag ' + cls + '" title="爬取瞬间的快照'
+        + escapeHtml(title) + '">' + escapeHtml(text) + '</span>';
+}
+
+// 展开区的一行说明，让活跃度出现在决策上下文里而不只是个角落标签。
+// 明确写出「快照」和采集时间的不确定性 —— 在线状态到投递时通常已经过期。
+function hrDetailLine(job) {
+    var rank = job.hr_activity_rank;
+    if (rank === null || rank === undefined) {
+        return '👤 HR 活跃度：未采集（爬取时未使用 <code>-d</code>，投递排序将退化为按匹配分）';
+    }
+    var parts = [];
+    if (job.hr_active_desc) parts.push(escapeHtml(job.hr_active_desc));
+    if (job.hr_online === '是') parts.push('爬取时在线');
+    else if (job.hr_online === '否') parts.push('爬取时离线');
+    if (job.hr_title) parts.push('招聘者身份：' + escapeHtml(job.hr_title));
+    return '👤 HR 活跃度：' + (parts.join('，') || '未知')
+        + '（爬取瞬间快照，实时状态可能已变化）';
+}
+
+// ── 投递建议分类：纯查表渲染 ──
+// application_category 由后端裁定，前端只负责查表显示。
+// 调整阈值请改 scoring.py 的 QUALIFIED_MIN_SKILLS / CANNOT_APPLY_* 常量，
+// 此处无需同步修改。
+var CATEGORY_LABELS = {
+    qualified: '✅ 可直接投递',
+    need_optimization: '⚡ 优化后投递',
+    cannot_apply: '⛔ 不可投递'
+};
+
+function getCategoryLabel(category) {
+    return (CATEGORY_LABELS || {})[category] || '待定';
+}
+
+function getCategoryClass(category) {
+    // 容错：即使 CATEGORY_LABELS 尚未赋值也只是丢个样式，不能抛异常整页空白
+    return (CATEGORY_LABELS || {})[category] ? 'tag-category-' + category : '';
+}
+
 function getSizeClass(size) {
     if (size === '大厂') return 'tag-size-big';
     if (size === '中厂') return 'tag-size-medium';
@@ -1001,6 +1091,16 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
+// ========================================
+// Bootstrap —— 必须放在脚本最末尾
+// ========================================
+// 到 DOMContentLoaded 时整段内联脚本已执行完毕，所有 var 赋值均已生效。
+// 若脚本被后置注入（readyState 已过 loading），此处也已在文件末尾，同样安全。
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
 </script>
 </body>
 </html>

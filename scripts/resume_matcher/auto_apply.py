@@ -14,13 +14,30 @@
 """
 
 import os
+import sys
 import json
+import re
 import time
 import random
-from typing import List, Dict, Any, Optional
+import functools
+from typing import List, Dict, Any, Optional, Union
 
 from .config import ResumeProfile, OUTPUT_DIR, get_latest_run_dir, create_run_dir
 from .utils import ensure_output_dir
+from .scoring import hr_activity_rank, hr_activity_sort_key
+
+# 计时埋点：stage_timer 在 scripts/ 下（本模块是 scripts/resume_matcher/）。
+# 导入失败一律退化成不计时，绝不影响投递。
+try:
+    import stage_timer
+except ImportError:                                          # pragma: no cover
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    try:
+        import stage_timer
+    except ImportError:
+        stage_timer = None
 
 # 尝试导入浏览器自动化库
 try:
@@ -68,6 +85,83 @@ CSS_FILE_INPUT = "css:input[type='file']"
 XPATH_SEND_RESUME = "//span[contains(text(),'发简历')]"
 
 
+# BOSS 直聘消息列表的预览框只显示前 15 个字（含标点）。HR 是在一屏几十条未读里扫
+# 这 15 个字决定点不点开，所以它是标题、不是开场白 —— 「您好，我是XXX」开头等于把
+# 整个预览框让给客套话，HR 划过去看不到任何有效信息。
+#
+# 分场景的前 15 字公式（实习看到岗时间、社招看成果数字、校招看学校奖项）在
+# prompts/greeting.st 里，那是 AI 模式的口径。这里只做模板模式能做的那件机械事：
+# 把事实顶到最前面，问候语挪到 15 字之后。改口径时两处一起改。
+PREVIEW_LEN = 15
+
+# 出现在开头就等于浪费预览框的词。
+_WASTED_OPENERS = ('您好', '你好', '我是', '我对', '还招', '虽然', '尊敬的', '贵公司', '贵司')
+
+
+def preview(text: str) -> str:
+    """消息在 HR 列表里露出的那一截。"""
+    return (text or '').strip().replace('\n', '')[:PREVIEW_LEN]
+
+
+def has_wasted_preview(text: str) -> bool:
+    """前 15 个字是不是被客套话占掉了。自检用，也给招呼语子智能体的产物做校验。"""
+    return preview(text).startswith(_WASTED_OPENERS)
+
+
+def _lead(profile: ResumeProfile, key_skills: List[str]) -> str:
+    """拼前 15 个字：只用简历里确有的事实，按场景把最硬的一条顶到最前面。
+
+    到岗日期 / 可实习时长 / 每周出勤这三样，是对方会照着安排工位和排期的**承诺**，
+    简历没写就不能替用户猜一个 —— 猜错了是失信，不是文案问题。所以只在
+    basic_info.availability 里明确给了才用，否则退到年限/学校/技能的公式。
+    """
+    avail = (profile.basic_info or {}).get('availability')
+    if not isinstance(avail, dict):
+        avail = {}
+    can_start = str(avail.get('can_start') or '').strip()
+    duration = str(avail.get('duration') or '').strip()
+    days = str(avail.get('days_per_week') or '').strip()
+
+    edu = profile.education or {}
+    school = str(edu.get('school') or '').strip()
+    degree = str(edu.get('degree') or '').strip()
+    grad = str(edu.get('graduation_year') or '').strip()
+    top = key_skills[0] if key_skills else ''
+
+    # `or 0` 而非 get 的默认值：应届简历里 total_years 是显式 null（见本文件 142 行）
+    try:
+        years = int(float(profile.experience.get('total_years') or 0))
+    except (TypeError, ValueError):
+        years = 0
+
+    # 实习岗：到岗时间 > 时长/出勤 > 学校。实习生技能大多差不多，HR 最怕招到随时
+    # 跑路的人，谁能最快补上缺口谁占先 —— 学校只在极好时才值得占这 15 个字。
+    if can_start:
+        return f"【{can_start}到岗】{school or degree}"
+    if duration or days:
+        parts = []
+        if duration:
+            parts.append(f"可实习{duration}")
+        if days:
+            parts.append(f"周{days}")
+        return "/".join(parts) + (f" {school}" if school and len("/".join(parts)) < 10 else "")
+
+    if years > 0:                                  # 社招：年限 + 最匹配的那项技能
+        lead = f"{years}年{top}经验" if top else f"{years}年工作经验"
+    elif grad and school:                          # 校招：届别 + 学校学历
+        lead = f"{grad[-2:]}届{school}{degree}"
+    elif top:                                      # 兜底：技能顶上去，也比「您好」强
+        lead = f"{top}方向"
+    else:
+        return ""
+
+    # 预览框还有空位就再塞一项技能，但必须整个塞得进 15 个字 —— 被截断的半个技能名
+    # （「/Pyt」）比留白更难读，那还不如让「，应聘「」自然占掉尾巴。
+    if top and top not in lead and len(lead) + 1 + len(top) <= PREVIEW_LEN:
+        lead = f"{lead}/{top}"
+    return lead
+
+
 def generate_greeting(
     profile: Optional[ResumeProfile] = None,
     job: Optional[Dict[str, Any]] = None,
@@ -99,20 +193,23 @@ def generate_greeting(
     company = job.get('公司', '')
 
     # 提取核心技能匹配
-    skills = profile.skills
+    # `or []` 逐项兜底：某类技能为空时值是 null 而非缺键，get 的默认值不生效，
+    # None + list 直接 TypeError 带崩招呼语生成（同本文件 128 行的坑）
+    skills = profile.skills or {}
     all_skills = (
-        skills.get('programming', [])
-        + skills.get('frameworks', [])
-        + skills.get('tools', [])
-        + skills.get('other', [])
+        (skills.get('programming') or [])
+        + (skills.get('frameworks') or [])
+        + (skills.get('tools') or [])
+        + (skills.get('other') or [])
     )
 
     # 提取关键技能词（取前 5 个最有辨识度的）
     key_skills = _pick_key_skills(all_skills, job)
 
     # 提取相关项目经验
-    projects = profile.experience.get('companies', []) + profile.projects
-    relevant_project = _pick_relevant_project(projects, job)
+    # 只看 projects：experience.companies 的 name 是公司名，
+    # 套进下面「曾主导 XX」的句式会变成病句
+    relevant_project = _pick_relevant_project(profile.projects, job)
 
     # 学历
     education = profile.education
@@ -120,20 +217,26 @@ def generate_greeting(
     major = education.get('major', '')
     school = education.get('school', '')
 
-    # 经验年限
-    total_years = profile.experience.get('total_years', 0)
+    # 经验年限 —— 用 `or` 兜底：应届简历里 total_years 是 null 而非缺键，
+    # get 的默认值不生效，`None > 0` 直接 TypeError（同 scoring.py:674 的坑）
+    total_years = profile.experience.get('total_years') or 0
     exp_desc = f"{total_years}年" if total_years > 0 else "实习"
 
     # 构建招呼语
     lines = []
 
-    # 开头
-    lines.append(f"您好，我是{name}，对贵公司的「{position}」岗位非常感兴趣。")
+    # 开头 —— 事实顶到最前面，问候语跟在后面。顺序是有意的：这一行的前 15 个字
+    # 就是 HR 在列表里唯一看得到的东西。
+    lead = _lead(profile, key_skills)
+    if lead:
+        lines.append(f"{lead}，应聘「{position}」。您好，我是{name}。")
+    else:
+        lines.append(f"您好，我是{name}，应聘贵公司「{position}」。")
 
     # 学历 + 专业
     lines.append(f"我毕业于{school}，{degree}学历（{major}专业），有{exp_desc}开发经验。")
 
-    # 技能匹配
+    # 技能匹配 —— 点名 JD 里的关键词，证明不是海投
     if key_skills:
         skills_str = "、".join(key_skills[:6])
         lines.append(f"技术栈方面，熟练掌握{skills_str}，与岗位要求高度匹配。")
@@ -142,8 +245,9 @@ def generate_greeting(
     if relevant_project:
         lines.append(f"曾主导{relevant_project}，具备实际落地经验。")
 
-    # 收尾
-    lines.append("希望能有机会进一步沟通，期待您的回复！")
+    # 收尾 —— 委婉请求发简历，留沟通空间。不用「期待您的回复！」：那句放在任何
+    # 岗位上都成立，等于没说。
+    lines.append("已附简历，方便看一下吗？")
 
     greeting = "\n".join(lines)
 
@@ -155,27 +259,43 @@ def generate_greeting(
 
 
 def _pick_key_skills(all_skills: List[str], job: Dict[str, Any]) -> List[str]:
-    """从技能列表中选出与岗位最相关的关键词"""
-    jd = job.get('岗位要求和职责', '') + job.get('技能标签', '')
-    jd_lower = jd.lower()
+    """从技能列表中选出与岗位最相关的关键词
 
-    # 优先选择 JD 中出现的技能
+    排序依据（依次）：
+      1. 技能标签命中 > 岗位职责正文命中 > 未命中
+      2. 在 JD 中首次出现的位置越靠前，说明越是核心要求
+      3. 简历中的原始顺序（稳定排序，简历自己的优先级）
+    """
+    tags = job.get('技能标签', '') or ''
+    body = job.get('岗位要求和职责', '') or ''
+    tags_lower = tags.lower()
+    jd_lower = (tags + body).lower()
+
     scored = []
-    for skill in all_skills:
+    for idx, skill in enumerate(all_skills):
         if not skill or len(skill) < 2:
             continue
-        score = 0
-        if skill.lower() in jd_lower:
-            score = 100  # JD 提及
-        if len(skill) <= 15 and not skill.startswith("传统") and "开发" not in skill:
-            scored.append((score, skill))
+        if len(skill) > 15 or skill.startswith("传统") or "开发" in skill:
+            continue
 
-    scored.sort(key=lambda x: (-x[0], len(x[1])))
+        s = skill.lower()
+        if s in tags_lower:
+            score = 200          # 招聘方自己打的标签，最能代表岗位画像
+        elif s in jd_lower:
+            score = 100
+        else:
+            score = 0
+
+        # 未命中的技能没有位置信息，排到最后
+        pos = jd_lower.find(s) if score else len(jd_lower)
+        scored.append((-score, pos, idx, skill))
+
+    scored.sort()
 
     # 去重优先，取前 8 个
     seen = set()
     result = []
-    for _, s in scored:
+    for _, _, _, s in scored:
         if s.lower() not in seen:
             seen.add(s.lower())
             result.append(s)
@@ -185,23 +305,58 @@ def _pick_key_skills(all_skills: List[str], job: Dict[str, Any]) -> List[str]:
     return result
 
 
+_TOKEN_RE = re.compile(r'[A-Za-z][A-Za-z0-9+#.]*|[一-龥]{2,}')
+
+
+def _tokenize(text: str) -> List[str]:
+    """把中英文混排文本切成可匹配的词元
+
+    英文按连续字母数字串切；中文没有分词库，用 2-4 字滑动窗口，
+    足以覆盖「向量检索」「推荐系统」这类技术名词。
+    """
+    tokens = []
+    for m in _TOKEN_RE.finditer(text or ''):
+        t = m.group()
+        if t[0].isascii():
+            if len(t) >= 2:
+                tokens.append(t.lower())
+        else:
+            for n in (4, 3, 2):
+                for i in range(len(t) - n + 1):
+                    tokens.append(t[i:i + n])
+    return tokens
+
+
 def _pick_relevant_project(projects: List[Dict], job: Dict[str, Any]) -> Optional[str]:
-    """选出与岗位最相关的项目名"""
-    jd = job.get('岗位要求和职责', '') + job.get('职位', '')
+    """选出与岗位最相关的项目名
+
+    按命中的**不同词元数**打分，技术栈命中权重更高（技术栈是硬匹配，
+    项目描述里的词更可能是巧合）。
+    """
+    jd = (
+        (job.get('技能标签', '') or '')
+        + (job.get('岗位要求和职责', '') or '')
+        + (job.get('职位', '') or '')
+    )
     jd_lower = jd.lower()
 
     best = None
     best_score = 0
 
     for proj in projects:
-        name = proj.get('name', '')
-        desc = proj.get('description', '') if isinstance(proj, dict) else ''
-        tech_stack = ' '.join(proj.get('tech_stack', [])) if isinstance(proj, dict) else ''
+        if not isinstance(proj, dict):
+            continue
+        name = proj.get('name', '') or ''
+        desc = proj.get('description', '') or ''
+        tech_stack = proj.get('tech_stack', []) or []
 
         score = 0
-        for word in name + desc + tech_stack:
-            if word.lower() in jd_lower:
+        for token in set(_tokenize(name + ' ' + desc)):
+            if token in jd_lower:
                 score += 1
+        for tech in tech_stack:
+            if tech and str(tech).lower() in jd_lower:
+                score += 3
 
         if score > best_score:
             best_score = score
@@ -211,18 +366,29 @@ def _pick_relevant_project(projects: List[Dict], job: Dict[str, Any]) -> Optiona
 
 
 def _default_greeting(job: Optional[Dict[str, Any]] = None) -> str:
-    """默认招呼语"""
+    """默认招呼语（连 profile 都没有时的兜底）
+
+    没有简历事实可用，就把岗位名顶到最前面 —— 至少预览框里露出的是「应聘XXX」，
+    HR 知道你在说哪个岗，而不是一句 15 个字的客套话。
+    """
     position = job.get('职位', '该岗位') if job else '该岗位'
-    return f"您好，我对「{position}」非常感兴趣。我的技术背景与该岗位高度匹配，希望能有机会进一步沟通。期待您的回复！"
+    return (
+        f"应聘「{position}」，技术背景与岗位要求匹配。"
+        f"您好，我看到贵公司这个岗位，已附简历，方便看一下吗？"
+    )
 
 
 def _compact_greeting(greeting: str, name: str, position: str, skills: List[str]) -> str:
-    """精简招呼语到 300 字以内"""
+    """精简招呼语到 300 字以内
+
+    同样保持事实前置。原来这里硬编码了「AI应用项目落地经验」—— 那是从某次实跑里
+    带出来的领域词，投任何非 AI 岗都会变成一句假话，已去掉。
+    """
     skills_str = "、".join(skills[:4])
+    head = f"熟练{skills_str}" if skills_str else "技术栈匹配"
     return (
-        f"您好，我是{name}，对贵公司的「{position}」岗位非常感兴趣。"
-        f"我的技术栈（{skills_str}）与岗位要求高度匹配，且有完整的AI应用项目落地经验。"
-        f"希望能有机会进一步沟通，期待您的回复！"
+        f"{head}，应聘「{position}」，与岗位要求高度匹配。"
+        f"您好，我是{name}，已附简历，方便看一下吗？"
     )
 
 
@@ -257,35 +423,64 @@ def send_resume_attachment(
     ext = os.path.splitext(resume_file_path)[1].lower()
     is_image = ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
 
+    # ── 送达校验基线：记录发送前的图片消息数量 ──
+    # ⚠ 图片消息在 innerText 中不可见，只能数 img.message-image 元素。
+    #   基线为 -1 表示读不到消息列表，此时无法校验，退化为「上传即返回」。
+    baseline = _count_chat_images(dp) if is_image else -1
+    can_verify = is_image and baseline >= 0
+    if can_verify:
+        print(f"  📐 校验基线: 当前 {baseline} 张图片消息")
+
+    def _verify_sent() -> bool:
+        """确认图片消息数量增加了 —— 这是唯一可信的送达证据"""
+        if not can_verify:
+            return True
+        for _ in range(int(timeout)):
+            time.sleep(1)
+            if _count_chat_images(dp) > baseline:
+                return True
+        return False
+
     # ── 策略 A：直接找隐藏 file input（不点击按钮，绕过原生对话框）──
+    # ⚠ 每次只投递一个 input 并立即校验，成功即停 ——
+    #   历史上「往所有 file input 都塞文件」会导致重复发送。
     file_inputs = _find_all_file_inputs(dp)
     if file_inputs:
-        print(f"  🔍 找到 {len(file_inputs)} 个 file input，尝试匹配...")
+        print(f"  🔍 找到 {len(file_inputs)} 个 file input，逐个尝试并校验...")
+        ordered = []
+        fallback = []
         for fi in file_inputs:
             try:
                 accept = (fi.attr('accept') or '').lower()
-                # 匹配：accept 为空（兜底）、accept 匹配图片、或 accept 匹配 PDF
-                if not accept or (is_image and 'image' in accept) or (not is_image and ext.lstrip('.') in accept):
-                    fi.input(resume_file_path)
-                    time.sleep(2)
-                    print(f"  ✅ 简历附件已上传 (策略A: 直接 file input)")
-                    return True
             except Exception:
+                accept = ''
+            matched = (
+                (is_image and 'image' in accept)
+                or (not is_image and ext.lstrip('.') in accept)
+            )
+            (ordered if matched else fallback).append((fi, accept))
+
+        for fi, accept in ordered + fallback:
+            try:
+                fi.input(resume_file_path)
+            except Exception as e:
+                print(f"  ⚠ input(accept={accept[:30]!r}) 失败: {e}")
                 continue
 
-        # accept 都不匹配，用最后一个兜底
-        try:
-            file_inputs[-1].input(resume_file_path)
-            time.sleep(2)
-            print(f"  ✅ 简历附件已上传 (策略A: 兜底 input)")
-            return True
-        except Exception as e:
-            print(f"  ⚠ 策略A失败: {e}")
+            if _verify_sent():
+                after = _count_chat_images(dp) if can_verify else -1
+                suffix = f"，图片消息 {baseline} → {after}" if can_verify else "（无法校验）"
+                print(f"  ✅ 简历附件已送达 (策略A: file input){suffix}")
+                return True
+            print(f"  ⚠ 该 input 未产生新图片消息，尝试下一个")
 
     # ── 策略 B：JS 注入 file input → 设置文件 → 触发 change 事件 ──
     print(f"  🔄 尝试策略B: JS 注入 file input...")
     if _upload_via_js_injection(dp, resume_file_path):
-        return True
+        if _verify_sent():
+            print(f"  ✅ 简历附件已送达 (策略B)")
+            return True
+        print(f"  ⚠ 策略B 未产生新图片消息")
 
     # ── 策略 C：点击「发送图片」div（兜底，会弹出原生对话框需手动处理）──
     print(f"  🔄 尝试策略C: 点击「发送图片」按钮...")
@@ -304,9 +499,11 @@ def send_resume_attachment(
         _auto_accept_file_dialog(dp, resume_file_path)
         img_btn.click()
         time.sleep(3)
-        print(f"  ℹ 策略C: 已点击按钮，如弹出对话框请手动选择文件")
-        # 此时如果 CDP 拦截成功文件已上传，否则需要手动操作
-        return True
+        if _verify_sent():
+            print(f"  ✅ 简历附件已送达 (策略C)")
+            return True
+        print(f"  ⚠ 策略C: 未确认送达，如弹出对话框请手动选择文件")
+        return False
     except Exception as e:
         print(f"  ❌ 策略C失败: {e}")
         return False
@@ -467,13 +664,32 @@ def check_login_status(page) -> bool:
     return False
 
 
-def auto_apply_jobs(
+def auto_apply_jobs(*args, **kwargs):
+    """`_auto_apply_jobs_impl` 的计时包装。
+
+    只有显式传了 output_dir 才计时：impl 在 output_dir 为空时会自行定位最近运行目录
+    或新建一个，在这里重复那套逻辑有可能多建一个空目录 —— 宁可不计时，也不让埋点
+    产生副作用。
+
+    崩了也要留下耗时：stage_timer.stage 会照抛异常但落盘 status=error。投递是整个
+    流程里唯一不可逆的一步，「投到第几个崩的、崩之前跑了多久」是复盘时最要紧的信息。
+    """
+    run_dir = kwargs.get('output_dir')
+    if run_dir is None and len(args) >= 7:
+        run_dir = args[6]                    # 第 7 个位置参数就是 output_dir
+    if not run_dir or stage_timer is None:
+        return _auto_apply_jobs_impl(*args, **kwargs)
+    with stage_timer.stage(run_dir, 'apply'):
+        return _auto_apply_jobs_impl(*args, **kwargs)
+
+
+def _auto_apply_jobs_impl(
     qualified_jobs: List[Dict[str, Any]],
     _profile: ResumeProfile,
     max_applications: int = 10,
     headless: bool = False,
     greetings: Optional[Dict[str, str]] = None,
-    resume_file_path: Optional[str] = None,
+    resume_file_path: Optional[Union[str, Dict[str, str]]] = None,
     output_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -493,13 +709,24 @@ def auto_apply_jobs(
         max_applications: 最大投递数量
         headless: 是否无头模式
         greetings: 预生成的招呼语字典 {job_link: greeting_text}，优先使用
-        resume_file_path: 简历文件路径（图片/PDF），用于「发送图片」上传附件
+        resume_file_path: 简历文件路径（图片/PDF），用于「发送图片」上传附件。
+                    传字符串则整批共用一个文件；传 {job_link: path} 则按岗位
+                    各发各的（分岗位定制简历走这条）。
         output_dir: 输出目录（投递日志保存位置）。
                     默认自动定位最近运行目录或创建新目录。
 
     Returns:
         投递结果列表
     """
+    # Windows 控制台默认 GBK，打印 emoji 会抛 UnicodeEncodeError；统一重配为 UTF-8。
+    # check_artifacts.py / write_application_md.py 都这么干，本模块此前漏了，导致投递在
+    # 打印 emoji 时崩掉一次。reconfigure 失败（如非标准 stdout）不阻断投递。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError, OSError):
+            pass
+
     if not HAS_DRISSION:
         print("错误: DrissionPage 未安装，无法自动投递。pip install DrissionPage")
         return []
@@ -508,19 +735,35 @@ def auto_apply_jobs(
         print("没有可投递的岗位")
         return []
 
-    # 按优先级排序
+    # 按优先级排序：HR 活跃度优先，匹配分次之
+    #
+    # 活跃度作主键是有意的：到这一步的岗位都已通过硬门禁、又经用户在 7bc 手工确认，
+    # 都是值得投的 —— 那么先投会回复的那个。未采集活跃度（无 -d）时全部折成 -1，
+    # 排序自动退化成纯匹配分排序。
+    #
+    # 注意 max_applications 的截断发生在排序之后：当选中岗位数超过上限时，
+    # 活跃度高但匹配分低的岗位会挤掉匹配分高但 HR 不活跃的岗位。
+    # 若要改成匹配分优先、活跃度只做同分裁决，把前两个键对调即可。
     sorted_jobs = sorted(
         qualified_jobs,
         key=lambda j: (
+            -hr_activity_sort_key(j),
             -j.get('match_score', 0),
             j.get('company', '')
         )
     )
     jobs_to_apply = sorted_jobs[:max_applications]
 
+    ranked = [hr_activity_rank(j) for j in jobs_to_apply]
+    if any(r is not None for r in ranked):
+        hr_order = '活跃度优先'
+    else:
+        hr_order = '活跃度未采集，按匹配分排序'
+
     print(f"\n{'='*60}")
     print(f"  🤖 自动投递模式")
     print(f"  目标岗位: {len(jobs_to_apply)} 个")
+    print(f"  投递顺序: {hr_order}")
     print(f"  招呼语来源: {'Claude 预生成' if greetings else '模板自动生成'}")
     print(f"{'='*60}")
 
@@ -626,30 +869,37 @@ def auto_apply_jobs(
                     print(f"  📝 已输入招呼语")
                     time.sleep(0.5)
 
-                    # === 步骤 6：点击发送 ===
-                    if _click_send(dp):
-                        print(f"  📤 消息已发送")
+                    # === 步骤 6：发送（回车优先）+ 回读聊天记录校验 ===
+                    if _click_send(dp, greeting):
+                        print(f"  📤 消息已发送（已校验气泡）")
                         result['status'] = 'applied'
+                        result['greeting_verified'] = True
                         print(f"  ✅ 投递+招呼完成！")
 
                         # === 步骤 7：发送简历附件 ===
-                        if resume_file_path:
+                        job_resume = _get_resume_file(job, resume_file_path)
+                        if job_resume:
                             time.sleep(1)
                             attachment_ok = send_resume_attachment(
-                                dp, resume_file_path
+                                dp, job_resume
                             )
                             result['attachment_sent'] = attachment_ok
                             if attachment_ok:
-                                print(f"  ✅ 简历附件已发送！")
+                                print(f"  ✅ 简历附件已发送（已校验）！")
                             else:
-                                print(f"  ⚠ 简历附件发送失败，请手动发送")
+                                print(f"  ⚠ 简历附件未确认送达，请手动发送")
                     else:
                         result['status'] = 'partial'
-                        result['error'] = '招呼语已输入但发送失败'
-                        print(f"  ⚠ 发送失败，请手动发送")
+                        result['greeting_verified'] = False
+                        result['error'] = (
+                            '招呼语已输入但聊天记录中未出现消息气泡 —— 未发送成功，'
+                            '请在浏览器中手动按回车'
+                        )
+                        print(f"  ❌ 发送未通过校验，招呼语仍在输入框，请手动按回车")
                 else:
                     result['status'] = 'no_chat'
-                    result['error'] = '无法输入招呼语（可能已投递或聊天窗口未开启）'
+                    result['greeting_verified'] = False
+                    result['error'] = '招呼语无法输入聊天框（可能已投递或聊天窗口未开启）'
                     print(f"  ⚠ 无法输入招呼语")
 
             except Exception as e:
@@ -707,6 +957,13 @@ def auto_apply_jobs(
     return results
 
 
+# 让计时包装对外表现得和实现一致：inspect.signature / help() / IDE 提示都能看到
+# 真实参数表，而不是 (*args, **kwargs)。放在这里是因为 wraps 需要实现已定义。
+# 副作用：包装函数的 __doc__ 被换成实现的 —— 这是想要的，计时是实现细节，
+# 调用方该看到的是投递流程的说明。
+functools.update_wrapper(auto_apply_jobs, _auto_apply_jobs_impl)
+
+
 # ==================== 内部辅助函数 ====================
 
 def _find_element(dp: WebPage, selectors: List[str], timeout: float = 2.0):
@@ -758,97 +1015,197 @@ def _get_greeting(
     return generate_greeting(profile=profile, job=job)
 
 
-def _input_greeting(dp: WebPage, greeting: str) -> bool:
-    """在聊天输入框中输入招呼语（优先使用 JS 直接注入，避免逐键模拟丢字）"""
-    import json as _json
+def _get_resume_file(
+    job: Dict[str, Any],
+    resume_file_path: Optional[Union[str, Dict[str, str]]]
+) -> Optional[str]:
+    """取该岗位要发的简历附件：dict 按 job_link 取，字符串则整批共用"""
+    if isinstance(resume_file_path, dict):
+        return resume_file_path.get(job.get('link', ''))
 
-    # 策略 A：直接用 JS 注入文本 + 派发完整事件链（适合 contenteditable div）
+    return resume_file_path
+
+
+def _norm(text: str) -> str:
+    """归一化：去掉所有空白，便于跨 DOM 渲染比对文本"""
+    return re.sub(r'\s+', '', text or '')
+
+
+def _greeting_probe(greeting: str, length: int = 14) -> str:
+    """
+    从招呼语中取一段稳定的特征串，用于回读聊天记录时判定是否真的发出去了。
+    跳过开头的括号类标点（BOSS 渲染时可能改写），取正文前 length 个字符。
+    """
+    s = _norm(greeting)
+    core = re.sub(r'^[【\[（(“"\'’‘]+', '', s)
+    return core[:length] if len(core) >= length else core
+
+
+def _read_chat_record(dp: WebPage) -> str:
+    """读取当前聊天记录的纯文本。注意：图片消息在 innerText 中不可见。"""
     try:
-        greeting_js = _json.dumps(greeting)
-        result = dp.run_js(f"""
-            const sel = '#chat-input, [contenteditable="true"], textarea, [placeholder*="消息"], [placeholder*="输入"]';
-            const el = document.querySelector(sel);
-            if (el) {{
-                el.focus();
-                el.click();
-                if (el.contentEditable === 'true') {{
-                    el.innerText = {greeting_js};
-                }} else {{
-                    el.value = {greeting_js};
-                }}
-                // 派发完整事件链，确保 Vue/React 绑定生效
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                el.dispatchEvent(new Event('compositionend', {{bubbles: true}}));
-                return 'ok';
-            }}
-            return 'not found';
-        """)
-        if result and 'ok' in str(result):
-            time.sleep(0.5)
-            return True
+        return dp.run_js("""
+            const m = document.querySelector(
+                '[class*="chat-message-list"], [class*="message-list"], .chat-record');
+            return m ? m.innerText : '';
+        """) or ''
     except Exception:
-        pass
+        return ''
 
-    # 策略 B：通过 DrissionPage 查找元素后逐键输入（中文长文本备选）
+
+def _read_chat_input(dp: WebPage) -> str:
+    """回读聊天输入框的当前内容，用于确认文字真的落进了框架 state"""
+    try:
+        return dp.run_js("""
+            const el = document.querySelector('#chat-input, [contenteditable="true"], textarea');
+            return el ? (el.innerText || el.value || '') : '';
+        """) or ''
+    except Exception:
+        return ''
+
+
+def _count_chat_images(dp: WebPage) -> int:
+    """
+    统计聊天记录中的图片消息数量。
+    只数 img.message-image，排除界面图标（msg-blur）和头像。
+    """
+    try:
+        n = dp.run_js("""
+            const m = document.querySelector(
+                '[class*="chat-message-list"], [class*="message-list"], .chat-record');
+            if (!m) return -1;
+            return m.querySelectorAll('img.message-image').length;
+        """)
+        return int(n) if n is not None else -1
+    except Exception:
+        return -1
+
+
+def _input_greeting(dp: WebPage, greeting: str) -> bool:
+    """
+    在聊天输入框中输入招呼语，并**回读校验文字是否真的落地**。
+
+    只使用 DrissionPage 的 .input()（底层走 CDP 真实输入事件，浏览器视为可信输入，
+    BOSS 前端框架必然更新内部 state）。
+
+    ⚠ 绝不要用 JS 直接赋值 el.innerText / el.value：
+      BOSS 聊天框是框架受控组件，JS 赋值 + 派发合成事件不会更新框架 state，
+      界面上看着有字但 model 为空，点发送会发出空内容 —— 这是历史上误报
+      「投递成功」的根因（2026-08-13 实测确认）。
+    """
+    if not greeting:
+        return False
+
+    probe = _greeting_probe(greeting)
+
     input_selectors = [
         XPATH_CHAT_INPUT,
         'css:#chat-input',
-        'css:.chat-input',
         'css:div[contenteditable="true"]',
         'css:[contenteditable="true"]',
+        'css:textarea',
+        'css:.chat-input',
         'css:[placeholder*="消息"]',
         'css:[placeholder*="输入"]',
-        'css:textarea',
-        'css:.input-area textarea',
-        'css:.chat-input-area textarea',
-        'css:div.chat-input',
     ]
 
     for selector in input_selectors:
+        el = None
         try:
             el = dp.ele(selector, timeout=2)
-            if el:
-                el.click()
-                time.sleep(0.3)
-                el.input(greeting)
-                time.sleep(1.0)  # 等待逐键输入完成
-                return True
         except Exception:
             # 尝试在 iframe 中查找
             try:
                 iframe = dp.get_frame(1)
-                if iframe:
-                    el = iframe.ele(selector, timeout=1)
-                    if el:
-                        el.click()
-                        time.sleep(0.3)
-                        el.input(greeting)
-                        time.sleep(1.0)
-                        return True
+                el = iframe.ele(selector, timeout=1) if iframe else None
             except Exception:
-                continue
+                el = None
+        if not el:
+            continue
+
+        try:
+            el.click()
+            time.sleep(0.3)
+            try:
+                el.clear()
+                time.sleep(0.2)
+            except Exception:
+                pass
+            el.input(greeting)          # CDP 真实输入
+            time.sleep(1.2)
+        except Exception:
+            continue
+
+        # ── 回读校验：文字必须真的在输入框里 ──
+        typed = _norm(_read_chat_input(dp))
+        if probe and probe in typed:
+            print(f"  ✓ 输入框已确认落地 {len(typed)} 字 ({selector})")
+            return True
+        print(f"  ⚠ {selector} 输入未落地（实际 {len(typed)} 字），换下一个选择器")
 
     return False
 
 
-def _click_send(dp: WebPage) -> bool:
-    """点击发送按钮"""
-    send_selectors = [
+
+def _click_send(dp: WebPage, greeting: Optional[str] = None) -> bool:
+    """
+    发送聊天框内已输入的内容，并**回读聊天记录校验消息气泡是否出现**。
+
+    实测（2026-08-13）：
+      - `//button[@type='send']` 点击**无效**，不会真的发送；
+      - 回车（Enter）**有效**。
+    因此回车为主，按钮为备。
+
+    Args:
+        greeting: 已输入的招呼语。传入则回读校验，未在聊天记录中命中即返回 False；
+                  不传则退化为「点了就算」的旧行为（不推荐）。
+
+    Returns:
+        True 仅代表消息气泡已确认出现在聊天记录中。
+    """
+    probe = _greeting_probe(greeting) if greeting else ''
+
+    def _verify() -> bool:
+        if not probe:
+            return True          # 无法校验时不谎报，由调用方决定
+        return probe in _norm(_read_chat_record(dp))
+
+    # 已经发出去了（重试场景），直接返回
+    if probe and _verify():
+        return True
+
+    # ── 方式 1：回车（实测有效）──
+    try:
+        el = dp.ele(XPATH_CHAT_INPUT, timeout=2) or dp.ele('css:[contenteditable="true"]', timeout=2)
+        if el:
+            el.click()
+            time.sleep(0.3)
+        dp.actions.type('\n')
+        time.sleep(3)
+        if _verify():
+            print(f"  ✓ 发送已校验（回车）")
+            return True
+        print(f"  ⚠ 回车后未见消息气泡，尝试发送按钮")
+    except Exception as e:
+        print(f"  ⚠ 回车发送异常: {e}")
+
+    # ── 方式 2：发送按钮（备用）──
+    for selector in [
         XPATH_SEND_BUTTON,
         'css:button[type="send"]',
         'css:.btn-send',
         'css:.send-btn',
-        'css:button:contains("发送")',
-    ]
-
-    for selector in send_selectors:
+    ]:
         try:
             el = dp.ele(selector, timeout=2)
             if el:
                 el.click()
-                return True
+                time.sleep(3)
+                if _verify():
+                    print(f"  ✓ 发送已校验（按钮 {selector}）")
+                    return True
         except Exception:
             continue
 
     return False
+

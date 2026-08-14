@@ -11,8 +11,15 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
-from .utils import ensure_output_dir, parse_company_size
-from .scoring import compute_difficulty
+from .utils import ensure_output_dir
+from .scoring import (
+    compute_difficulty,
+    hr_activity_rank,
+    build_job_view,
+    CATEGORY_QUALIFIED,
+    CATEGORY_NEED_OPTIMIZATION,
+    CATEGORY_CANNOT_APPLY,
+)
 
 # 模板文件路径
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -46,7 +53,8 @@ def generate_html_report(
     # ── 构建 resume_info ──
     all_skills = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # 同本文件 188 行：值可能是 null，`or []` 才挡得住
+        all_skills.extend((profile.skills or {}).get(cat) or [])
 
     school = profile.education.get('school', '')
     degree = profile.education.get('degree', '')
@@ -63,8 +71,8 @@ def generate_html_report(
         'education': education_str,
         'skills': all_skills,
         'salary_expectation': {
-            'min': salary.get('min', '?') if salary else '?',
-            'max': salary.get('max', '?') if salary else '?'
+            'min': salary.get('min') or '?' if salary else '?',
+            'max': salary.get('max') or '?' if salary else '?'
         },
         'target_city': profile.basic_info.get('city', '杭州'),
         'target_position': profile.basic_info.get('target_position', '后端开发'),
@@ -83,8 +91,8 @@ def generate_html_report(
         'qualified_count': len(q_jobs),
     }
 
-    # ── 确保每个 job 的 difficulty 从 match_score 计算 ──
-    def _ensure_job_meta(job: Dict, idx: int) -> Dict:
+    # ── 确保每个 job 的 difficulty / application_category 由后端给定 ──
+    def _ensure_job_meta(job: Dict, idx: int, category: str) -> Dict:
         if not job.get('job_id'):
             link = job.get('link', '')
             if link:
@@ -97,6 +105,17 @@ def generate_html_report(
         # 始终从 match_score 重新计算 difficulty
         score = job.get('match_score', 50)
         job['difficulty'] = compute_difficulty(score)
+        # 投递分类：缺失时按所在桶回填，保证前端永不拿到空值
+        if not job.get('application_category'):
+            job['application_category'] = category
+        job.setdefault('application_category_reason', '')
+        # HR 活跃度：CSV 里是中文列名，归一化成前端读的 ASCII 键。
+        # hr_activity_rank 为 None 表示未采集（无 -d），前端据此显示「未采集」，
+        # 而不是把它伪装成「不活跃」。
+        job['hr_active_desc'] = job.get('HR活跃度', job.get('hr_active_desc', '')) or ''
+        job['hr_online'] = job.get('HR在线', job.get('hr_online', '')) or ''
+        job['hr_title'] = job.get('HR职位', job.get('hr_title', '')) or ''
+        job['hr_activity_rank'] = hr_activity_rank(job)
         return job
 
     # ── 构建完整数据 ──
@@ -104,9 +123,12 @@ def generate_html_report(
         'resume_info': resume_info,
         'statistics': statistics,
         'classification': {
-            'cannot_apply': [_ensure_job_meta(j, i) for i, j in enumerate(c_jobs)],
-            'need_optimization': [_ensure_job_meta(j, i) for i, j in enumerate(n_jobs)],
-            'qualified': [_ensure_job_meta(j, i) for i, j in enumerate(q_jobs)],
+            'cannot_apply': [_ensure_job_meta(j, i, CATEGORY_CANNOT_APPLY)
+                             for i, j in enumerate(c_jobs)],
+            'need_optimization': [_ensure_job_meta(j, i, CATEGORY_NEED_OPTIMIZATION)
+                                  for i, j in enumerate(n_jobs)],
+            'qualified': [_ensure_job_meta(j, i, CATEGORY_QUALIFIED)
+                          for i, j in enumerate(q_jobs)],
         },
         'crawl_params': {},
         'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -164,7 +186,10 @@ def generate_bauhaus_json(
     # ── 构建 resume_info ──
     all_skills = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # `or []` 而非 get 的第二参数：简历里没有该类技能时，解析产出的是
+        # {"tools": null}——键存在、值是 None，默认值不生效，extend(None)
+        # 直接 TypeError 带崩报告生成（同 scoring.py:676 的坑）
+        all_skills.extend((profile.skills or {}).get(cat) or [])
 
     resume_info = {
         'name': profile.basic_info.get('name', '未提取'),
@@ -174,48 +199,20 @@ def generate_bauhaus_json(
                       f"{profile.education.get('graduation_year', '')}届").strip(' ·'),
         'skills': all_skills,
         'salary_expectation': {
-            'min': profile.salary_expectation.get('min', '?'),
-            'max': profile.salary_expectation.get('max', '?')
+            # 与本文件 73-74 行同样的兜底：salary_expectation 整个可能是 null，
+            # 值也可能是 null，两层都要挡，否则报告生成整个崩掉
+            'min': (profile.salary_expectation or {}).get('min') or '?',
+            'max': (profile.salary_expectation or {}).get('max') or '?'
         },
         'target_city': '杭州',
         'target_position': '后端开发 / AI应用开发'
     }
 
     # ── 映射岗位到报告格式 ──
-    def _map_to_report(job: Dict) -> Dict:
-        score = job.get('match_score', 50)
-        difficulty = compute_difficulty(score)
-        company_size = parse_company_size(
-            job.get('公司', job.get('company', '')),
-            job.get('规模', job.get('scale', ''))
-        )
-        link = job.get('link', '')
-        # 从链接中提取唯一 ID
-        import re
-        m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link) if link else None
-        job_id = f"job_{m.group(1)}" if m else f"job_{abs(hash(link or str(id(job)))):x}"[:12]
-
-        return {
-            'job_id': job_id,
-            'company': job.get('公司', job.get('company', '')),
-            'position': job.get('职位', job.get('position', '')),
-            'salary': job.get('薪资', job.get('salary', '')),
-            'city': job.get('城市', job.get('city', '杭州')),
-            'experience': job.get('经验', job.get('experience', '')),
-            'education': job.get('学历', job.get('degree', job.get('education', ''))),
-            'match_score': score,
-            'difficulty': difficulty,
-            'company_size': company_size,
-            'scale': job.get('规模', job.get('scale', '')),
-            'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
-            'missing_items': job.get('missing_skills', [])[:5],
-            'optimization_points': job.get('optimization_points', []),
-            'link': link or '#',
-            'skill_tags': job.get('技能标签', job.get('skill_tags', '')),
-            'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')),
-            'company_info': (job.get('公司信息', job.get('company_info', '')) or '')[:300],
-            'jd': (job.get('岗位要求和职责', job.get('jd', '')) or '')[:500],
-        }
+    # 字段枚举统一在 scoring.build_job_view，不要在这里重建 dict（见该函数注释）。
+    # JSON 产出比 HTML 紧，只调截断长度。
+    def _map_to_report(job: Dict, category: str) -> Dict:
+        return build_job_view(job, category, company_info_len=300, jd_len=500)
 
     # ── 构建输出 ──
     output = {
@@ -227,9 +224,9 @@ def generate_bauhaus_json(
             'qualified_count': len(tier1),
         },
         'classification': {
-            'cannot_apply': [_map_to_report(j) for j in tier3],
-            'need_optimization': [_map_to_report(j) for j in tier2],
-            'qualified': [_map_to_report(j) for j in tier1],
+            'cannot_apply': [_map_to_report(j, CATEGORY_CANNOT_APPLY) for j in tier3],
+            'need_optimization': [_map_to_report(j, CATEGORY_NEED_OPTIMIZATION) for j in tier2],
+            'qualified': [_map_to_report(j, CATEGORY_QUALIFIED) for j in tier1],
         },
         'crawl_params': crawl_params or {},
         'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),

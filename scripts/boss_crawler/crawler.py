@@ -5,6 +5,7 @@
 """
 
 import csv
+import json
 import math
 import os
 import time
@@ -13,7 +14,10 @@ import urllib.parse
 from DrissionPage import WebPage
 
 from .auth import check_login_elements, check_login_status, check_page_status, wait_for_user_action
-from .config import CSV_FIELDS, ENCODING, ASSETS_DIR, co, sleep_config
+from .config import (
+    CSV_FIELDS, ENCODING, ASSETS_DIR, DUP_PAGE_MIN_LINKS, DUP_PAGE_RATIO,
+    co, sleep_config,
+)
 from .data_loader import load_existing_links, init_csv_file
 from .menu import print_header, estimate_time
 from .state import time_stats
@@ -21,16 +25,35 @@ from .state import time_stats
 
 # ==================== 列表数据处理 ====================
 
-def process_job_list(job_list, file_path, existing_links, csv_writer):
-    """处理岗位列表数据（去重写入 CSV）"""
+def process_job_list(job_list, file_path, existing_links, csv_writer, run_seen=None):
+    """处理岗位列表数据（去重写入 CSV）
+
+    两个去重集合语义不同，不要合并：
+      existing_links —— 本文件已有的行 + 本文件本次新写入的，决定是否写盘。
+      run_seen       —— 本轮运行（所有关键词 × 城市）遇到过的全部 link。
+                        既参与写盘决策，也是「这一页全是同义关键词的重复」的判据。
+
+    run_seen 为 None 时行为与拆分前完全一致（本函数是 __init__ 导出的公开 API）。
+
+    Returns:
+        (written, skipped, run_dups)
+        run_dups 只数「本轮其他地方已见过」的，是 skipped 的子集。
+    """
     written = 0
     skipped = 0
+    run_dups = 0
 
     for job in job_list:
         job_link = f"https://www.zhipin.com/job_detail/{job['encryptJobId']}.html"
 
-        if job_link in existing_links:
+        seen_this_run = run_seen is not None and job_link in run_seen
+        if seen_this_run:
+            run_dups += 1
+
+        if job_link in existing_links or seen_this_run:
             skipped += 1
+            if run_seen is not None:
+                run_seen.add(job_link)
             continue
 
         dit = {
@@ -50,25 +73,48 @@ def process_job_list(job_list, file_path, existing_links, csv_writer):
             '福利标签': ' '.join(job.get('welfareList', [])),
             '位置': str(job.get('gps', '')),
             '岗位要求和职责': '',
-            '公司信息': ''
+            '公司信息': '',
+            # 以下字段只存在于详情 API，列表阶段一律留空，由 crawl_job_details 回填。
+            # 空串 = 未采集，不要写成 '否'
+            '地址': '',
+            '已失效': '',
+            '代招': '',
+            'HR活跃度': '',
+            'HR在线': '',
+            'HR职位': '',
+            'HR姓名': '',
+            'HR公司': ''
         }
 
         csv_writer.writerow(dit)
         existing_links.add(job_link)
+        if run_seen is not None:
+            run_seen.add(job_link)
         written += 1
 
-    return written, skipped
+    return written, skipped, run_dups
 
 
 # ==================== 单页爬取循环（共用） ====================
 
-def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
+def should_skip_remaining_pages(page_size, run_dups):
+    """本页是否已经基本全是本轮其他关键词采过的岗位 → 跳到下一个关键词。
+
+    只看 run_dups（本轮其他关键词已采），不看总重复数 —— 理由见
+    config.DUP_PAGE_RATIO 的注释：用总重复数会打断「同一关键词续爬更深的页」。
+    """
+    if page_size < DUP_PAGE_MIN_LINKS:
+        return False
+    return run_dups / page_size >= DUP_PAGE_RATIO
+
+
+def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=None):
     """
     通用的翻页爬取循环。
     两个爬取函数（by_position / by_query）共用此翻页逻辑。
 
     Returns:
-        (total_processed, total_written, total_skipped)
+        (total_processed, total_written, total_skipped, total_run_dups)
     """
     dp.get(url)
     dp.listen.start('zpgeek/search/joblist.json')
@@ -76,6 +122,7 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
 
     total_written = 0
     total_skipped = 0
+    total_run_dups = 0
     page_num = 1
     consecutive_no_data = 0
 
@@ -124,12 +171,21 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
 
             try:
                 job_list = r.response.body.get('zpData', {}).get('jobList', [])
-                written, skipped = process_job_list(job_list, file_path, existing_links, csv_writer)
+                written, skipped, run_dups = process_job_list(
+                    job_list, file_path, existing_links, csv_writer, run_seen
+                )
                 total_written += written
                 total_skipped += skipped
+                total_run_dups += run_dups
 
                 time_stats.end_request(True, f"获取{len(job_list)}条,写入{written}条")
                 print(f"[第{page_num}页] 获取到 {len(job_list)} 条数据，已写入 {written} 条（跳过 {skipped} 条重复）")
+
+                if should_skip_remaining_pages(len(job_list), run_dups):
+                    pct = round(run_dups / len(job_list) * 100)
+                    print(f"[第{page_num}页] 本页 {len(job_list)} 条中 {run_dups} 条"
+                          f"已由本轮其他关键词采过（{pct}%），跳过剩余分页")
+                    break
             except Exception as e:
                 time_stats.end_request(False, str(e))
                 print(f"[第{page_num}页] 处理数据失败: {e}")
@@ -138,12 +194,13 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links):
             sleep_config.sleep('page')
 
     dp.listen.stop()
-    return total_written + total_skipped, total_written, total_skipped
+    return total_written + total_skipped, total_written, total_skipped, total_run_dups
 
 
 # ==================== 按岗位 code 爬取 ====================
 
-def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit, existing_links, filter_query=''):
+def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit,
+                           existing_links, filter_query='', run_seen=None):
     """按岗位code爬取"""
     init_csv_file(file_path)
 
@@ -151,12 +208,13 @@ def crawl_jobs_by_position(dp, position_code, city_code, file_path, count_limit,
     print(f"\n访问: {url}")
     time_stats.start_request('page', url)
 
-    return _crawl_paginated(dp, url, file_path, count_limit, existing_links)
+    return _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen)
 
 
 # ==================== 按关键词爬取 ====================
 
-def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit, existing_links, filter_query=''):
+def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit,
+                        existing_links, filter_query='', run_seen=None):
     """按关键词爬取"""
     init_csv_file(file_path)
 
@@ -165,13 +223,20 @@ def crawl_jobs_by_query(dp, query, city_code, file_path, count_limit, existing_l
     print(f"\n访问: {url}")
     time_stats.start_request('page', url)
 
-    return _crawl_paginated(dp, url, file_path, count_limit, existing_links)
+    return _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen)
 
 
 # ==================== 详情爬取 ====================
 
 def get_single_job_detail(dp, url):
-    """获取单个岗位详情（优先API直调，兜底DOM解析）"""
+    """
+    获取单个岗位详情（优先API直调，兜底DOM解析）
+
+    Returns:
+        dict: {'jd', 'company_info', 'hr_active', 'hr_online', 'hr_title'}
+              HR 三项仅 API 直调分支可得，DOM 兜底时为空串。
+        None: 获取失败或需要登录
+    """
     import re
     try:
         time_stats.start_request('detail', url)
@@ -225,19 +290,33 @@ def get_single_job_detail(dp, url):
             if val:
                 post_desc += '\n' + val
 
-        # 提取公司信息
+        # 提取公司信息。
+        #
+        # 真实键名是 `introduce`（2026-08-13 对 job_detail.json 实测确认）。
+        # 这里原先只试了 content / companyInfo / introduction —— 差两个字母，
+        # 于是 15/15 的岗位公司简介全是空的，而同批 HR 活跃度全部正常，
+        # 看起来像「BOSS 没提供简介」而不是「键名取错了」。所以 introduce 放第一位，
+        # 其余保留作兜底（不同版本的接口可能换名）。
         brand_info = zp.get('brandComInfo', {})
         comp_info = ''
         if isinstance(brand_info, dict):
-            comp_info = brand_info.get('content', '') or brand_info.get('companyInfo', '')
-            if not comp_info:
-                comp_info = brand_info.get('introduction', '')
+            for key in ('introduce', 'content', 'companyInfo', 'introduction'):
+                value = brand_info.get(key, '')
+                if value and str(value).strip():
+                    comp_info = str(value).strip()
+                    break
         elif isinstance(brand_info, str):
             comp_info = brand_info
 
         if post_desc:
             time_stats.end_request(True, 'API直调')
-            return (post_desc, comp_info if comp_info else '')
+            return {
+                'jd': post_desc,
+                'company_info': comp_info if comp_info else '',
+                **_extract_job_extras(job_info),
+                **_extract_brand_extras(brand_info),
+                **_extract_hr_info(zp),
+            }
 
         # API 没有描述内容，回退 DOM
         dp.get(url)
@@ -249,8 +328,87 @@ def get_single_job_detail(dp, url):
         return None
 
 
+def _tri_state(value):
+    """布尔字段 → '是'/'否'/''。
+
+    取不到时留空串而非 '否' —— 「未采集」不能被读成「不是」。
+    整个技能里 hr_online、已失效、代招 都用这一个语义。
+    """
+    return '' if value is None else ('是' if value else '否')
+
+
+# 详情缺失时的空值集。DOM 兜底路径和 API 路径必须返回同一套键，
+# 否则 crawl_job_details 回填时会 KeyError。
+EMPTY_DETAIL_EXTRAS = {
+    'address': '', 'invalid': '', 'proxy': '', 'welfare': '',
+    'hr_active': '', 'hr_online': '', 'hr_title': '', 'hr_name': '', 'hr_company': '',
+}
+
+
+def _extract_job_extras(job_info):
+    """从 zpData.jobInfo 提取列表页拿不到的岗位事实。
+
+    - invalidStatus：岗位是否已失效。失效岗位投了也是白投，值得单独一列。
+    - proxyJob：代招标记。为 1 时跟你聊的是猎头/外包，不是用人公司自己的 HR。
+    - address：具体上班地址（列表页只有经纬度）。
+    """
+    if not isinstance(job_info, dict):
+        return {'address': '', 'invalid': '', 'proxy': ''}
+
+    return {
+        'address': (job_info.get('address') or '').strip(),
+        'invalid': _tri_state(job_info.get('invalidStatus')),
+        'proxy': _tri_state(job_info.get('proxyJob')),
+    }
+
+
+def _extract_brand_extras(brand_info):
+    """从 zpData.brandComInfo 提取完整福利标签。
+
+    详情里的 labels 通常比列表页的 welfareList 全得多（实测 20 条 vs 几条），
+    所以单独取出来，由调用方在列表页值为空时回填。
+    """
+    if not isinstance(brand_info, dict):
+        return {'welfare': ''}
+
+    labels = brand_info.get('labels')
+    if not isinstance(labels, list):
+        return {'welfare': ''}
+
+    return {'welfare': ' '.join(str(x).strip() for x in labels if str(x).strip())}
+
+
+def _extract_hr_info(zp):
+    """
+    从详情 API 的 zpData.bossInfo 提取招聘者信息。
+
+    快照语义：活跃度是爬取瞬间的状态。bossOnline 波动极快，
+    投递时基本已过期；activeTimeDesc 粒度粗但相对稳定，是排序的主要依据。
+
+    hr_company 是 HR **自己**所属的公司，和岗位挂的公司可能不是一家 ——
+    实测见过岗位公司「深圳某大型ICT…」而 HR 是「途聚人力」的猎头。
+    两者不一致就是代招的旁证，所以单独存一列。
+    """
+    boss = zp.get('bossInfo') or {}
+    if not isinstance(boss, dict):
+        return {'hr_active': '', 'hr_online': '', 'hr_title': '',
+                'hr_name': '', 'hr_company': ''}
+
+    return {
+        'hr_active': boss.get('activeTimeDesc') or '',
+        'hr_online': _tri_state(boss.get('bossOnline')),
+        'hr_title': boss.get('title') or '',
+        'hr_name': boss.get('name') or '',
+        'hr_company': boss.get('brandName') or '',
+    }
+
+
 def _extract_detail_from_dom(dp):
-    """兜底方案：从 DOM 中提取详情（需要等 JS 渲染完成）"""
+    """兜底方案：从 DOM 中提取详情（需要等 JS 渲染完成）
+
+    DOM 里只有 JD 和公司简介两段文本，其余字段一律留空 ——
+    空串的语义是「未采集」，下游据此显示，不会被误读成「否」。
+    """
     if dp.wait.ele_displayed('css:.job-sec-text', timeout=15):
         pass  # 元素已出现
 
@@ -262,10 +420,10 @@ def _extract_detail_from_dom(dp):
 
     if len(res) == 1:
         time_stats.end_request(True, 'DOM解析')
-        return (res[0].text, '')
+        return {'jd': res[0].text, 'company_info': '', **EMPTY_DETAIL_EXTRAS}
     elif len(res) == 2:
         time_stats.end_request(True, 'DOM解析')
-        return (res[0].text, res[1].text)
+        return {'jd': res[0].text, 'company_info': res[1].text, **EMPTY_DETAIL_EXTRAS}
     else:
         time_stats.end_request(False, '未找到详情元素')
         return None
@@ -330,8 +488,21 @@ def crawl_job_details(dp, file_path, existing_links):
         if detail:
             for row in rows:
                 if row['link'] == link:
-                    row['岗位要求和职责'] = detail[0]
-                    row['公司信息'] = detail[1]
+                    row['岗位要求和职责'] = detail['jd']
+                    row['公司信息'] = detail['company_info']
+                    row['地址'] = detail.get('address', '')
+                    row['已失效'] = detail.get('invalid', '')
+                    row['代招'] = detail.get('proxy', '')
+                    row['HR活跃度'] = detail.get('hr_active', '')
+                    row['HR在线'] = detail.get('hr_online', '')
+                    row['HR职位'] = detail.get('hr_title', '')
+                    row['HR姓名'] = detail.get('hr_name', '')
+                    row['HR公司'] = detail.get('hr_company', '')
+                    # 详情的福利列表比列表页全得多，但只在列表页没采到时才覆盖，
+                    # 避免用一份可能为空的详情数据抹掉已有值
+                    welfare = detail.get('welfare', '')
+                    if welfare and not (row.get('福利标签') or '').strip():
+                        row['福利标签'] = welfare
                     break
             success_count += 1
             existing_links.add(link)
@@ -342,7 +513,7 @@ def crawl_job_details(dp, file_path, existing_links):
         if success_count % 5 == 0 or i == len(links_to_update):
             try:
                 with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                    writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
                     writer.writeheader()
                     writer.writerows(rows)
             except Exception as save_err:
@@ -353,7 +524,7 @@ def crawl_job_details(dp, file_path, existing_links):
     # 最终保存
     try:
         with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(rows)
     except Exception as final_save_err:
@@ -380,10 +551,16 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
         filter_query: URL 筛选参数字符串
 
     Returns:
-        {'total': int, 'written': int, 'skipped': int}
+        {'total': int, 'written': int, 'skipped': int, 'run_dups': int}
     """
-    total_stats = {'total': 0, 'written': 0, 'skipped': 0}
+    total_stats = {'total': 0, 'written': 0, 'skipped': 0, 'run_dups': 0}
     detail_existing_links = set()
+
+    # 整轮运行共享一个 link 集合。没有它时，每个关键词只认自己那个 CSV 里的 link，
+    # 于是同义关键词把同一批岗位重复爬、重复写、下游再重复解析一遍
+    # （实测太原 5 个关键词写出 117 行，只有 53 个唯一 link）。
+    # 它同时是 should_skip_remaining_pages 的判据来源。
+    run_seen = set()
 
     for pos_path, pos_code, pos_name in positions:
         for city_name, city_code in cities:
@@ -400,14 +577,17 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
 
             if is_custom:
                 stats = crawl_jobs_by_query(dp, pos_name, city_code, file_path,
-                                            count_limit, existing_links, filter_query)
+                                            count_limit, existing_links, filter_query,
+                                            run_seen)
             else:
                 stats = crawl_jobs_by_position(dp, pos_code, city_code, file_path,
-                                               count_limit, existing_links, filter_query)
+                                               count_limit, existing_links, filter_query,
+                                               run_seen)
 
             total_stats['total'] += stats[0]
             total_stats['written'] += stats[1]
             total_stats['skipped'] += stats[2]
+            total_stats['run_dups'] += stats[3]
 
             if with_detail and stats[1] > 0:
                 detail_success = crawl_job_details(dp, file_path, detail_existing_links)
@@ -423,6 +603,14 @@ def print_crawl_summary(total_stats):
     print(f"  获取数据: {total_stats['total']} 条")
     print(f"  写入数据: {total_stats['written']} 条")
     print(f"  跳过重复: {total_stats['skipped']} 条")
+
+    # 把「关键词之间撞了多少」当场摆出来。这个数字高就说明关键词选成同义词了，
+    # 下次该减关键词而不是加 —— 不打出来就得等事后翻 CSV 才发现。
+    run_dups = total_stats.get('run_dups', 0)
+    if run_dups:
+        print(f"    其中跨关键词重复: {run_dups} 条"
+              f"（关键词命中同一批岗位，可考虑减少关键词数量）")
+
     time_stats.print_summary()
 
 
@@ -668,3 +856,19 @@ def run_crawl_cli(args):
     dp.quit()
     time_stats.stop()
     print_crawl_summary(total_stats)
+
+    # 把爬取统计落到 run-dir，供 Claude 主代理在爬取后读取，判断是否达到最低岗位数量。
+    # 主代理读不到 stdout（后台任务），所以这里显式写盘；crawl_summary.json 是约定的文件名。
+    run_dir = getattr(args, 'run_dir', None)
+    if run_dir:
+        try:
+            os.makedirs(run_dir, exist_ok=True)
+            with open(os.path.join(run_dir, 'crawl_summary.json'), 'w', encoding='utf-8') as f:
+                json.dump({
+                    'written': total_stats.get('written', 0),
+                    'total': total_stats.get('total', 0),
+                    'skipped': total_stats.get('skipped', 0),
+                    'run_dups': total_stats.get('run_dups', 0),
+                }, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            print(f"[警告] 写入爬取统计失败: {e}")

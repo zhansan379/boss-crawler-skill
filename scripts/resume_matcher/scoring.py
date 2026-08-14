@@ -3,91 +3,185 @@
 """
 评分与岗位分类模块
 
-包含：
-- 独立规则匹配函数（SKILL.md Phase 5a 直接引用）
-- 新版 6 维度评分 (score_job_advanced)
-- 4 级分层分类 (classify_jobs_advanced)
-- tiers → JobClassification 适配器
+- score_job_advanced:          6 维度规则评分（0-115 分）
+- decide_application_category: 硬门槛优先的投递建议分类（后端唯一裁定）
+- compute_difficulty:          分数 → 难度等级
+- hr_activity_rank:            HR 活跃度 → 排序键（不参与评分）
+- classify_jobs_advanced:      批量评分 + 4 级分层
+- tiers_to_classification:     tiers → JobClassification 适配器
+
+投递决策以 application_category 字段对外暴露，前端只渲染、不做任何数学运算。
+调整阈值只需改本文件中的常量，无需同步前端。
 """
 
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .config import (
-    ResumeProfile, JobRequirements, MatchResult,
-    DifficultyPrediction, JobClassification,
-    DIFFICULTY_WEIGHTS,
-)
-from .utils import (
-    parse_education_level, parse_experience_years,
-    parse_salary_range, parse_company_size, edu_level_to_str,
-)
+from .config import ResumeProfile, JobClassification
+from .utils import parse_experience_years, parse_company_size
 
 
-# ==================== 技能别名映射 & AI关键词 ====================
+# ==================== 分层阈值 ====================
 
-# 技能同义词 → 规范名（Fix 4: 支持多种写法归一化）
-SKILL_SYNONYMS: Dict[str, str] = {}
-_SKILL_CANONICAL_MAP: Dict[str, str] = {}
-
-def _build_skill_aliases():
-    """构建技能别名双向映射"""
-    _raw = {
-        'kubernetes':     ['k8s', 'k3s', 'kubernetes'],
-        'golang':         ['go', 'golang'],
-        'postgresql':     ['postgresql', 'postgres', 'pgsql', 'postgre'],
-        'elasticsearch':  ['elasticsearch', 'es', 'elastic'],
-        'javascript':     ['javascript', 'js', 'ecmascript'],
-        'typescript':     ['typescript', 'ts'],
-        'react':          ['react', 'reactjs', 'react.js'],
-        'vue':            ['vue', 'vuejs', 'vue.js'],
-        'node.js':        ['node.js', 'nodejs', 'node'],
-        'tensorflow':     ['tensorflow', 'tf'],
-        'pytorch':        ['pytorch', 'torch'],
-        'machine-learning': ['ml', 'machine-learning', '机器学习', '深度学习'],
-        'nlp':            ['nlp', '自然语言处理'],
-        'cv':             ['cv', '计算机视觉'],
-        'llm':            ['llm', '大模型', '大语言模型', 'large-language-model'],
-        'mongodb':        ['mongodb', 'mongo'],
-        'ci/cd':          ['ci/cd', 'cicd', 'ci cd', 'ci_cd'],
-        'docker':         ['docker', 'container'],
-        'redis':          ['redis'],
-        'aws':            ['aws', 'amazon-web-services'],
-        'generative-ai':  ['genai', 'aigc', '生成式ai', '生成式人工智能'],
-    }
-    for canonical, variants in _raw.items():
-        for v in variants:
-            SKILL_SYNONYMS[v.lower()] = canonical
-            _SKILL_CANONICAL_MAP[v.lower()] = canonical
-
-_build_skill_aliases()
+TIER1_MIN = 100   # Easy   / qualified
+TIER2_MIN = 85    # Medium / need_optimization
+TIER3_MIN = 70    # Hard   / cannot_apply（低于此值归入 Tier4，报告中丢弃）
 
 
-def _normalize_skill(name: str) -> str:
-    """将技能名归一到规范形式（处理同义词/别名，Fix 4）"""
-    return SKILL_SYNONYMS.get(name.lower().strip(), name.lower().strip())
+# ==================== HR 活跃度（排序键，不参与评分） ====================
+
+# 活跃度刻意不进入 score，也不影响 application_category。
+# 它衡量的是「HR 会不会回」，与「人岗是否匹配」是两个正交维度 —— 混进总分会让
+# 「匹配度 85%」这个数字失去单一含义，也会让 difficulty 阈值随 HR 状态漂移。
+# 这里只产出一个排序键：auto_apply 用它决定投递顺序，报告用它展示。
+#
+# 数据是爬取瞬间的快照。bossOnline 波动极快，投递时通常已过期；
+# activeTimeDesc（"刚刚活跃"/"本月活跃"）粒度粗但相对稳定，是排序的主要依据。
+
+HR_ONLINE_RANK = 100      # 爬取瞬间在线
+HR_UNRECOGNIZED_RANK = 30  # 采集到了但文案无法识别
 
 
-def _skill_in_text(skill: str, text: str) -> bool:
+def hr_activity_rank(job) -> Optional[int]:
     """
-    检查技能名是否以完整词/短语形式出现在文本中（Fix 4: 词边界匹配）。
+    把 HR 活跃度快照折算成排序键。越大越活跃。
 
-    短技能名（≤3字符）使用正则词边界避免误匹配（如 'Go' 匹配 'GoLand'）。
-    长技能名使用直接子串匹配。
+    Returns:
+        int:  0-100，越大越活跃
+        None: 未采集（无 -d 的爬取拿不到活跃度）
+
+    None 是有意义的取值而非错误：未采集时全部岗位同为 None，排序退化成纯
+    match_score 排序，而不是把它们误判成「最不活跃」而集体沉底。
     """
-    skill_lower = skill.lower().strip()
-    text_lower = text.lower()
+    online = (job.get('HR在线') or job.get('hr_online') or '').strip()
+    if online == '是':
+        return HR_ONLINE_RANK
 
-    if len(skill_lower) <= 3:
-        # 短技能：要求词边界，避免子串误匹配。
-        # 使用大小写不敏感的字符类 [A-Za-z0-9#] 确保 'L' 也视为字母
-        pattern = r'(?<![A-Za-z0-9#])' + re.escape(skill_lower) + r'(?![A-Za-z0-9#])'
-        return bool(re.search(pattern, text_lower))
-    else:
-        return skill_lower in text_lower
+    desc = (job.get('HR活跃度') or job.get('hr_active_desc') or '').strip()
+    if not desc:
+        return None
+
+    # 带数字的区间文案优先（"3日内活跃"），再落到固定文案
+    m = re.search(r'(\d+)\s*[日天]', desc)
+    if m:
+        return max(65, 78 - int(m.group(1)))
+    m = re.search(r'(\d+)\s*周', desc)
+    if m:
+        return max(45, 58 - int(m.group(1)) * 3)
+    m = re.search(r'(\d+)\s*个?月', desc)
+    if m:
+        return max(15, 38 - int(m.group(1)) * 4)
+
+    for token, rank in (
+        ('刚刚', 90),
+        ('今日', 80), ('今天', 80),
+        ('本周', 60),
+        ('半月', 50), ('半个月', 50),
+        ('本月', 40),
+        ('半年', 12),
+        ('年前', 10),
+    ):
+        if token in desc:
+            return rank
+
+    # BOSS 改了文案：给中性值。既不当成最不活跃，也不退回 None —— 它确实采集到了。
+    return HR_UNRECOGNIZED_RANK
 
 
-# AI 核心能力关键词（Fix 5: 扩展列表，梯度计分）
+def hr_activity_sort_key(job) -> int:
+    """排序用：未采集（None）折成 -1，排在所有已采集岗位之后。"""
+    rank = hr_activity_rank(job)
+    return -1 if rank is None else rank
+
+
+# ==================== 投递建议分类 ====================
+
+# 分类枚举：与 JobClassification 字段名、report_data['classification'] 容器键、
+# 前端 tab id 保持同一套词汇，避免前后端出现两种叫法。
+CATEGORY_QUALIFIED = 'qualified'                  # 可直接投递
+CATEGORY_NEED_OPTIMIZATION = 'need_optimization'  # 优化后投递
+CATEGORY_CANNOT_APPLY = 'cannot_apply'            # 不可投递
+
+# 判定阈值（集中在此，调整时前端零改动）
+QUALIFIED_MIN_SKILLS = 4        # 进入 qualified 所需的最少技能命中数
+NEED_OPT_MAX_SALARY_GAP = 3     # 优化后投递可容忍的薪资差距(K)
+NEED_OPT_MAX_EXP_GAP = 1        # 优化后投递可容忍的经验差(年)
+CANNOT_APPLY_EXP_GAP = 3        # 经验差 ≥ 此值直接判不可投递(年)
+CANNOT_APPLY_SALARY_GAP = 8     # 薪资差距 > 此值直接判不可投递(K)
+
+
+# ==================== 学历等级 ====================
+
+# 学历 → 等级序数，用于硬门槛比较（JD 等级 > 简历等级 即为不达标）
+_DEGREE_LEVELS: List[Tuple[str, int]] = [
+    ('博士', 6), ('博士后', 6),
+    ('硕士', 5), ('研究生', 5), ('mba', 5), ('emba', 5),
+    ('本科', 4), ('学士', 4), ('统招本科', 4),
+    ('大专', 3), ('专科', 3), ('高职', 3),
+    ('中专', 2), ('高中', 2), ('技校', 2),
+    ('初中', 1),
+]
+
+# 简历未写明学历时的默认假设（保持既有行为：按本科处理）
+DEFAULT_RESUME_DEGREE_LEVEL = 4
+
+# JD 学历为以下表述时视为无门槛
+_DEGREE_UNLIMITED = ('不限', '无要求', '不要求', '学历不限')
+
+
+def parse_degree_level(degree_str: str, default: int = 0) -> int:
+    """
+    学历文本 → 等级序数（博士 6 / 硕士 5 / 本科 4 / 大专 3 / 中专高中 2 / 初中 1）。
+
+    '不限' 及空值返回 0（无门槛）；无法识别时返回 default。
+    '本科及以上' 取 '本科' 的等级——「及以上」不抬高门槛。
+    """
+    if not degree_str:
+        return 0
+    s = degree_str.lower().strip()
+    if any(u in s for u in _DEGREE_UNLIMITED):
+        return 0
+    for name, level in _DEGREE_LEVELS:
+        if name in s:
+            return level
+    return default
+
+
+# ==================== 技能别名映射 & AI 关键词 ====================
+
+# 规范名 → 全部等价写法（首项即规范名）
+_SKILL_ALIASES: Dict[str, List[str]] = {
+    'kubernetes':       ['kubernetes', 'k8s', 'k3s'],
+    'golang':           ['golang', 'go'],
+    'postgresql':       ['postgresql', 'postgres', 'pgsql', 'postgre'],
+    'elasticsearch':    ['elasticsearch', 'es', 'elastic'],
+    'javascript':       ['javascript', 'js', 'ecmascript'],
+    'typescript':       ['typescript', 'ts'],
+    'react':            ['react', 'reactjs', 'react.js'],
+    'vue':              ['vue', 'vuejs', 'vue.js'],
+    'node.js':          ['node.js', 'nodejs', 'node'],
+    'tensorflow':       ['tensorflow', 'tf'],
+    'pytorch':          ['pytorch', 'torch'],
+    'machine-learning': ['machine-learning', 'ml', '机器学习', '深度学习'],
+    'nlp':              ['nlp', '自然语言处理'],
+    'cv':               ['cv', '计算机视觉'],
+    'llm':              ['llm', '大模型', '大语言模型', 'large-language-model'],
+    'mongodb':          ['mongodb', 'mongo'],
+    'ci/cd':            ['ci/cd', 'cicd', 'ci cd', 'ci_cd'],
+    'docker':           ['docker', 'container'],
+    'redis':            ['redis'],
+    'aws':              ['aws', 'amazon-web-services'],
+    'generative-ai':    ['generative-ai', 'genai', 'aigc', '生成式ai', '生成式人工智能'],
+}
+
+# 变体 → 规范名（由 _SKILL_ALIASES 反向生成）
+SKILL_SYNONYMS: Dict[str, str] = {
+    variant: canonical
+    for canonical, variants in _SKILL_ALIASES.items()
+    for variant in variants
+}
+
+# AI 核心能力关键词（命中数量梯度计分）
 AI_KEYWORDS = [
     'rag', 'agent', 'langchain', 'langgraph', 'llamaindex',
     '大模型', 'llm', 'prompt', 'fine-tune', 'fine_tune', '微调',
@@ -100,170 +194,189 @@ AI_KEYWORDS = [
     'vllm', 'sglang', 'ollama',
 ]
 
-
-# ==================== 独立规则匹配函数 ====================
-
-def analyze_job_requirements_quick(job: Dict[str, Any]) -> JobRequirements:
-    """快速解析岗位要求（纯规则，不调用LLM）"""
-    edu = parse_education_level(job.get('学历', ''))
-    exp_years = parse_experience_years(job.get('经验', ''))
-    salary = parse_salary_range(job.get('薪资', ''))
-    company_size = parse_company_size(job.get('公司', ''), job.get('规模', ''))
-
-    # 解析技能
-    skills_str = job.get('技能标签', '')
-    skills = [s.strip() for s in skills_str.split() if s.strip()] if skills_str else []
-
-    return JobRequirements(
-        required_education=edu_level_to_str(edu),
-        required_experience_years=exp_years,
-        required_skills=skills[:5],
-        preferred_skills=skills[5:],
-        other_requirements=[],
-        salary_range=salary,
-        company_size=company_size,
-        key_keywords=skills[:10]
-    )
+# JD 无技能标签时，从描述中提取缺失技能的候选池
+_COMMON_SKILLS = [
+    'python', 'java', 'go', 'docker', 'kubernetes', 'mysql',
+    'redis', 'linux', 'git', 'react', 'vue', 'spring',
+]
 
 
-def calculate_education_match(profile: ResumeProfile, requirements: JobRequirements) -> Dict[str, Any]:
-    """计算学历匹配度"""
-    user_edu = parse_education_level(profile.education.get('degree', ''))
-    req_edu = parse_education_level(requirements.required_education)
+def _normalize_skill(name: str) -> str:
+    """技能名归一到规范形式（处理同义词/别名）"""
+    key = name.lower().strip()
+    return SKILL_SYNONYMS.get(key, key)
 
-    if req_edu == 0:  # 不限
-        return {'score': 100, 'match': True, 'reason': '学历不限'}
 
-    if user_edu >= req_edu:
-        return {'score': 100, 'match': True, 'reason': '学历符合'}
-    elif user_edu == req_edu - 1:
-        return {'score': 50, 'match': False, 'reason': '学历略低'}
+def _skill_variants(skill: str) -> List[str]:
+    """返回技能的全部等价写法；无别名时返回归一化后的自身"""
+    norm = _normalize_skill(skill)
+    return _SKILL_ALIASES.get(norm, [norm])
+
+
+def _skill_in_text(skill: str, text: str) -> bool:
+    """
+    技能名是否以完整词/短语形式出现在文本中。
+
+    短名（≤3 字符）用正则词边界，避免 'Go' 命中 'GoLand'、'es' 命中 'test'；
+    长名直接子串匹配。
+    """
+    skill_lower = skill.lower().strip()
+    text_lower = text.lower()
+
+    if len(skill_lower) <= 3:
+        pattern = r'(?<![A-Za-z0-9#])' + re.escape(skill_lower) + r'(?![A-Za-z0-9#])'
+        return bool(re.search(pattern, text_lower))
+    return skill_lower in text_lower
+
+
+def _skill_hit(skill: str, text: str) -> bool:
+    """技能或其任一同义变体是否命中文本"""
+    return any(_skill_in_text(v, text) for v in _skill_variants(skill))
+
+
+# 折算基准：每月平均工作日（用于「元/天」类日薪换算）
+_WORKDAYS_PER_MONTH = 21.75
+
+# 单位 → 「千元」倍率
+_SALARY_UNITS = {'万': 10.0, '千': 1.0, 'k': 1.0, '元': 0.001, None: 1.0}
+
+
+def _parse_salary(salary_str: str) -> Tuple[int, int]:
+    """
+    解析 BOSS 薪资字符串，统一折算为「月薪千元(K)」区间；无法解析返回 (0, 0)。
+
+    支持:
+        '15-25K'        → (15, 25)      '20K'          → (20, 20)
+        '15-25K·13薪'   → (15, 25)      忽略「几薪」后缀
+        '1-2万'         → (10, 20)      '1.5万'        → (15, 15)
+        '8千-1.2万'     → (8, 12)       区间两端单位可不同
+        '200-300元/天'  → (4, 7)        按 21.75 个工作日折算
+        '年薪20-30万'   → (17, 25)      按 12 个月折算
+        '面议' / ''     → (0, 0)
+    """
+    if not salary_str:
+        return 0, 0
+
+    s = salary_str.lower().replace('ｋ', 'k')
+    s = re.sub(r'[·•․,，、\s]*\d+\s*薪', '', s)   # 去掉 '·13薪' 这类年终倍数后缀
+
+    # 计薪周期 → 该金额覆盖的月数
+    if '年' in s:
+        months = 12.0
+    elif '天' in s or '日' in s:
+        months = 1 / _WORKDAYS_PER_MONTH
+    elif '时' in s:
+        months = 1 / (_WORKDAYS_PER_MONTH * 8)
     else:
-        return {'score': 0, 'match': False, 'reason': '学历不满足'}
+        months = 1.0
+
+    # 拆区间两端，分别取「数值 + 单位」
+    pairs = []
+    for part in re.split(r'[-~～至]', s, maxsplit=1):
+        m = re.search(r'(\d+(?:\.\d+)?)\s*(万|千|k|元)?', part)
+        if m:
+            pairs.append((float(m.group(1)), m.group(2)))
+    if not pairs:
+        return 0, 0
+
+    # 单位缺省时沿用另一端的单位（'15-25K' 左端无单位；'8千-1.2万' 两端不同）
+    fallback = next((u for _, u in pairs if u), None)
+    values = [v * _SALARY_UNITS[u or fallback] / months for v, u in pairs]
+
+    low = round(min(values))
+    high = round(max(values))
+
+    # 兜底：折算结果越界视为解析失败（>1000K/月 基本是单位判断错了）
+    if high <= 0 or high > 1000:
+        return 0, 0
+    return max(low, 1), high
 
 
-def calculate_experience_match(profile: ResumeProfile, requirements: JobRequirements) -> Dict[str, Any]:
-    """计算经验匹配度"""
-    user_years = int(profile.experience.get('total_years', 0) or 0)
-    req_years = requirements.required_experience_years
 
-    if req_years == 0:
-        return {'score': 100, 'match': True, 'reason': '经验不限'}
+# ==================== 难度等级 ====================
 
-    if user_years >= req_years:
-        score = min(100, 80 + (user_years - req_years) * 5)
-        return {'score': score, 'match': True, 'reason': '经验符合'}
-    elif user_years >= req_years - 1:
-        score = int(user_years / req_years * 80)
-        return {'score': score, 'match': True, 'reason': '经验接近'}
-    else:
-        score = int(user_years / req_years * 50)
-        return {'score': max(0, score), 'match': False, 'reason': '经验不足'}
+def compute_difficulty(match_score: int) -> str:
+    """按匹配分数返回难度等级 Easy / Medium / Hard"""
+    if match_score >= TIER1_MIN:
+        return 'Easy'
+    if match_score >= TIER2_MIN:
+        return 'Medium'
+    return 'Hard'
 
 
-def calculate_skills_match(profile: ResumeProfile, requirements: JobRequirements) -> Dict[str, Any]:
-    """计算技能匹配度（模糊匹配）"""
-    user_skills = set()
-    for category in ['programming', 'frameworks', 'tools', 'other']:
-        if profile.skills.get(category):
-            user_skills.update(s.lower() for s in profile.skills[category])
+# ==================== 投递建议分类 ====================
 
-    required = requirements.required_skills
-    preferred = requirements.preferred_skills
+def decide_application_category(
+    matched_skill_count: int,
+    salary_gap: int,
+    exp_gap: Optional[float],
+    degree_ok: bool,
+    salary_known: bool = True,
+) -> Tuple[str, str]:
+    """
+    裁定投递建议分类。
 
-    # 匹配必备技能
-    matched_required = []
-    missing_required = []
-    for skill in required:
-        skill_lower = skill.lower()
-        if any(skill_lower in us or us in skill_lower for us in user_skills):
-            matched_required.append(skill)
-        else:
-            missing_required.append(skill)
+    分类语义（三类互斥且穷尽）:
+        cannot_apply      ⟺ 命中硬门槛。仅三种情形：学历硬性不达标、
+                            经验差 ≥ CANNOT_APPLY_EXP_GAP 年、
+                            薪资差距 > CANNOT_APPLY_SALARY_GAP K。
+        qualified         ⟺ 未命中硬门槛，且技能命中 ≥ QUALIFIED_MIN_SKILLS、
+                            薪资在期望区间内、学历经验完全满足。
+        need_optimization ⟺ 其余（未命中硬门槛但未达 qualified）——差距可补齐。
 
-    # 匹配加分技能
-    matched_preferred = []
-    for skill in preferred:
-        skill_lower = skill.lower()
-        if any(skill_lower in us or us in skill_lower for us in user_skills):
-            matched_preferred.append(skill)
+    注意「经验差 1~3 年」「薪资差 3~8K」这类中间带归 need_optimization：
+    未命中硬门槛就不应告知用户「不可投递」。NEED_OPT_MAX_* 常量只用于
+    措辞（略有差距 / 差距较大），不参与分类判定。
 
-    # 计算分数
-    req_score = (len(matched_required) / len(required) * 70) if required else 70
-    pref_score = (len(matched_preferred) / len(preferred) * 30) if preferred else 30
-    total_score = int(req_score + pref_score)
+    Args:
+        matched_skill_count: 简历技能在 JD 中的命中数
+        salary_gap: 薪资差距(K)，区间重叠时为 0，否则为到期望区间的距离（始终 ≥ 0）
+        exp_gap: JD 要求年限 - 用户实际年限；None 表示无法判断（用户未提供年限）
+        degree_ok: JD 学历要求是否被简历满足
+        salary_known: 薪资是否成功解析（面议/无法解析为 False）
 
-    return {
-        'score': total_score,
-        'match': len(missing_required) <= len(required) * 0.3 if required else True,
-        'matched': matched_required + matched_preferred,
-        'missing': missing_required,
-        'reason': f'匹配{len(matched_required + matched_preferred)}项，缺失{len(missing_required)}项'
-    }
+    Returns:
+        (category, reason) —— category 为三枚举之一，reason 为简短中文理由
+    """
+    # ── 硬门槛 1: 学历 ──
+    if not degree_ok:
+        return CATEGORY_CANNOT_APPLY, '学历硬性不达标'
 
+    # ── 硬门槛 2: 经验差 ≥ 3 年 ──
+    if exp_gap is not None and exp_gap >= CANNOT_APPLY_EXP_GAP:
+        return CATEGORY_CANNOT_APPLY, f'经验差{exp_gap:g}年（≥{CANNOT_APPLY_EXP_GAP}年）'
 
-def predict_difficulty(
-    profile: ResumeProfile,
-    job: Dict[str, Any],
-    match: MatchResult,
-    requirements: Optional[JobRequirements] = None
-) -> DifficultyPrediction:
-    """投递难度预测"""
-    if requirements is None:
-        requirements = analyze_job_requirements_quick(job)
+    # ── 硬门槛 3: 薪资期望差距过大 ──
+    if salary_known and salary_gap > CANNOT_APPLY_SALARY_GAP:
+        return CATEGORY_CANNOT_APPLY, f'薪资期望差距{salary_gap}K（>{CANNOT_APPLY_SALARY_GAP}K）'
 
-    edu_score = match.education_match.get('score', 50)
-    exp_score = match.experience_match.get('score', 50)
-    skill_score = match.skills_match.get('score', 50)
+    # ── 可直接投递: 技能命中足够 + 薪资在期望范围内 + 学历经验完全满足 ──
+    # 经验差未知时不得进入 qualified：无从确认「经验完全满足」
+    # 薪资面议时同样不得进入：未经验证的薪资不应触发自动投递
+    exp_fully_met = exp_gap is not None and exp_gap <= 0
+    if (matched_skill_count >= QUALIFIED_MIN_SKILLS
+            and salary_known and salary_gap == 0
+            and exp_fully_met):
+        return CATEGORY_QUALIFIED, f'技能命中{matched_skill_count}项，薪资匹配，学历经验满足'
 
-    # 公司规模得分
-    if requirements.company_size == '大厂':
-        size_score = 60
-    elif requirements.company_size == '中厂':
-        size_score = 80
-    else:
-        size_score = 90
-
-    # 薪资匹配得分
-    user_salary = profile.salary_expectation
-    job_salary = requirements.salary_range
-    if user_salary.get('min') and job_salary.get('min'):
-        if user_salary['min'] <= job_salary.get('max', 0) and user_salary.get('max', 0) >= job_salary.get('min', 0):
-            salary_score = 100
-        else:
-            salary_score = 50
-    else:
-        salary_score = 80
-
-    total = int(
-        edu_score * DIFFICULTY_WEIGHTS['education'] +
-        exp_score * DIFFICULTY_WEIGHTS['experience'] +
-        skill_score * DIFFICULTY_WEIGHTS['skills'] +
-        size_score * DIFFICULTY_WEIGHTS['company_size'] +
-        salary_score * DIFFICULTY_WEIGHTS['salary']
-    )
-
-    if total >= 70:
-        level = '易'
-    elif total >= 50:
-        level = '中'
-    else:
-        level = '难'
-
-    return DifficultyPrediction(
-        difficulty_level=level,
-        factors={
-            'education': edu_score,
-            'experience': exp_score,
-            'skills': skill_score,
-            'company_size': size_score,
-            'salary': salary_score
-        },
-        total_score=total
-    )
+    # ── 其余一律优化后投递: 未命中硬门槛，差距可补齐 ──
+    details = [f'技能命中{matched_skill_count}项']
+    if matched_skill_count < QUALIFIED_MIN_SKILLS:
+        details.append(f'缺{QUALIFIED_MIN_SKILLS - matched_skill_count}项达标技能')
+    if not salary_known:
+        details.append('薪资面议待确认')
+    elif salary_gap:
+        details.append(f'薪资差{salary_gap}K'
+                       + ('' if salary_gap <= NEED_OPT_MAX_SALARY_GAP else '（差距较大）'))
+    if exp_gap is None:
+        details.append('年限待确认')
+    elif exp_gap > 0:
+        details.append(f'经验差{exp_gap:g}年'
+                       + ('' if exp_gap <= NEED_OPT_MAX_EXP_GAP else '（差距较大）'))
+    return CATEGORY_NEED_OPTIMIZATION, '，'.join(details)
 
 
-# ==================== 增强评分系统（6维度精准匹配） ====================
+# ==================== 6 维度评分 ====================
 
 def score_job_advanced(
     job: Dict[str, Any],
@@ -272,129 +385,111 @@ def score_job_advanced(
     salary_min: int = 8,
     salary_max: int = 10,
     user_experience_years: float = 0,
+    user_degree: str = '',
 ) -> Dict[str, Any]:
     """
-    增强版岗位评分（6维度精细打分，区分度 0-115 分）
+    6 维度规则评分（总分 0-115）+ 投递建议分类
 
     评分维度:
-        1. 薪资匹配 (0-20): JD薪资 vs 期望薪资（Fix 1: 使用实际参数）
-        2. 经验匹配 (0-20): JD经验要求 vs 用户实际年限（Fix 6）
-        3. 学历匹配 (0-15): 本科/大专 vs 硕士要求
-        4. 技能重合 (0-30): 简历技能在JD中词边界匹配 + 别名归一化（Fix 4）
-        5. 职位相关 (0-20): 岗位名含目标关键词
-        6. AI核心优势 (0-10): JD含AI关键词梯度计分（Fix 5）
+        1. 薪资匹配 (0-20): JD 薪资区间 vs 期望区间
+        2. 经验匹配 (0-20): JD 要求年限 vs 用户实际年限
+        3. 学历匹配 (0-15): JD 学历等级 vs 简历学历等级，不达标为硬门槛（0 分）
+        4. 技能重合 (0-30): 简历技能在 JD 中词边界匹配 + 别名归一化，每项 5 分
+        5. 职位相关 (0-20): 职位名含目标关键词，每个 5 分
+        6. AI 核心优势 (0-10): JD 含 AI 关键词，按去重后命中数梯度计分
+
+    分数只决定 difficulty（展示用）；是否投递由 application_category 独立裁定，
+    见 decide_application_category —— 硬门槛优先，不受总分影响。
 
     Args:
-        job: 岗位字典，需含 '职位', '薪资', '经验', '学历', '技能标签', '岗位要求和职责'
+        job: 岗位字典，需含 '职位' '薪资' '经验' '学历' '技能标签' '岗位要求和职责'
         resume_skills: 求职者技能列表
         resume_keywords: 目标职位关键词
-        salary_min: 期望最低薪资(K) -- 实际参与计算（Fix 1）
-        salary_max: 期望最高薪资(K) -- 实际参与计算（Fix 1）
-        user_experience_years: 用户实际工作年限，0表示未提供（Fix 6）
+        salary_min / salary_max: 期望薪资区间(K)
+        user_experience_years: 用户实际工作年限，0 表示未提供
+        user_degree: 用户学历文本（如 '本科'），空值按 DEFAULT_RESUME_DEGREE_LEVEL 处理
 
     Returns:
-        {
-            'match_score': int,        # 总分 (0-115)
-            'salary_score': int,
-            'experience_score': int,
-            'degree_score': int,
-            'skills_score': int,
-            'position_score': int,
-            'ai_bonus': int,
-            'match_reasons': [str],    # 匹配理由
-            'matched_skills': [str],   # 命中的技能
-            'missing_skills': [str],   # 用户缺失的JD要求技能（Fix 7）
-            'difficulty': str,         # Easy/Medium/Hard
-            'optimization_points': [str],
-        }
+        含 match_score、各维度分项、match_reasons、matched_skills、missing_skills、
+        difficulty、application_category、application_category_reason、
+        optimization_points 的字典
     """
     if resume_skills is None:
         resume_skills = []
     if resume_keywords is None:
         resume_keywords = ['AI', 'RAG', 'Agent', 'LLM', '大模型', '后端开发', 'Python', 'Java', '全栈']
 
-    score = 0
-    reasons = []
+    reasons: List[str] = []
     jd_text = (job.get('岗位要求和职责', '') + ' ' + job.get('技能标签', '')).lower()
     pos_name = job.get('职位', '').lower()
 
-    # ── 维度1: 薪资匹配 (0-20) ── Fix 1: 使用实际期望薪资
-    salary_str = job.get('薪资', '')
-    sal_low = sal_high = 0
-    try:
-        parts = salary_str.replace('K', '').replace('·', ' ').split()[0].split('-')
-        sal_low = int(parts[0])
-        sal_high = int(parts[1]) if len(parts) > 1 else sal_low
-    except (ValueError, IndexError):
-        sal_low = sal_high = 0
+    # ── 维度1: 薪资匹配 (0-20) ──
+    sal_low, sal_high = _parse_salary(job.get('薪资', ''))
+    salary_known = bool(sal_high)
+    salary_gap = 0   # 到期望区间的距离(K)，区间重叠为 0
 
-    salary_score = 0
-    if sal_low == 0 and sal_high == 0:
-        # 薪资不可解析
+    if not salary_known:
         salary_score = 10
         reasons.append('薪资未知')
     elif sal_low <= salary_max and sal_high >= salary_min:
-        # 范围重叠：JD薪资与期望区间相交
-        # 计算重叠程度，更接近期望 → 更高分
-        overlap_low = max(sal_low, salary_min)
-        overlap_high = min(sal_high, salary_max)
-        if overlap_high - overlap_low >= 2:
+        # 区间重叠：重叠越宽越接近期望
+        overlap = min(sal_high, salary_max) - max(sal_low, salary_min)
+        if overlap >= 2:
             salary_score = 20
             reasons.append(f'薪资匹配({sal_low}-{sal_high}K vs 期望{salary_min}-{salary_max}K)')
         else:
             salary_score = 16
             reasons.append(f'薪资基本匹配({sal_low}-{sal_high}K)')
-    elif salary_min > sal_high:
-        # JD薪资低于用户最低期望
-        gap = salary_min - sal_high
-        if gap <= 3:
+    elif sal_high < salary_min:
+        # JD 低于最低期望
+        salary_gap = salary_min - sal_high
+        if salary_gap <= 3:
             salary_score = 12
             reasons.append(f'薪资略低于期望({sal_low}-{sal_high}K)')
         else:
             salary_score = 5
             reasons.append(f'薪资低于期望({sal_low}-{sal_high}K)')
-    elif salary_max < sal_low:
-        # JD最低薪资超过用户最高期望（可冲刺的高薪岗位）
-        gap = sal_low - salary_max
-        if gap <= 3:
+    else:
+        # JD 最低薪资超过最高期望：可冲刺的高薪岗
+        salary_gap = sal_low - salary_max
+        if salary_gap <= 3:
             salary_score = 14
             reasons.append(f'薪资略高({sal_low}-{sal_high}K，可冲刺)')
-        elif gap <= 8:
+        elif salary_gap <= 8:
             salary_score = 10
             reasons.append(f'薪资偏高({sal_low}-{sal_high}K，可冲刺)')
         else:
             salary_score = 5
             reasons.append(f'薪资远超期望({sal_low}-{sal_high}K，竞争激烈)')
-    else:
-        salary_score = 10
-        reasons.append(f'薪资({sal_low}-{sal_high}K)')
-    score += salary_score
 
-    # ── 维度2: 经验匹配 (0-20) ── Fix 6: 使用用户实际年限
+    # ── 维度2: 经验匹配 (0-20) ──
     exp = job.get('经验', '')
-    experience_score = 0
     jd_exp_years = parse_experience_years(exp)
+    exp_gap: Optional[float] = None   # None = 无法判断（用户或 JD 年限缺失）
 
-    # 应届/经验不限：适合所有人
     if any(t in exp for t in ['应届', '经验不限', '1年以内', '在校', '在校生']):
         experience_score = 20
+        exp_gap = 0.0   # JD 无年限门槛，视为完全满足
         reasons.append('经验要求匹配(应届/经验不限)')
     elif jd_exp_years > 0 and user_experience_years > 0:
-        # JD 和用户都有数值型经验 → 直接比较
-        if user_experience_years >= jd_exp_years:
+        # 双方都有数值年限 → 直接比较
+        exp_gap = jd_exp_years - user_experience_years
+        gap = exp_gap
+        if gap <= 0:
             experience_score = 20
-            reasons.append(f'经验符合(要求{jd_exp_years}年, 您{user_experience_years}年)')
-        elif user_experience_years >= jd_exp_years - 1:
+            label = '经验符合'
+        elif gap <= 1:
             experience_score = 12
-            reasons.append(f'经验接近(要求{jd_exp_years}年, 您{user_experience_years}年)')
-        elif user_experience_years >= jd_exp_years - 2:
+            label = '经验接近'
+        elif gap <= 2:
             experience_score = 6
-            reasons.append(f'经验略低(要求{jd_exp_years}年, 您{user_experience_years}年)')
+            label = '经验略低'
         else:
             experience_score = 2
-            reasons.append(f'经验不足(要求{jd_exp_years}年, 您{user_experience_years}年)')
+            label = '经验不足'
+        reasons.append(f'{label}(要求{jd_exp_years}年, 您{user_experience_years}年)')
     elif jd_exp_years > 0:
-        # JD有数值要求但用户未提供年限 → 基于JD关键词估计
+        # JD 有数值要求但用户未提供年限 → 按 JD 门槛估计
         if jd_exp_years <= 2:
             experience_score = 10
             reasons.append(f'经验要求低({exp}, 可尝试)')
@@ -405,7 +500,7 @@ def score_job_advanced(
             experience_score = 2
             reasons.append(f'经验要求高({exp})')
     else:
-        # JD经验字段无法解析 → 基于关键词兜底
+        # JD 经验字段无法解析 → 关键词兜底
         if '3-5年' in exp:
             experience_score = 3
             reasons.append('经验要求3-5年(偏高)')
@@ -415,116 +510,104 @@ def score_job_advanced(
         else:
             experience_score = 8
             reasons.append(f'经验要求({exp})')
-    score += experience_score
 
     # ── 维度3: 学历匹配 (0-15) ──
+    # 等级比较：JD 要求高于简历学历即为硬门槛（0 分 + 后续判不可投递）
     deg = job.get('学历', '')
-    degree_score = 0
-    if '本科' in deg or '大专' in deg or not deg:
-        degree_score = 15
-        reasons.append('学历匹配')
-    elif '硕士' in deg:
-        reasons.append('学历要求硕士(硬门槛)')
-    else:
-        degree_score = 5
-    score += degree_score
+    jd_degree_level = parse_degree_level(deg)
+    resume_degree_level = parse_degree_level(user_degree, default=DEFAULT_RESUME_DEGREE_LEVEL)
+    if not resume_degree_level:
+        resume_degree_level = DEFAULT_RESUME_DEGREE_LEVEL
+    degree_ok = jd_degree_level <= resume_degree_level
 
-    # ── 维度4: 技能重合 (0-30) ── Fix 4: 词边界匹配 + 别名归一化
-    matched = []
-    matched_norm = set()  # 去重用
+    if not jd_degree_level:
+        degree_score = 15
+        reasons.append('学历匹配(不限)')
+    elif degree_ok:
+        degree_score = 15
+        reasons.append(f'学历匹配({deg})')
+    else:
+        degree_score = 0
+        reasons.append(f'学历要求{deg}(硬门槛，简历不达标)')
+
+    # ── 维度4: 技能重合 (0-30) ──
+    matched: List[str] = []
+    matched_norms = set()
     for skill in resume_skills:
-        skill_norm = _normalize_skill(skill)
-        if skill_norm in matched_norm:
+        norm = _normalize_skill(skill)
+        if norm in matched_norms:
             continue
-        # 检查技能本身（词边界）
-        if _skill_in_text(skill, jd_text):
+        if _skill_hit(skill, jd_text):
             matched.append(skill)
-            matched_norm.add(skill_norm)
-        else:
-            # 检查同义变体
-            for variant in _SKILL_CANONICAL_MAP.get(skill_norm, [skill]):
-                if variant != skill_norm and _skill_in_text(variant, jd_text):
-                    matched.append(skill)
-                    matched_norm.add(skill_norm)
-                    break
+            matched_norms.add(norm)
     skills_score = min(30, len(matched) * 5)
-    score += skills_score
     reasons.append(f'技能命中:{len(matched)}项')
 
     # ── 维度5: 职位相关度 (0-20) ──
-    pos_rel = sum(5 for kw in resume_keywords if kw.lower() in pos_name.lower())
-    position_score = min(20, pos_rel)
-    score += position_score
-    if pos_rel > 0:
+    position_score = min(20, sum(5 for kw in resume_keywords if kw.lower() in pos_name))
+    if position_score:
         reasons.append(f'职位相关:+{position_score}')
 
-    # ── 维度6: AI核心优势 (0-10) ── Fix 5: 梯度计分
-    ai_bonus = 0
-    ai_hits = [k for k in AI_KEYWORDS if k in jd_text]
-    # 去重：不同关键词可能指向同一概念
-    ai_unique = set(_normalize_skill(k) if k not in AI_KEYWORDS else k for k in ai_hits)
-    ai_count = len(ai_unique)
+    # ── 维度6: AI 核心优势 (0-10) ──
+    # 归一化去重：'llm' 与 '大模型' 指向同一概念，只计 1 项
+    ai_count = len({_normalize_skill(k) for k in AI_KEYWORDS if k in jd_text})
     if ai_count >= 5:
         ai_bonus = 10
     elif ai_count >= 3:
         ai_bonus = 7
     elif ai_count >= 1:
         ai_bonus = 4
-    if ai_bonus > 0:
-        score += ai_bonus
+    else:
+        ai_bonus = 0
+    if ai_bonus:
         reasons.append(f'AI/RAG/Agent匹配:+{ai_bonus} ({ai_count}项)')
 
-    # ── 缺失技能 ── Fix 7: JD要求但用户不具备的技能
-    jd_skills_str = job.get('技能标签', '')
-    jd_tag_skills = [s.strip() for s in jd_skills_str.split() if s.strip()] if jd_skills_str else []
-    # 用户技能归一化集合
-    user_skill_norms = set(_normalize_skill(s) for s in resume_skills)
-    missing = []
-    seen_missing = set()
-    for jd_skill in jd_tag_skills:
-        jd_norm = _normalize_skill(jd_skill)
-        if jd_norm in seen_missing:
-            continue
-        seen_missing.add(jd_norm)
-        # 检查用户是否有匹配技能
-        is_matched = jd_norm in user_skill_norms
-        if not is_matched:
-            # 检查同义变体
-            jd_variants = _SKILL_CANONICAL_MAP.get(jd_norm, [jd_norm])
-            for user_norm in user_skill_norms:
-                if user_norm in jd_variants:
-                    is_matched = True
-                    break
-        if not is_matched:
-            missing.append(jd_skill)
-        if len(missing) >= 5:
-            break
-    # 兜底：如果JD没有标签技能，尝试从描述中提取关键技能
-    if not missing and not jd_tag_skills:
-        common_skills = ['python', 'java', 'go', 'docker', 'kubernetes', 'mysql',
-                         'redis', 'linux', 'git', 'react', 'vue', 'spring']
-        missing = [s for s in common_skills[:5] if _skill_in_text(s, jd_text) and _normalize_skill(s) not in user_skill_norms][:5]
+    score = (salary_score + experience_score + degree_score
+             + skills_score + position_score + ai_bonus)
 
-    # ── 难度 ──
-    if score >= 100:
-        difficulty = 'Easy'
-    elif score >= 85:
-        difficulty = 'Medium'
-    else:
-        difficulty = 'Hard'
+    # ── 缺失技能: JD 要求但用户不具备 ──
+    # 两侧都经 _normalize_skill 归一，故比较规范名即可覆盖别名
+    user_norms = {_normalize_skill(s) for s in resume_skills}
+    jd_tag_skills = job.get('技能标签', '').split()
+    missing: List[str] = []
+    seen_norms = set()
+    for jd_skill in jd_tag_skills:
+        norm = _normalize_skill(jd_skill)
+        if norm in seen_norms:
+            continue
+        seen_norms.add(norm)
+        if norm not in user_norms:
+            missing.append(jd_skill)
+            if len(missing) >= 5:
+                break
+
+    # 兜底：JD 无技能标签时从描述中提取
+    if not jd_tag_skills:
+        missing = [s for s in _COMMON_SKILLS
+                   if _skill_in_text(s, jd_text) and _normalize_skill(s) not in user_norms][:5]
+
+    difficulty = compute_difficulty(score)
+
+    # ── 投递建议分类（硬门槛优先，与总分解耦）──
+    application_category, category_reason = decide_application_category(
+        matched_skill_count=len(matched),
+        salary_gap=salary_gap,
+        exp_gap=exp_gap,
+        degree_ok=degree_ok,
+        salary_known=salary_known,
+    )
 
     # ── 优化建议 ──
-    optimization_points = []
-    if score >= 85:
+    if score >= TIER2_MIN:
         optimization_points = [
             f'强调{job.get("职位", "")}相关项目经验',
             '突出RAG/Agent实战能力',
-            '量化项目成果数据'
+            '量化项目成果数据',
         ]
     else:
         optimization_points = [
             f'补充{missing[0] if missing else "相关"}技能',
-            '强化项目描述与岗位关联'
+            '强化项目描述与岗位关联',
         ]
 
     return {
@@ -539,52 +622,45 @@ def score_job_advanced(
         'matched_skills': matched,
         'missing_skills': missing,
         'difficulty': difficulty,
+        'application_category': application_category,
+        'application_category_reason': category_reason,
         'optimization_points': optimization_points,
         'parsed_salary_low': sal_low,
         'parsed_salary_high': sal_high,
     }
 
 
-def compute_difficulty(
-    match_score: int,
-) -> str:
-    """
-    根据匹配分数计算难度等级。
-
-    Args:
-        match_score: 综合匹配分数
-
-    Returns:
-        difficulty: str ('Easy' / 'Medium' / 'Hard')
-    """
-    if match_score >= 100:
-        return 'Easy'
-    elif match_score >= 85:
-        return 'Medium'
-    else:
-        return 'Hard'
-
+# ==================== 批量分类 ====================
 
 def classify_jobs_advanced(
     profile: ResumeProfile,
     jobs: List[Dict[str, Any]],
-    tier_thresholds: Tuple[int, int] = (100, 85)
+    tier_thresholds: Tuple[int, int] = (TIER1_MIN, TIER2_MIN)
 ) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict]]:
     """
-    增强版批量岗位分类（6维度评分）
+    批量 6 维度评分并分为 4 层
+
+    分层由 application_category 驱动（而非分数），保证「岗位所在桶」与
+    「岗位的 application_category 字段」永不矛盾：
+
+        tier1 = qualified
+        tier2 = need_optimization
+        tier3 = cannot_apply 且 score ≥ TIER3_MIN
+        tier4 = cannot_apply 且 score < TIER3_MIN（报告中丢弃）
 
     Args:
         profile: 简历解析结果
         jobs: 岗位列表
-        tier_thresholds: (tier1_min, tier2_min) 阈值，默认 >=100 为 Tier1，>=85 为 Tier2
+        tier_thresholds: 保留参数，仅用于兼容旧调用签名（分层已改为分类驱动）
 
     Returns:
-        (tier1, tier2, tier3, tier4) 四个层级的岗位列表(按分数降序)
+        (tier1, tier2, tier3, tier4) 四层岗位列表，各层按分数降序
     """
-    # 从 profile 提取技能和关键词
-    all_skills = []
+    all_skills: List[str] = []
     for cat in ['programming', 'frameworks', 'tools', 'other']:
-        all_skills.extend(profile.skills.get(cat, []))
+        # `or []`：某类技能为空时解析产出的是 null 而非缺键，get 的默认值不生效，
+        # extend(None) 会 TypeError（同本文件 676 行的坑）
+        all_skills.extend((profile.skills or {}).get(cat) or [])
     if not all_skills:
         all_skills = profile.keywords or []
 
@@ -592,16 +668,17 @@ def classify_jobs_advanced(
         'AI', 'RAG', 'Agent', 'LLM', '大模型', '后端开发', 'Python', 'Java', '全栈'
     ]
 
-    salary = profile.salary_expectation
-    sal_min = salary.get('min', 8) if salary else 8
-    sal_max = salary.get('max', 10) if salary else 10
-
-    # 提取用户实际工作年限（Fix 6）
+    salary = profile.salary_expectation or {}
+    # `or` 而不是 get 的第二参数：简历没写期望薪资时，解析产出的是
+    # {"min": null, "max": null}——键存在、值是 None，默认值形同虚设，
+    # 于是 None 一路传到 score_job_advanced 的 `sal_low <= salary_max` 崩成
+    # TypeError，整批评分挂掉（2026-08-13 实测）。
+    sal_min = salary.get('min') or 8
+    sal_max = salary.get('max') or 10
     user_experience_years = float(profile.experience.get('total_years', 0) or 0)
+    user_degree = profile.education.get('degree', '') or ''
 
     print(f"\n正在增强分析 {len(jobs)} 个岗位(6维度评分)...")
-
-    tier1_min, tier2_min = tier_thresholds
 
     tier1, tier2, tier3, tier4 = [], [], [], []
 
@@ -616,31 +693,122 @@ def classify_jobs_advanced(
             salary_min=sal_min,
             salary_max=sal_max,
             user_experience_years=user_experience_years,
+            user_degree=user_degree,
         )
+        job_result = {**job, **result}
 
-        job_result = {
-            **{k: v for k, v in job.items()},  # 保留原始字段
-            **result,  # 合并评分结果
-        }
-
-        ms = result['match_score']
-        if ms >= tier1_min:
+        category = result['application_category']
+        if category == CATEGORY_QUALIFIED:
             tier1.append(job_result)
-        elif ms >= tier2_min:
+        elif category == CATEGORY_NEED_OPTIMIZATION:
             tier2.append(job_result)
-        elif ms >= 70:
+        elif result['match_score'] >= TIER3_MIN:
             tier3.append(job_result)
         else:
             tier4.append(job_result)
 
-    # 按分数降序
-    for tier in [tier1, tier2, tier3, tier4]:
-        tier.sort(key=lambda x: x['match_score'], reverse=True)
+    # 报告是给人看的，主序仍是匹配分；活跃度只做同分裁决
+    for tier in (tier1, tier2, tier3, tier4):
+        tier.sort(key=lambda x: (x['match_score'], hr_activity_sort_key(x)), reverse=True)
 
     print(f"分析完成！Tier1: {len(tier1)}, Tier2: {len(tier2)}, "
           f"Tier3: {len(tier3)}, Tier4: {len(tier4)}")
 
     return tier1, tier2, tier3, tier4
+
+
+# ==================== 岗位视图（唯一的字段映射处） ====================
+
+# 岗位从 CSV（中文列名）走到前端（ASCII 键）的路上要被重新构造一次。
+# 这里曾经有三份各自独立的白名单：scoring.tiers_to_classification、
+# report.generate_bauhaus_json、deep_analysis 的 job_result。三者服务不同路径
+# （快速模式 HTML / 快速模式 JSON / 深度模式），加一个字段必须同步改三处，
+# 漏一处那条路径就静默丢字段 —— 没有报错，只是前端拿到空值。
+# HR 活跃度就这么丢过一次：JSON 正常，HTML 每张卡都显示「未采集」，
+# 而数据其实已经采到了。比不显示更糟的是显示成没有。
+#
+# 所以现在只有这一处枚举岗位字段。新增字段只加在这里。
+def build_job_view(
+    job: Dict[str, Any],
+    fallback_category: str = '',
+    *,
+    company_info_len: int = 500,
+    jd_len: int = 1000,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    岗位 dict → 报告/前端统一视图。
+
+    读取时对「中文列名（来自 CSV）」和「ASCII 键（已归一化过的 job）」都做兜底，
+    所以同一个函数能吃原始 CSV 行，也能吃已经映射过一轮的 job。
+
+    Args:
+        job: 岗位 dict，中文或 ASCII 键均可
+        fallback_category: job 自身没有 application_category 时的兜底值
+        company_info_len / jd_len: 截断长度。JSON 产出比 HTML 更紧，故可调。
+        overrides: 调用方已算好的字段（如深度模式的 blended 分数），最后覆盖上去
+
+    Returns:
+        扁平 dict，键为前端读取的 ASCII 名
+    """
+    link = job.get('link', '') or ''
+    job_id = job.get('job_id', '') or ''
+    if not job_id and link:
+        m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link)
+        if m:
+            job_id = 'job_' + m.group(1)
+
+    score = job.get('match_score', 50)
+    company = job.get('公司', job.get('company', '')) or ''
+    scale = job.get('规模', job.get('scale', '')) or ''
+    skill_tags = job.get('技能标签', job.get('skill_tags', '')) or ''
+    jd = (job.get('岗位要求和职责', job.get('jd', '')) or '')
+    company_info = (job.get('公司信息', job.get('company_info', '')) or '')
+
+    view = {
+        'job_id': job_id or f"job_{abs(hash(link)):x}"[:12],
+        'link': link or '#',
+        'company': company,
+        'position': job.get('职位', job.get('position', '')) or '',
+        'city': job.get('城市', job.get('city', '')) or '',
+        'salary': job.get('薪资', job.get('salary', '')) or '',
+        'experience': job.get('经验', job.get('experience', '')) or '',
+        'education': job.get('学历', job.get('degree', job.get('education', ''))) or '',
+        'skills': skill_tags,
+        'skill_tags': skill_tags,
+        'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')) or '',
+        'source_file': job.get('source_file', '') or '',
+        'company_info': company_info[:company_info_len],
+        'scale': scale,
+        'jd': jd[:jd_len],
+        'job_detail': jd[:200],
+        'company_size': parse_company_size(company, scale),
+        'match_score': score,
+        'difficulty': compute_difficulty(score),
+        'application_category': job.get('application_category', fallback_category),
+        'application_category_reason': job.get('application_category_reason', '') or '',
+        'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
+        'missing_items': job.get('missing_skills', [])[:5],
+        'optimization_points': job.get('optimization_points', []),
+        # HR 活跃度快照（爬取瞬间）。rank 为 None 表示「未采集」——爬取时没加 -d，
+        # 详情 API 没被调用过。这与「不活跃」是两件事，前端必须分开显示。
+        'hr_active_desc': job.get('HR活跃度', job.get('hr_active_desc', '')) or '',
+        'hr_online': job.get('HR在线', job.get('hr_online', '')) or '',
+        'hr_title': job.get('HR职位', job.get('hr_title', '')) or '',
+        'hr_activity_rank': hr_activity_rank(job),
+        # 深度模式专有，快速模式留空以保证两种模式字段集一致（前端无需判空）
+        'highlight': job.get('highlight', '') or '',
+        'risk': job.get('risk', '') or '',
+        'is_deep': bool(job.get('is_deep', False)),
+    }
+
+    if overrides:
+        view.update(overrides)
+    return view
+
+
+# 供回归测试和调用方校验：视图的完整字段集合。
+JOB_VIEW_FIELDS = frozenset(build_job_view({}).keys())
 
 
 # ==================== 适配器 ====================
@@ -651,56 +819,15 @@ def tiers_to_classification(
     tier3: List[Dict]
 ) -> JobClassification:
     """
-    将 classify_jobs_advanced 的 4 层输出映射回 JobClassification 三桶格式
+    将 4 层输出映射回 JobClassification 三桶格式
 
-    tier1 → qualified (高匹配)
-    tier2 → need_optimization (可优化)
-    tier3 → cannot_apply (不匹配)
+    tier1 → qualified（高匹配）
+    tier2 → need_optimization（可优化）
+    tier3 → cannot_apply（不匹配）
     tier4 丢弃
     """
-    def _map_job(job: Dict) -> Dict[str, Any]:
-        link = job.get('link', '')
-        job_id = job.get('job_id', '')
-        if not job_id and link:
-            # 从链接中提取唯一 ID
-            m = re.search(r'([A-Za-z0-9_-]{7,})(?:\.html|$)', link)
-            if m:
-                job_id = 'job_' + m.group(1)
-
-        score = job.get('match_score', 50)
-        company_size = parse_company_size(
-            job.get('公司', job.get('company', '')),
-            job.get('规模', job.get('scale', ''))
-        )
-        difficulty = compute_difficulty(score)
-
-        return {
-            'job_id': job_id or f"job_{abs(hash(link)):x}"[:12],
-            'link': link,
-            'company': job.get('公司', job.get('company', '')),
-            'position': job.get('职位', job.get('position', '')),
-            'city': job.get('城市', job.get('city', '')),
-            'salary': job.get('薪资', job.get('salary', '')),
-            'experience': job.get('经验', job.get('experience', '')),
-            'education': job.get('学历', job.get('education', '')),
-            'skills': job.get('技能标签', job.get('skill_tags', '')),
-            'skill_tags': job.get('技能标签', job.get('skill_tags', '')),
-            'welfare_tags': job.get('福利标签', job.get('welfare_tags', '')),
-            'source_file': job.get('source_file', ''),
-            'company_info': (job.get('公司信息', job.get('company_info', '')) or '')[:500],
-            'scale': job.get('规模', job.get('scale', '')),
-            'jd': (job.get('岗位要求和职责', job.get('jd', '')) or '')[:1000],
-            'job_detail': (job.get('岗位要求和职责', job.get('job_detail', '')) or '')[:200],
-            'company_size': company_size,
-            'match_score': score,
-            'difficulty': difficulty,
-            'classification_reason': '; '.join(job.get('match_reasons', [])[:4]),
-            'missing_items': job.get('missing_skills', [])[:5],
-            'optimization_points': job.get('optimization_points', []),
-        }
-
     return JobClassification(
-        cannot_apply=[_map_job(j) for j in tier3],
-        need_optimization=[_map_job(j) for j in tier2],
-        qualified=[_map_job(j) for j in tier1],
+        cannot_apply=[build_job_view(j, CATEGORY_CANNOT_APPLY) for j in tier3],
+        need_optimization=[build_job_view(j, CATEGORY_NEED_OPTIMIZATION) for j in tier2],
+        qualified=[build_job_view(j, CATEGORY_QUALIFIED) for j in tier1],
     )

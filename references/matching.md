@@ -2,7 +2,12 @@
 
 ## Mode Selection
 
-Ask user to choose via `AskUserQuestion`:
+**Do not ask here.** The mode and Top-N arrive already answered — either from the merged Stage 3.5
+question (city + keywords + mode + Top-N in one `AskUserQuestion` call) or from a saved preset's
+`match_mode` / `top_n`. Asking again at Stage 4 is the round-trip that Stage 3.5 exists to avoid.
+
+The table below is what you use to pick the *recommended* option when you compose that Stage 3.5
+question — not a prompt to raise a new one:
 
 | Scenario | Recommended mode | Reason |
 |----------|-----------------|--------|
@@ -10,7 +15,7 @@ Ask user to choose via `AskUserQuestion`:
 | < 50 jobs | Deep | Precision gain worth the tokens |
 | User says "fast" | Quick | Respect user preference |
 | User says "detailed" | Deep | Respect user preference |
-| Unclear | Ask user | Let user decide |
+| Unclear | Deep, Top 10 | The balanced default; mark it 推荐 and let the one question settle it |
 
 ---
 
@@ -32,9 +37,10 @@ HTML report shows `🚀 快速模式` badge. Matching reasons are rule-based ("�
 
 Three phases. For jobs where you want semantic matching and per-job personalized optimization advice.
 
-### Phase 0: Ask User for Top-N
+### Phase 0: Top-N Is Already Known
 
-Use `AskUserQuestion`:
+N came from Stage 3.5's merged question or from the preset's `top_n` — **do not ask again here.**
+The choices offered back at 3.5, for reference:
 
 > Deep mode sorts jobs by rule score, then sends the top N to Claude for per-job LLM analysis. Choose pre-filter count:
 > - Top 5 — fastest, lowest token cost
@@ -42,6 +48,9 @@ Use `AskUserQuestion`:
 > - Top 15 — broader coverage
 > - Top 20 — maximum coverage, highest token cost
 > - Custom — enter any number
+
+If N is somehow missing (no preset and no 3.5 answer — e.g. the user jumped straight to
+「深度匹配」 on an existing report), use 10 and say so in one line rather than opening a gate for it.
 
 ### Phase 1: Python Pre-Filter
 
@@ -51,24 +60,53 @@ python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top
 
 Saves `deep_candidates.json` to `{run_dir}/`. Contains top N candidates (from Tier1+Tier2) with full profile and rule scores.
 
-### Phase 2: Claude Deep Analysis
+### Phase 2: Parallel Deep Analysis (sharded)
 
-Claude reads `{run_dir}/deep_candidates.json`, then for each candidate (in rank order):
+**Do not analyze the candidates one-by-one in the main context.** Top-15 means 15 full JD texts
+plus 15 analysis outputs land in your own context; the 2026-08-13 run hit `preTokens=167,609` and
+paid 167 s for a compaction because of exactly this. It is also serial — 15 sequential
+read-think-write round trips.
 
-1. Read the job's `岗位要求和职责` field (JD text)
-2. Read `scripts/prompts/match_analysis.st` template
-3. Fill resume info and job requirements into the template
-4. Output structured JSON per job:
+Shard, then fan out:
+
+```bash
+python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
+```
+
+This writes `{run_dir}/deep_shards/shard_NN.md`, one per group of 4 candidates. Each shard file is
+**self-contained** — grading rules, resume summary, and that group's JDs are all inside it, so the
+subagent reads *one* file and needs neither `deep_candidates.json`, nor `profile.json`, nor
+`prompts/match_analysis.st`. The resume `raw_text` is deliberately excluded (it would be duplicated
+into every shard for no benefit).
+
+The script prints one ready-to-dispatch prompt per shard. Dispatch them **in parallel**, one agent
+per shard. Each agent writes `deep_shards/result_NN.json` and replies with a single `done <path> <n>`
+line — it must not echo the JSON back, or the main context pays for it twice, which is the whole
+cost this design removes.
+
+Then settle the barrier on artifacts, not notifications:
+
+```bash
+python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360
+```
+
+(Bash's default timeout is 120 s — pass `timeout: 380000` when using `--wait 360`.) This checker
+additionally parses each `result_NN.json`; a half-written file counts as *not ready* rather than as
+a failure, so polling handles agents that are mid-write.
+
+Each result entry must carry `rank` — the merge step maps results back to candidates by `rank`, not
+by `job_id`:
 
 ```json
 {
-  "job_id": "job_xxxxx",
-  "overall_match": 85,
-  "classification": "符合要求",
-  "classification_reason": "核心技能高度匹配，RAG/Agent经验是亮点",
+  "rank": 1,
+  "score": 85,
+  "category": "qualified",
+  "reason": "核心技能高度匹配，RAG/Agent经验是亮点",
   "education_match": {"score": 90, "match": true, "reason": "本科学历满足要求"},
   "experience_match": {"score": 80, "match": true, "reason": "2年与要求的3年接近"},
   "skills_match": {"score": 85, "matched": ["Python", "LangChain", "RAG"], "missing": ["K8s运维"], "reason": "核心AI技能匹配，缺少运维经验"},
+  "salary_match": {"score": 90, "match": true, "reason": "20-30K 与期望 20-28K 重叠"},
   "missing_items": ["Kubernetes运维经验", "高并发系统设计"],
   "optimization_points": [
     "在项目描述中突出RAG系统的检索准确率提升数据",
@@ -79,7 +117,22 @@ Claude reads `{run_dir}/deep_candidates.json`, then for each candidate (in rank 
 }
 ```
 
-Write all results to `{run_dir}/deep_results.json`:
+`category` must be one of the three English enums (`qualified` / `need_optimization` /
+`cannot_apply`). The merge step also accepts the legacy `overall_match` + `classification` (Chinese
+label) fields for backward compatibility with older `deep_results.json` files.
+
+### Phase 3: Merge & Report
+
+```bash
+python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
+```
+
+Merge first collects `deep_shards/result_*.json` into `{run_dir}/deep_results.json` (dedup by
+`rank`, first occurrence wins; a corrupt shard is skipped with a warning instead of failing the
+batch), then does blended scoring (rule 40% + Claude 60%) → reclassify → HTML report.
+
+If no `deep_shards/` directory exists it falls back to reading a hand-written
+`deep_results.json`, so the old single-file flow still works:
 
 ```json
 {
@@ -90,33 +143,86 @@ Write all results to `{run_dir}/deep_results.json`:
 }
 ```
 
-### Phase 3: Merge & Report
-
-```bash
-python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
-```
-
-Script auto-completes: read candidates + deep results → blended scoring (rule 40% + Claude 60%) → reclassify → HTML report.
-
 HTML report shows `🧠 深度模式` badge. Deep-analyzed job cards show highlight/risk tags. "View optimization suggestions" button opens a modal with Claude-generated advice, missing skills, and risk assessment.
 
 ---
 
 ## Classification Tiers (Both Modes)
 
-| Tier | Label | Meaning |
+Every job carries a top-level **`application_category`** field — the single authoritative
+verdict on whether to apply. The frontend renders it via lookup table only and performs no
+arithmetic; changing thresholds never requires a frontend edit.
+
+| `application_category` | Label | Meaning |
 |------|-------|---------|
-| `qualified` | 🟢 符合要求 | High match, ready to apply |
-| `need_optimization` | 🟡 可优化后投递 | Meets requirements but competitive; optimize first |
-| `cannot_apply` | 🔴 不可投递 | Hard requirements not met (education, experience gap) |
+| `qualified` | 🟢 可直接投递 | Skills hit ≥4, salary within expectation, education + experience fully met |
+| `need_optimization` | 🟡 优化后投递 | No hard gate tripped, but short of the `qualified` bar; gaps are closable |
+| `cannot_apply` | 🔴 不可投递 | A hard gate tripped — see below |
+
+The enum values match the `classification` container keys and `JobClassification` field names
+exactly, so a job's bucket and its `application_category` can never disagree.
+
+### Hard gates (the only paths to `cannot_apply`)
+
+Evaluated **before** any score consideration — a hard gate rejects even on an otherwise perfect match:
+
+1. **Education** — JD degree level > resume degree level (e.g. JD requires 硕士, resume is 本科)
+2. **Experience** — gap ≥ `CANNOT_APPLY_EXP_GAP` (3) years
+3. **Salary** — gap > `CANNOT_APPLY_SALARY_GAP` (8) K
+
+Anything that trips no gate but misses the `qualified` bar is `need_optimization` — including the
+middle band (experience gap 1–3 years, salary gap 3–8K). A job that tripped no hard gate is never
+reported as "cannot apply".
+
+### Edge cases
+
+- **Salary 面议 / unparseable** — not disqualifying, but capped at `need_optimization`; unverified salary must not trigger Stage 7 auto-apply. Reason notes 薪资面议待确认.
+- **Resume experience years unknown** — the ≥3-year gate cannot fire, and `qualified` is unreachable ("fully met" is unverifiable).
+- **Resume degree missing** — assumed 本科 (`DEFAULT_RESUME_DEGREE_LEVEL`), preserving prior behaviour.
+
+---
+
+## HR Activity (Sort Key Only — Never Scored)
+
+The crawler stores three columns per job (`-d` required): `HR活跃度` (e.g. 刚刚活跃 / 今日活跃 /
+3日内活跃), `HR在线` (`是`/`否`/empty), `HR职位`. `scoring.hr_activity_rank(job)` folds them into a
+single integer rank, higher = more active, with `HR在线 == '是'` pinned to the top
+(`HR_ONLINE_RANK = 100`).
+
+**It does not participate in scoring.** `match_score` and `application_category` are computed
+without ever consulting activity — a very active HR cannot promote a job past a hard gate, and a
+dormant one cannot demote a strong match. Activity affects exactly two things:
+
+| Consumer | Role of activity |
+|----------|------------------|
+| Report tier lists (`scoring.py`) | Tiebreak only: sorted by `(match_score, activity)` — match score stays the primary key, because the report is for a human reading top-down |
+| Stage 7 apply order (`auto_apply.py`) | **Primary** key: sorted by `(activity, match_score, company)` — a reply from an active HR beats a marginally better match that nobody reads |
+
+`hr_activity_rank` returns `None` when nothing was collected (no `-d`). `hr_activity_sort_key`
+folds `None` to `-1` so uncollected jobs sort after every collected one; when *no* job has data,
+the ordering degrades cleanly to pure `match_score`. `None` is deliberately not `0` — "not
+collected" must never be scored as "least active", and the report renders it as 活跃度未采集
+rather than as an inactive HR.
+
+Parsing is regex + keyword based with a neutral `HR_UNRECOGNIZED_RANK = 30` fallback, so wording
+changes on BOSS's side degrade to "middling" instead of crashing or silently reading as inactive.
 
 ---
 
 ## Scoring Dimensions (Rule-Based, 0-115 pts)
 
-1. **Education match** (25 pts) — degree level vs job requirement
-2. **Experience match** (25 pts) — total years vs job requirement
-3. **Skills match** (35 pts) — keyword overlap between resume skills and JD
-4. **Salary match** (15 pts) — salary expectation vs offered range
-5. **City match** (10 pts) — expected city vs job location
-6. **Industry bonus** (5 pts) — industry keyword alignment
+1. **Salary match** (20 pts) — JD range vs expected range; overlap ≥2K scores full, "reach" jobs above expectation score higher than jobs below it
+2. **Experience match** (20 pts) — JD required years vs actual years; 应届/经验不限 scores full
+3. **Education match** (15 pts) — degree **level comparison**: JD ≤ resume scores full, JD > resume is a hard gate (0 pts)
+4. **Skills match** (30 pts) — resume skills word-boundary-matched against JD + skill tags, 5 pts each (alias-normalized: `k8s`→`kubernetes`, `go`→`golang`, …)
+5. **Position relevance** (20 pts) — target keywords found in the job title, 5 pts each
+6. **AI bonus** (10 pts) — AI keywords in JD, tiered by de-duplicated hit count (≥5 → 10, ≥3 → 7, ≥1 → 4)
+
+The score drives **`difficulty` only** (Easy / Medium / Hard, via `compute_difficulty()` at
+`TIER1_MIN` 100 / `TIER2_MIN` 85). The apply verdict is decided independently by
+`decide_application_category()` — score and category are deliberately decoupled so a high
+score can never override a hard gate.
+
+Thresholds all live in `scoring.py`: `QUALIFIED_MIN_SKILLS` (4), `NEED_OPT_MAX_SALARY_GAP` (3),
+`NEED_OPT_MAX_EXP_GAP` (1), `CANNOT_APPLY_EXP_GAP` (3), `CANNOT_APPLY_SALARY_GAP` (8).
+`NEED_OPT_MAX_*` only shape the reason wording; they do not affect classification.

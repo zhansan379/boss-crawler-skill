@@ -53,6 +53,40 @@ def get_match_analysis_prompt(resume_info: str, job_requirements: str) -> str:
     )
 
 
+def get_greeting_prompt(
+    job: Dict[str, Any],
+    name: str = '',
+    resume_summary: str = '',
+    match_reasons: str = '',
+    availability: str = '',
+    scene_hint: str = '',
+) -> str:
+    """获取招呼语提示词（供 7d 的招呼语子智能体使用）
+
+    规则本体在 prompts/greeting.st，不要在调用处复述 —— 这套口径（前 15 字预览框、
+    校招不许提出勤、到岗信息不许编）曾经散在 references/auto-apply.md 的一张表里，
+    改一次要同步两处。
+
+    availability 为空时传「简历未提供」而不是空串：模板里那条「没给就别猜日期」的
+    指令需要一个明确的取值才生效，留空会被模型读成「这栏我自己想」。
+    """
+    template = load_prompt("greeting")
+    return template.format(
+        company=job.get('公司', '') or '',
+        position=job.get('职位', '') or '',
+        salary=job.get('薪资', '') or '',
+        experience_req=job.get('经验', '') or '',
+        education_req=job.get('学历', '') or '',
+        skills_tags=job.get('技能标签', '') or '',
+        jd=(job.get('岗位要求和职责', '') or '')[:1500],
+        name=name or '',
+        resume_summary=resume_summary or '',
+        match_reasons=match_reasons or '（无）',
+        availability=availability or '简历未提供',
+        scene_hint=scene_hint or '未判断',
+    )
+
+
 def get_optimize_prompt(
     resume_text: str, company: str, position: str,
     salary: str, requirements: str, match_score: int,

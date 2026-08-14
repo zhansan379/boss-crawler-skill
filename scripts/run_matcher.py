@@ -14,10 +14,13 @@ BOSS直聘岗位匹配系统 — 统一 CLI 入口
   # 深度模式 — 阶段 1: 准备候选
   python run_matcher.py --mode deep --profile ./resume_output/<timestamp>/profile.json --top 15
 
-  # 深度模式 — 阶段 2: 合并 Claude 分析结果（自动定位最近运行目录）
+  # 深度模式 — 阶段 2: 切片并行分析（见 shard_deep_candidates.py）
+  python shard_deep_candidates.py ./resume_output/<timestamp>
+
+  # 深度模式 — 阶段 3: 合并分析结果（自动定位最近运行目录、自动收拢分片）
   python run_matcher.py --mode deep --merge
 
-  # 深度模式 — 阶段 2: 指定运行目录
+  # 深度模式 — 阶段 3: 指定运行目录
   python run_matcher.py --mode deep --merge --run-id 2026-08-09_14-30-00
 
   # 指定自定义输出目录（跳过时间戳子目录）
@@ -29,6 +32,7 @@ import json
 import os
 import sys
 
+import stage_timer
 from resume_matcher import (
     ResumeProfile,
     JobClassification,
@@ -177,24 +181,21 @@ def run_deep_prepare(profile: ResumeProfile, output_dir: str, top_n: int) -> Non
     )
 
     print(f"\n{'=' * 60}")
-    print("  ⏳ 等待 Claude Code 深度分析")
+    print("  ⏳ 阶段 2: 并行深度分析")
     print(f"{'=' * 60}")
     print(f"\n候选文件: {candidate_path}")
-    print(f"\n请 Claude Code 执行以下操作:")
-    print(f"  1. Read {candidate_path}")
-    print(f"  2. 对每个候选岗位，Read prompts/match_analysis.st")
-    print(f"  3. 填入简历信息和岗位要求，输出深度分析 JSON")
-    print(f"  4. 汇总所有结果写入 {output_dir}/deep_results.json")
-    print(f"\nClaude 分析完成后，运行:")
-    print(f"  python run_matcher.py --mode deep --merge")
+    print(f"\n不要在主上下文里逐个分析 —— {top_n} 份 JD 全文会把上下文顶到触发压缩。")
+    print("改为切片后并行派发 subagent：")
+    print(f"\n  python scripts/shard_deep_candidates.py {output_dir}")
+    print("\n该脚本会打印每片的派发提示词，以及后续的等待和合并命令。")
 
 
 def run_deep_merge(output_dir: str) -> None:
-    """深度模式阶段 2：合并 Claude 分析结果 + 生成报告"""
-    from resume_matcher.deep_analysis import merge_deep_results
+    """深度模式阶段 3：合并分析结果 + 生成报告"""
+    from resume_matcher.deep_analysis import merge_deep_results, collect_shard_results
 
     print("\n" + "=" * 60)
-    print("  🧠 深度模式 — 阶段 2: 合并分析结果")
+    print("  🧠 深度模式 — 阶段 3: 合并分析结果")
     print("=" * 60)
 
     candidates_file = os.path.join(output_dir, 'deep_candidates.json')
@@ -205,9 +206,16 @@ def run_deep_merge(output_dir: str) -> None:
         print("请先运行: python run_matcher.py --mode deep")
         sys.exit(1)
 
+    # 并行分片流程：先把 deep_shards/result_*.json 收拢成 deep_results.json。
+    # 没有分片目录时返回 None，回落到「Claude 自己写了 deep_results.json」的旧路径。
+    collected = collect_shard_results(output_dir)
+
     if not os.path.exists(results_file):
         print(f"错误: 深度分析结果文件不存在 {results_file}")
-        print(f"请先让 Claude Code 完成深度分析并将结果写入 {results_file}")
+        if collected is None:
+            print("  没有找到 deep_shards/result_*.json，也没有 deep_results.json。")
+            print("  并行分片流程: python scripts/shard_deep_candidates.py " + output_dir)
+            print("  然后派发 subagent，再用 check_artifacts.py --kinds deep_shards 等产物齐全。")
         sys.exit(1)
 
     classification = merge_deep_results(
@@ -225,6 +233,12 @@ def run_deep_merge(output_dir: str) -> None:
 
 
 def main():
+    # Windows 控制台是 GBK，print 里任何 emoji（本文件就有 📄/🧠）都会抛
+    # UnicodeEncodeError 并带崩整个匹配流程。放在 main() 头部，调用方就不必
+    # 每条命令手加 PYTHONIOENCODING=utf-8。
+    for _stream in (sys.stdout, sys.stderr):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(
         description='BOSS直聘岗位匹配系统 — 简历与岗位智能匹配',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -263,7 +277,8 @@ def main():
     parser.add_argument(
         '--merge',
         action='store_true',
-        help='深度模式阶段 2: 合并 Claude 分析结果（需先有 deep_results.json）',
+        help='深度模式阶段 3: 合并分析结果（自动收拢 deep_shards/result_*.json，'
+             '没有分片则回落到已有的 deep_results.json）',
     )
     parser.add_argument(
         '--output-dir', '-o',
@@ -309,8 +324,9 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     if args.mode == 'deep' and args.merge:
-        # 深度模式 — 阶段 2: 合并
-        run_deep_merge(output_dir)
+        # 深度模式 — 阶段 3: 合并
+        with stage_timer.stage(output_dir, 'deep_merge'):
+            run_deep_merge(output_dir)
         return
 
     # 快速模式 + 深度模式阶段 1 都需要 profile
@@ -320,9 +336,11 @@ def main():
     profile = load_profile(args.profile)
 
     if args.mode == 'quick':
-        run_quick_mode(profile, output_dir)
+        with stage_timer.stage(output_dir, 'quick_match'):
+            run_quick_mode(profile, output_dir)
     elif args.mode == 'deep':
-        run_deep_prepare(profile, output_dir, args.top)
+        with stage_timer.stage(output_dir, 'deep_prepare'):
+            run_deep_prepare(profile, output_dir, args.top)
 
 
 if __name__ == '__main__':

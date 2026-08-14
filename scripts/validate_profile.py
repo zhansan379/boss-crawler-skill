@@ -11,7 +11,11 @@ Profile 交叉校验脚本
 
 输出:
     - 差异报告（文本 + JSON）
-    - 退出码 0 = 无差异 / 1 = 有差异（供 CI/自动化判断）
+    - 退出码 0 = 技能无遗漏 / 1 = 有技能遗漏（供 CI/自动化判断）
+
+退出码只由 missing_skills 决定 —— 那一项走已知技术字典，误报极少。
+项目名/公司名/类别数量三项是低精度启发式（松正则 + 精确集合差），
+措辞不一致就会误报，因此只作 hint 打印，不影响退出码。
 """
 
 import json
@@ -276,12 +280,14 @@ def run_validation(resume_text: str, profile: dict) -> dict:
     return {
         'matched_skills': sorted(matched_skills),
         'missing_skills': sorted(missing_skills),
-        'missing_projects': sorted(missing_projects),
-        'missing_companies': sorted(missing_companies),
-        'soft_warnings': soft_warnings,
+        # 以下三项是启发式提示，不参与 has_gaps / 退出码，详见模块 docstring
+        'hint_projects': sorted(missing_projects),
+        'hint_companies': sorted(missing_companies),
+        'hint_warnings': soft_warnings,
         'total_extracted': len(meaningful_terms),
         'total_profile_skills': len(profile_skills),
-        'has_gaps': bool(missing_skills or missing_projects or missing_companies or soft_warnings),
+        'has_gaps': bool(missing_skills),
+        'has_hints': bool(missing_projects or missing_companies or soft_warnings),
     }
 
 
@@ -306,29 +312,30 @@ def print_report(report: dict):
         print(f"  [MISSING] Skills ({len(report['missing_skills'])}):")
         print(f"     {', '.join(report['missing_skills'])}")
 
-    if report['missing_projects']:
+    if report['hint_projects'] or report['hint_companies'] or report['hint_warnings']:
         print()
-        print(f"  [MISSING] Projects ({len(report['missing_projects'])}):")
-        for p in report['missing_projects']:
+        print("  --- hints (启发式，误报常见，不影响退出码) ---")
+
+    if report['hint_projects']:
+        print(f"  [HINT] Projects not matched by name ({len(report['hint_projects'])}):")
+        for p in report['hint_projects']:
             print(f"     - {p}")
 
-    if report['missing_companies']:
-        print()
-        print(f"  [MISSING] Experience ({len(report['missing_companies'])}):")
-        for c in report['missing_companies']:
+    if report['hint_companies']:
+        print(f"  [HINT] Companies not matched by name ({len(report['hint_companies'])}):")
+        for c in report['hint_companies']:
             print(f"     - {c}")
 
-    if report['soft_warnings']:
-        print()
-        for w in report['soft_warnings']:
-            print(f"  [WARN] {w}")
+    if report['hint_warnings']:
+        for w in report['hint_warnings']:
+            print(f"  [HINT] {w}")
 
     if report['has_gaps']:
         print()
-        print("  [ACTION REQUIRED] Gaps found! Update profile.json then re-run matching.")
+        print("  [ACTION REQUIRED] Skills missing from profile! Update profile.json then re-run matching.")
     else:
         print()
-        print("  [OK] No gaps. Profile matches resume text.")
+        print("  [OK] No skill gaps. Profile covers every known tech term in the resume.")
 
     print()
     print("=" * 60)
@@ -346,7 +353,8 @@ def print_report(report: dict):
 def main():
     # Fix Windows console encoding for emoji/Chinese output
     if sys.platform == 'win32':
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        for _stream in (sys.stdout, sys.stderr):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
 
     if len(sys.argv) < 3:
         print("用法: python validate_profile.py <resume_text_path> <profile_json_path>")

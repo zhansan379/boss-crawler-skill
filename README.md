@@ -245,8 +245,8 @@ SKILL.md (Claude Code Skill 定义 — 编排完整流程)
     │
     ├─ 阶段 1: scripts/boss_crawler/  ──→  post_data/*.csv
     ├─ 阶段 2-3: Claude 自身  ──→  assets/<ts>/profile.json
-    ├─ 阶段 4-5: scripts/resume_matcher/ ──→  规则评分 + LLM 语义分析
-    ├─ 阶段 6: scripts/resume_matcher/report.py ──→  assets/<ts>/matching_report.html
+    ├─ 阶段 4-6: scripts/run_matcher.py ──→ 规则评分 + LLM 语义分析，
+    │                                       并直接写出 assets/<ts>/matching_report.html
     └─ 阶段 7: scripts/resume_matcher/auto_apply.py ──→  浏览器自动投递
 ```
 
@@ -289,7 +289,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── resume_matcher/               # 匹配引擎包 (9 modules + template)
     │   ├── config.py                 # 数据类 (ResumeProfile, JobClassification, ...)
     │   ├── scoring.py                # 6 维度评分 + 4 层分类（含技能别名映射）
-    │   ├── parsers.py                # PDF/Word 简历解析
+    │   ├── parsers.py                # PDF/Word/Markdown 简历解析
     │   ├── prompts.py                # 提示词模板加载
     │   ├── data_loader.py            # CSV 岗位数据加载
     │   ├── report.py                 # HTML 报告 + JSON 生成

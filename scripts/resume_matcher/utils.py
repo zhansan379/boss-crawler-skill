@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-工具函数：打印、目录、学历/经验/薪资解析
+工具函数：打印、目录、经验年限/公司规模解析
 """
 
 import os
 import re
-from typing import Dict
 
 from .config import OUTPUT_DIR
 
@@ -30,21 +29,6 @@ def ensure_output_dir():
         os.makedirs(OUTPUT_DIR)
 
 
-def parse_education_level(edu_str: str) -> int:
-    """解析学历等级"""
-    edu_str = edu_str.lower() if edu_str else ""
-    if '博士' in edu_str:
-        return 4
-    elif '硕士' in edu_str:
-        return 3
-    elif '本科' in edu_str or '学士' in edu_str:
-        return 2
-    elif '大专' in edu_str or '专科' in edu_str:
-        return 1
-    else:
-        return 0
-
-
 def parse_experience_years(exp_str: str) -> int:
     """解析经验年限"""
     if not exp_str:
@@ -63,23 +47,6 @@ def parse_experience_years(exp_str: str) -> int:
         return int(match.group(1))
 
     return 0
-
-
-def parse_salary_range(salary_str: str) -> Dict[str, int]:
-    """解析薪资范围"""
-    if not salary_str:
-        return {'min': 0, 'max': 0}
-
-    salary_str = salary_str.replace('k', 'K')
-    match = re.search(r'(\d+)-(\d+)K', salary_str)
-    if match:
-        return {'min': int(match.group(1)), 'max': int(match.group(2))}
-
-    match = re.search(r'(\d+)K', salary_str)
-    if match:
-        return {'min': int(match.group(1)), 'max': int(match.group(1))}
-
-    return {'min': 0, 'max': 0}
 
 
 def parse_company_size(company_info: str, scale_info: str) -> str:
@@ -103,8 +70,3 @@ def parse_company_size(company_info: str, scale_info: str) -> str:
             return '小厂'
 
     return '中厂'
-
-
-def edu_level_to_str(level: int) -> str:
-    """学历等级转字符串"""
-    return {4: '博士', 3: '硕士', 2: '本科', 1: '大专', 0: '不限'}.get(level, '不限')

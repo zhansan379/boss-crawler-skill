@@ -9,7 +9,10 @@ Claude reads `scripts/prompts/resume_parse.st` and outputs this structure:
     "basic_info": {
         "name": "...", "phone": "...", "email": "...",
         "gender": "男/女", "age": null,
-        "expected_city": "...", "expected_position": "..."
+        "expected_city": "...", "expected_position": "...",
+        "availability": {
+            "can_start": null, "duration": null, "days_per_week": null
+        }
     },
     "education": {
         "school": "...", "degree": "...", "major": "...",
@@ -45,6 +48,7 @@ Claude reads `scripts/prompts/resume_parse.st` and outputs this structure:
 - **highlights**: never merge bullet points; preserve every original bullet with all quantitative metrics (percentages, seconds, counts)
 - **awards / publications / social_links**: must be extracted; use `[]` or `{}` if absent
 - **skills.summary**: preserve the original skills description paragraph verbatim — do not tag-ify or split
+- **basic_info.availability**: `null` unless the resume states it outright. These three (到岗时间 / 可实习时长 / 每周出勤) get written straight into a greeting sent to a real HR, who schedules a desk and a start date around them — so a value inferred from a graduation year or a course load is a broken promise, not a lucky guess. Missing is fine; `greeting.st` has a formula that carries no availability claim, and `test_greeting.py` asserts nothing about 到岗 appears when the field is absent
 
 ## Saving Profile
 
@@ -82,9 +86,10 @@ with open(profile_path, 'w', encoding='utf-8') as f:
 
 ---
 
-## Stage 3.5b: Cross-Validation Procedure (MANDATORY)
+## Stage 3.5b: Cross-Validation Procedure
 
-This is a quality gate. Skipping it risks profile omissions that cascade into incorrect match classifications.
+Always run this — it is one command and usually ends in one line. It is not a blocking gate, but the
+omissions it catches cascade into wrong match classifications downstream, so don't skip it.
 
 ### Step 1: Run Automated Check
 
@@ -92,20 +97,46 @@ This is a quality gate. Skipping it risks profile omissions that cascade into in
 python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
 ```
 
-The script extracts suspected technical terms (CamelCase names, known frameworks/tools) from the raw resume and diffs against `profile.json` skills, projects, and experience — outputting a gap report.
+The script scans the raw resume with a known-tech dictionary (`KNOWN_TECH_TERMS`) and diffs against
+`profile.json` skills + project tech stacks. **Exit code 1 means a skill is missing, and nothing
+else.**
 
-### Step 2: Claude Manual Line-by-Line Scan
+Everything printed under `hints` — unmatched project names, unmatched company names, skill categories
+with fewer than two entries — comes from loose regex plus exact set-difference:
 
-Even if the script reports "no differences", Claude must:
+- `hint_projects` grabs "the line after a date range", so job titles and company names land there too
+- `hint_companies` matches literally, so `山西物联…研究院` vs the same name with `有限公司` reads as a
+  missing entry; a client or cloud vendor named inside a project description reads as missing work
+  experience
+- `hint_warnings` fires on any category with one item, which is often legitimate
 
-1. **Reverse scan**: read the original resume, identify every technical term paragraph-by-paragraph, verify each appears in `profile.skills.*`
-2. **Project completeness**: verify every project appears in `profile.projects` with complete `tech_stack` and all original `highlights`
-3. **Experience completeness**: verify every work/internship entry appears in `profile.experience.companies` with `highlights` split per original bullet
+Read the hints as places to look. Do not treat them as findings, and do not fix profile.json just to
+silence one.
+
+### Step 2: Claude Scan for What the Dictionary Can't See
+
+The script only knows skills, and only the ones in its dictionary. Claude covers the rest:
+
+1. **Skills beyond the dictionary**: read the resume, verify each technical term appears in
+   `profile.skills.*` — including terms `KNOWN_TECH_TERMS` has never heard of
+2. **Project completeness**: verify every project appears in `profile.projects` with complete
+   `tech_stack` and all original `highlights`
+3. **Experience completeness**: verify every work/internship entry appears in
+   `profile.experience.companies` with `highlights` split per original bullet
 4. **Awards & publications**: verify all awards, publications, and social links are extracted
 5. **Skills description**: verify `skills.summary` preserves the original skills paragraph
-6. **Soft evidence**: verify `profile.projects` is non-empty, `profile.skills` covers every skills paragraph, `profile.keywords` covers core competencies
+6. **Soft evidence**: verify `profile.projects` is non-empty and `profile.keywords` covers core
+   competencies
 
 ### Step 3: Report Findings
+
+One line when nothing was wrong:
+
+```
+✅ Profile 交叉校验：exit 0，逐项扫描无遗漏（hints 2 条，均为措辞差异）
+```
+
+When something was fixed:
 
 ```
 🔍 Profile Cross-Validation Report
@@ -118,9 +149,14 @@ Even if the script reports "no differences", Claude must:
 Result: 3 omissions fixed, profile updated.
 ```
 
-### Step 4: User Confirmation
+### Step 4: User Confirmation (rarely)
 
-Use `AskUserQuestion` to show the final profile summary and get user approval before proceeding.
+Transcription fixes — a skill that was plainly in the resume and plainly missing from the JSON — need
+no confirmation. Report and continue.
+
+Use `AskUserQuestion` only when a correction was a *judgement call*: a skill the resume implies rather
+than states, projects you merged or split, an experience entry whose dates or scope are ambiguous.
+Show what you changed and why it was a call, not a copy.
 
 ---
 
@@ -142,5 +178,23 @@ Map resume fields to crawl CLI arguments:
 | Resume mentions "实习"/"在校生" | `-j` | Set to `实习` |
 | `awards` | (annotation only) | Mark as bonus points in match report, don't affect crawl params |
 | Company size | `--scale` | Do NOT auto-infer; let user decide |
+| (keyword count) × `-c` | `-p` | Budget by market size — see below |
 
-After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling**. Users may adjust keywords, add cities, or modify filters.
+**Keyword count is budgeted by the city's market size, not by how many you can think of.**
+Crawl time is linear in keyword count, and in a small market extra keywords buy nothing but
+duplicates: a 太原 run with 5 keywords produced 117 rows containing only 53 unique jobs (54%
+duplicates). Budget:
+
+| City | Keywords |
+|---|---|
+| 一线 / 新一线 (the `hotCitySites` list in `assets/weizhi.json`) | up to 5 |
+| Everywhere else | 2-3 |
+
+Within the budget, spend keywords on **distinct concepts, not synonyms**. `AI应用开发` and
+`大模型应用开发` are one concept in any market small enough to matter — they return the same
+pool. `Python` + `后端开发` + `数据分析` are three. The crawler now detects this at runtime
+(it skips a keyword's remaining pages once a page is ≥80% jobs already collected this run, and
+prints a 跨关键词重复 count in the summary), but a synonym still costs one wasted page load per
+keyword — pick well up front.
+
+After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling** — one call, with the full inferred set as the first option marked recommended, so accepting costs a single click. Users may adjust keywords, add cities, or modify filters. This gate stays even when the inference looks unambiguous: the crawl runs through the user's own logged-in browser, wrong parameters waste a long crawl, and nothing about it can be undone afterwards.

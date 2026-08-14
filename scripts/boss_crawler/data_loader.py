@@ -18,16 +18,42 @@ from .utils import detect_encoding, ensure_output_dir
 
 # ==================== JSON 数据加载 ====================
 
+# update_json_data() 会开浏览器，一个进程里最多自动触发一次：
+# 首用（文件根本没下载过）值得自动补，但如果补完还是读不出来，
+# 那是网络或接口的问题，重试只会再开一次浏览器。
+_auto_init_done = False
+
+
+def _load_json_asset(file_name, _retry=True):
+    """读取 assets 下的 JSON 数据文件。
+
+    缺失或损坏时自动跑一次首用初始化（update_json_data）再读一遍。
+    成功返回 dict，彻底失败返回 None —— 空结构长什么样由调用方决定。
+    """
+    global _auto_init_done
+
+    file_path = os.path.join(ASSETS_DIR, file_name)
+    try:
+        encoding = detect_encoding(file_path)
+        with open(file_path, 'r', encoding=encoding) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        reason = type(e).__name__
+        if not _retry or _auto_init_done:
+            print(f"[错误] {file_path} 读取失败（{reason}），请手动运行 --update-data 后重试")
+            return None
+
+        _auto_init_done = True
+        print(f"[首用初始化] {file_name} 缺失或损坏（{reason}），自动获取一次...")
+        update_json_data()
+        return _load_json_asset(file_name, _retry=False)
+
+
 def load_position_data():
     """加载岗位分类数据"""
-    file_path = os.path.join(ASSETS_DIR, 'post_data.json')
-    if not os.path.exists(file_path):
-        print(f"错误: {file_path} 不存在，请先更新数据")
+    data = _load_json_asset('post_data.json')
+    if data is None:
         return {}
-
-    encoding = detect_encoding(file_path)
-    with open(file_path, 'r', encoding=encoding) as f:
-        data = json.load(f)
 
     position_data = {}
     for category in data.get('zpData', {}).get('position', []):
@@ -54,14 +80,9 @@ def load_position_data():
 
 def load_city_data():
     """加载城市数据"""
-    file_path = os.path.join(ASSETS_DIR, 'weizhi.json')
-    if not os.path.exists(file_path):
-        print(f"错误: {file_path} 不存在，请先更新数据")
+    data = _load_json_asset('weizhi.json')
+    if data is None:
         return {'hot': [], 'other': []}
-
-    encoding = detect_encoding(file_path)
-    with open(file_path, 'r', encoding=encoding) as f:
-        data = json.load(f)
 
     zpData = data.get('zpData', {})
     hot_cities = zpData.get('hotCitySites', [])
@@ -165,6 +186,11 @@ def find_cities_by_name(city_data, names):
     """
     all_cities = city_data['hot'] + city_data['other']
 
+    # 全国/不限：直接映射到 BOSS 的全国城市代码，无需再问用户确认具体城市
+    NATIONAL_ALIASES = {'不限', '全国', '100010000'}
+    if len(names) == 1 and names[0].strip() in NATIONAL_ALIASES:
+        return [('全国', '100010000')]
+
     # 检查是否全部选择
     if len(names) == 1 and names[0].lower() == 'all':
         return [(c['name'], c['code']) for c in all_cities]
@@ -226,10 +252,44 @@ def load_existing_links(file_path):
 
 
 def init_csv_file(file_path):
-    """初始化CSV文件（首次写入表头）"""
+    """初始化CSV文件（首次写入表头，旧表头自动迁移）"""
     ensure_output_dir(file_path)
+    from .config import CSV_FIELDS
+
     if not os.path.exists(file_path):
         with open(file_path, 'w', encoding=ENCODING, newline='') as f:
-            from .config import CSV_FIELDS
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
+        return
+
+    # 文件已存在：爬取阶段以 'a' 追加模式写入，若表头是旧版本（列数更少），
+    # 新写入的行会按当前 CSV_FIELDS 的列数排列，静默错位到旧表头下面。
+    # 所以先把整个文件按新表头重写一遍，缺失的列补空串。
+    try:
+        with open(file_path, 'r', encoding=ENCODING) as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                return  # 空文件，交给后续写入
+            if list(reader.fieldnames) == CSV_FIELDS:
+                return  # 表头已是最新，无需迁移
+            old_fields = list(reader.fieldnames)
+            rows = list(reader)
+    except Exception as e:
+        print(f"[警告] 读取表头失败，跳过迁移: {e}")
+        return
+
+    dropped = [c for c in old_fields if c and c not in CSV_FIELDS]
+    if dropped:
+        print(f"[警告] 旧表头存在未知列，迁移时将丢弃: {', '.join(dropped)}")
+
+    try:
+        with open(file_path, 'w', encoding=ENCODING, newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore')
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: (row.get(k) or '') for k in CSV_FIELDS})
+        added = [c for c in CSV_FIELDS if c not in old_fields]
+        print(f"[迁移] {os.path.basename(file_path)} 表头已更新"
+              f"（{len(old_fields)} → {len(CSV_FIELDS)} 列，新增: {', '.join(added) or '无'}）")
+    except Exception as e:
+        print(f"[警告] 表头迁移失败: {e}")
