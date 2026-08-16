@@ -35,6 +35,10 @@ from resume_matcher.config import CSV_FIELDS, ResumeProfile
 from resume_matcher.deep_analysis import (
     save_deep_candidates, merge_deep_results, serialize_profile,
 )
+from resume_matcher.paths import (
+    deep_candidates_path, deep_results_path, matching_report_path,
+    qualified_jobs_path, timings_path,
+)
 from resume_matcher.scoring import (
     CATEGORY_QUALIFIED, CATEGORY_NEED_OPTIMIZATION, CATEGORY_CANNOT_APPLY,
 )
@@ -283,7 +287,7 @@ def main():
               sorted(c for c, _ in seen) == ['丙公司', '乙公司', '甲公司'],
               [c for c, _ in seen])
 
-        results_path = os.path.join(run_dir, 'deep_results.json')
+        results_path = deep_results_path(run_dir)
         data = read_json(results_path)
         check('deep_results.json 写出来了', os.path.exists(results_path))
         check('results 是 3 条', len(data['results']) == 3, data.get('results'))
@@ -298,12 +302,11 @@ def main():
         check('highlight/risk 都在（HTML 报告要用）',
               by_rank[2]['risk'] == '经验年限硬门槛' and by_rank[1]['highlight'], by_rank[2])
         check('耗时进了 run_timings.jsonl',
-              'deep_analyze' in open(os.path.join(run_dir, 'run_timings.jsonl'),
-                                     encoding='utf-8').read())
+              'deep_analyze' in open(timings_path(run_dir), encoding='utf-8').read())
 
         # ── 真实 merge ──
         classification = merge_deep_results(
-            os.path.join(run_dir, 'deep_candidates.json'), results_path,
+            deep_candidates_path(run_dir), results_path,
             output_dir=run_dir)
         check('merge 返回了分类结果', classification is not None)
         all_jobs = (classification.qualified + classification.need_optimization
@@ -331,9 +334,10 @@ def main():
               by_company['甲公司'].get('highlight') == 'RAG 经验直接对口',
               by_company['甲公司'].get('highlight'))
         check('HTML 报告生成了',
-              any(n.endswith('.html') for n in os.listdir(run_dir)), os.listdir(run_dir))
+              os.path.exists(matching_report_path(run_dir)),
+              os.listdir(run_dir))
 
-        pool = read_json(os.path.join(run_dir, 'qualified_jobs.json'))
+        pool = read_json(qualified_jobs_path(run_dir))
         check('投递池有 2 个（符合 + 需优化）', len(pool) == 2, len(pool))
         check('模型判不可投的岗位不进投递池',
               all('乙公司' != j.get('公司') for j in pool), [j.get('公司') for j in pool])
@@ -351,14 +355,14 @@ def main():
         run_dir = prepare(os.path.join(tmp, 'run_partial'))
         code = run_main([run_dir], make_stub(fail_for=('丙公司',)))
         check('部分失败退出码 3（不是 0，也不是 1）', code == 3, code)
-        data = read_json(os.path.join(run_dir, 'deep_results.json'))
+        data = read_json(deep_results_path(run_dir))
         check('成功的 2 条照样落盘', len(data['results']) == 2, data['results'])
         check('落盘的是甲乙两条', sorted(r['rank'] for r in data['results']) == [1, 2],
               [r['rank'] for r in data['results']])
 
         classification = merge_deep_results(
-            os.path.join(run_dir, 'deep_candidates.json'),
-            os.path.join(run_dir, 'deep_results.json'), output_dir=run_dir)
+            deep_candidates_path(run_dir),
+            deep_results_path(run_dir), output_dir=run_dir)
         all_jobs = (classification.qualified + classification.need_optimization
                     + classification.cannot_apply)
         check('失败的岗位没有消失', len(all_jobs) == 3, len(all_jobs))
@@ -373,7 +377,7 @@ def main():
               by_company['丙公司']['application_category'])
         check('它仍然在投递池里',
               any(j.get('公司') == '丙公司'
-                  for j in read_json(os.path.join(run_dir, 'qualified_jobs.json'))))
+                  for j in read_json(qualified_jobs_path(run_dir))))
 
         # ================================================================
         print('\n=== 6. 全部失败：不写出半成品 ===')
@@ -381,7 +385,7 @@ def main():
         code = run_main([run_dir], make_stub(fail_for=('甲公司', '乙公司', '丙公司')))
         check('全失败退出码 1', code == 1, code)
         check('不写出空的 deep_results.json（免得 merge 拿它当结果）',
-              not os.path.exists(os.path.join(run_dir, 'deep_results.json')))
+              not os.path.exists(deep_results_path(run_dir)))
 
         # ================================================================
         print('\n=== 7. --resume：跳过已有 rank，保留旧结果 ===')
@@ -392,7 +396,7 @@ def main():
         check('续跑退出码 0', code == 0, code)
         check('只重跑了失败的那一个', [c for c, _ in seen] == ['丙公司'],
               [c for c, _ in seen])
-        data = read_json(os.path.join(run_dir, 'deep_results.json'))
+        data = read_json(deep_results_path(run_dir))
         check('续跑后 3 条齐了', len(data['results']) == 3, len(data['results']))
         by_rank = {r['rank']: r for r in data['results']}
         check('旧的两条没被冲掉', by_rank[1]['score'] == 95 and by_rank[2]['score'] == 40,
@@ -413,7 +417,7 @@ def main():
         code = run_main([run_dir, '--dry-run'], boom)
         check('--dry-run 一次请求都不发，退出码 0', code == 0, code)
         check('--dry-run 不写 deep_results.json',
-              not os.path.exists(os.path.join(run_dir, 'deep_results.json')))
+              not os.path.exists(deep_results_path(run_dir)))
 
         run_dir = prepare(os.path.join(tmp, 'run_limit'))
         seen = []
@@ -421,7 +425,7 @@ def main():
         check('--limit 2 只分析 2 个', len(seen) == 2, [c for c, _ in seen])
         check('--limit 取的是前两名（rank 1、2）',
               sorted(r['rank'] for r in
-                     read_json(os.path.join(run_dir, 'deep_results.json'))['results'])
+                     read_json(deep_results_path(run_dir))['results'])
               == [1, 2])
         check('--limit 后退出码 0（没分析的不算失败）', code == 0, code)
 
@@ -434,8 +438,8 @@ def main():
         check('运行目录不存在退出码 1',
               run_main([os.path.join(tmp, '不存在的目录')], make_stub()) == 1)
         no_cand = os.path.join(tmp, 'run_nocand')
-        os.makedirs(no_cand)
-        with open(os.path.join(no_cand, 'deep_candidates.json'), 'w', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(deep_candidates_path(no_cand)), exist_ok=True)
+        with open(deep_candidates_path(no_cand), 'w', encoding='utf-8') as f:
             json.dump({'profile': {}, 'candidates': []}, f)
         check('候选列表为空退出码 1', run_main([no_cand], make_stub()) == 1)
 
