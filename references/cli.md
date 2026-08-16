@@ -197,7 +197,7 @@ python scripts/deliver/apply.py "assets/…" --yes --no-image               # �
 | 合并出报告 | `run_matcher.py --mode deep --merge -o <run_dir>` | 上面两个 | `qualified_jobs.json`、HTML 报告 |
 | 生成材料 | `gen_materials.py <run_dir>` | `qualified_jobs.json` + profile | `materials/greeting_*.txt`、`materials/resume_*.json` |
 | 渲染简历图 | `render_images.py <run_dir>` | `materials/resume_*.json` | `deliver/<公司>-<岗位>/<姓名>-<岗位>.png` |
-| 可读投递材料 | `write_application_md.py <run_dir> --all` | `qualified_jobs.json` + 原始 CSV + 招呼语 | `deliver/<公司>-<岗位>/投递.md` |
+| 可读投递材料 | `write_application_md.py <run_dir> --all` | `qualified_jobs.json` + 原始 CSV + 招呼语 + `materials/resume_*.json` | `deliver/<公司>-<岗位>/投递.md`、`优化建议.md` |
 | 投递 | `apply.py <run_dir> --yes` | 以上全部 | `apply_log.json` |
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
@@ -308,7 +308,8 @@ assets/2026-08-15_10-00-00/
 │   ├── matching_report.html      可视化报告
 │   └── 甲公司-AI应用开发工程师/
 │       ├── 张三-AI应用开发工程师.png   投递用简历长图（HR 看到的就是这个文件名）
-│       └── 投递.md                  岗位全字段 + 招呼语（materials 后自动写）
+│       ├── 投递.md                  岗位全字段 + 招呼语 + 匹配分析（materials 后自动写）
+│       └── 优化建议.md              给「改简历」的优化建议（跟投递.md 一并生成）
 └── intermediate/             跑完即无用：可整体删除（clean_run.py）
     ├── deep_candidates.json  深度模式：预筛选出的候选 + profile
     ├── deep_results.json     深度模式：逐岗位的模型分析
@@ -320,7 +321,7 @@ assets/2026-08-15_10-00-00/
 
 `materials/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名，也别删改 `qualified_jobs.json` 的行或顺序**。要少投几个用 `--only`，那是为此存在的参数。
 
-`.md` 简历和 `优化建议.md` 已并入 `materials/resume_*.json`，不再向岗位目录派生 —— 要看那份优化后简历就用 `read_thin.py` 读 JSON，避免同一份内容在多地漂移。清理一轮跑完的 `intermediate/` 用 `python scripts/utils/clean_run.py <run_dir>`（`--yes` 真删，`--keep run_timings.jsonl` 保留个别文件）。
+`.md` 简历已并入 `materials/resume_*.json`，不再向岗位目录派生 —— 要看那份优化后简历就用 `read_thin.py` 读 JSON，避免同一份内容在多地漂移。但为了「改这份简历」方便，`deliver/<公司>-<岗位>/` 里会额外写一份 `优化建议.md`：内容取 `materials/resume_*.json` 里的 `optimization_suggestions` 和 `key_changes`，不重复整份简历；`--resume-mode skip` / 没走到 materials 时回退规则侧的 `optimization_points`。清理一轮跑完的 `intermediate/` 用 `python scripts/utils/clean_run.py <run_dir>`（`--yes` 真删，`--keep run_timings.jsonl` 保留个别文件）。
 
 查看状态与花费：
 

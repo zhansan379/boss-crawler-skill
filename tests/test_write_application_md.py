@@ -67,6 +67,19 @@ def prepare(run_dir):
     with open(os.path.join(run_dir, 'materials', 'greeting_1_甲公司.txt'),
               'w', encoding='utf-8') as f:
         f.write('您好，我是张三。')
+    # A 有优化文案 json（resume_optimize.st 返回对象），验证优化建议.md 用 LLM 侧数据
+    with open(os.path.join(run_dir, 'materials', 'resume_1_甲公司.json'),
+              'w', encoding='utf-8') as f:
+        json.dump({
+            'optimization_suggestions': {
+                'must_add': [{'section': '项目经历', 'content': '补一个 RAG 落地的量化成果'}],
+                'should_adjust': [{'section': '专业技能', 'suggestion': '把「了解」改成「熟悉」'}],
+                'keywords_to_emphasize': ['RAG', 'FastAPI'],
+                'format_suggestions': ['每段经历配一个量化指标'],
+            },
+            'key_changes': ['重排了项目顺序'],
+            'optimized_resume': '## 专业技能\n...',
+        }, f, ensure_ascii=False)
     return run_dir
 
 
@@ -106,12 +119,31 @@ def main():
               '- Python' in text and '- FastAPI' in text,
               [ln for ln in text.splitlines() if 'Python' in ln or 'FastAPI' in ln])
 
+        # ── 优化建议.md：同一目录里并行生成，A 用 LLM 数据、B 回退规则侧 ──
+        opt_a = os.path.join(os.path.dirname(out_a), '优化建议.md')
+        check('A 的 optimize dir 里也生成了 优化建议.md', os.path.exists(opt_a), opt_a)
+        text_opt = open(opt_a, encoding='utf-8').read()
+        for snippet in ('RAG 落地的量化成果', '「了解」改成「熟悉」', '需强调的关键词',
+                        '# 甲公司 - AI应用开发工程师 优化建议'):
+            check('优化建议内容「%s」落进了文件' % snippet, snippet in text_opt, text_opt)
+        check('优化建议.md 用了 resume json 数据（而非规则回退）',
+              '数据来源 resume_1_甲公司.json' in text_opt, text_opt)
+        check('优化建议.md 不重复整份优化简历（只含建议）',
+              '## 专业技能' not in text_opt,
+              [ln for ln in text_opt.splitlines() if '专业技能' in ln])
+
         # ── B：match_analysis.json 里没有它 → 回退「未裁定」，但不崩 ──
         out_b, missing_b = WAM.write_one(run_dir, JOB_B(), 2, args)
         text_b = open(out_b, encoding='utf-8').read()
         check('没连上时 B 照样写出来（缺数源不崩）', os.path.exists(out_b), out_b)
         check('B 的匹配度回退未裁定', '未裁定' in text_b,
               [ln for ln in text_b.splitlines() if '匹配' in ln])
+        opt_b = os.path.join(os.path.dirname(out_b), '优化建议.md')
+        check('B 没有 resume json 也照样生成 优化建议.md（回退规则）',
+              os.path.exists(opt_b), opt_b)
+        check('B 的优化建议回退到规则匹配来源',
+              '数据来源 规则匹配' in open(opt_b, encoding='utf-8').read(),
+              open(opt_b, encoding='utf-8').read()[:200])
 
         # ── match_analysis.json 整个不存在（快速模式）→ 仍能写，不报错 ──
         os.remove(match_analysis_path(run_dir))

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成每个岗位的 `投递.md`：把该岗位采到的**全部**字段和招呼语写进一个文件。
+"""生成每个岗位的 `投递.md` 与 `优化建议.md`：把该岗位采到的**全部**字段和招呼语
+写进 投递.md，另在同一目录写一份只含优化建议的 优化建议.md。
 
 为什么要有这个脚本，而不是让主 agent 按模板手写：
 
@@ -36,7 +37,8 @@ import time
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
-from resume_matcher import qualified_jobs_path, match_analysis_path, greeting_pattern, deliver_dir
+from resume_matcher import (qualified_jobs_path, match_analysis_path,
+                            greeting_pattern, resume_pattern, deliver_dir)
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
@@ -280,6 +282,109 @@ def resolve_greeting(run_dir, index, args):
     return '', None
 
 
+# ==================== 优化建议 ====================
+
+def load_resume_optimization(run_dir, index):
+    """读 materials/resume_{index}_*.json，只取优化建议部分。
+
+    resume json 是 resume_optimize.st 的整个返回对象：里面有整份优化后简历
+    （optimized_resume，很大，由 images / render 另派生），还有精简的
+    optimization_suggestions（must_add / should_adjust / keywords_to_emphasize /
+    format_suggestions）和 key_changes。优化建议.md 只落后者，不重复塞整份简历——
+    那份内容同批材料已有一份，写两遍只是多地漂移。
+
+    文件缺失（--resume-mode skip、没走到 materials、或该岗位没生成成功）时返回
+    None，由 render_optimization 回退到规则侧的 optimization_points。
+    """
+    hits = sorted(glob.glob(resume_pattern(run_dir, index)))
+    if not hits:
+        return None
+    try:
+        with open(hits[0], encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return {
+        'suggestions': data.get('optimization_suggestions') or {},
+        'key_changes': data.get('key_changes') or [],
+        'source': os.path.basename(hits[0]),
+    }
+
+
+def _suggestion_bullets(items):
+    """must_add / should_adjust 里的 {section, content|suggestion} → 子弹列表。"""
+    out = []
+    for entry in items or []:
+        if not isinstance(entry, dict):
+            continue
+        sec = (entry.get('section') or '').strip()
+        text = (entry.get('content') or entry.get('suggestion') or '').strip()
+        if not text:
+            continue
+        out.append('- 【%s】%s' % (sec, text) if sec and sec != text else '- %s' % text)
+    return out
+
+
+def _string_bullets(items):
+    """str 或 str 列表 → 子弹列表；空值过滤。"""
+    if items is None:
+        return []
+    if isinstance(items, str):
+        items = [items]
+    return ['- %s' % str(x).strip() for x in items if str(x).strip()]
+
+
+def render_optimization(company, position, opt, job, index):
+    """优化建议.md 正文。
+
+    opt 非空且有数据时用 LLM 出的建议（materials/resume_*.json）；否则回退
+    规则匹配侧的关键字级 optimization_points（快速模式 / 没走 materials 时）。
+    """
+    parts = ['# %s - %s 优化建议' % (company, position), '']
+    if opt:
+        parts.append('> 生成时间 %s ｜ 岗位序号 #%d ｜ 数据来源 %s'
+                     % (time.strftime('%Y-%m-%d %H:%M:%S'), index, opt['source']))
+    else:
+        parts.append('> 生成时间 %s ｜ 岗位序号 #%d ｜ 数据来源 规则匹配'
+                     '（未走到优化简历，以下为规则侧宽松给出的优化点）'
+                     % (time.strftime('%Y-%m-%d %H:%M:%S'), index))
+    parts.append('')
+
+    if opt and (opt['suggestions'] or opt['key_changes']):
+        s = opt['suggestions']
+        groups = [
+            ('## 需要补充的内容', _suggestion_bullets(s.get('must_add'))),
+            ('## 建议调整的部分', _suggestion_bullets(s.get('should_adjust'))),
+            ('## 需强调的关键词', _string_bullets(s.get('keywords_to_emphasize'))),
+            ('## 格式优化建议', _string_bullets(s.get('format_suggestions'))),
+        ]
+        for title, lines in groups:
+            if lines:
+                parts.append(title)
+                parts.append('')
+                parts.extend(lines)
+                parts.append('')
+        changes = _string_bullets(opt['key_changes'])
+        if changes:
+            parts.append('## 主要修改点')
+            parts.append('')
+            parts.extend(changes)
+            parts.append('')
+    else:
+        lines = _string_bullets(job.get('optimization_points'))
+        if not lines:
+            lines = _string_bullets(job.get('optimization_suggestions'))
+        parts.append('## 优化建议')
+        parts.append('')
+        parts.extend(lines if lines else ['- （该岗位暂无优化建议）'])
+        parts.append('')
+
+    parts.append('> 以上只指向「简历里还缺什么、怎么写更好」，不是要你无中生有 —— ')
+    parts.append('> 每一处补充请都用真实经历支撑，HR 一眼能看穿的虚假经历只会反噬投递。')
+    parts.append('')
+    return '\n'.join(parts)
+
+
 # ==================== 渲染 ====================
 
 def render(row, job, greeting, csv_path, index, csv_row=None):
@@ -419,10 +524,18 @@ def write_one(run_dir, job, index, args):
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(render(row, job, greeting, csv_path, index, csv_row))
 
+    # 单独的 优化建议.md：投递材料交给人看的那份是投递.md，这里是给「改简历」用的，
+    # 只含优化建议不重复整份简历。优先 LLM 出的优化 json，缺了就回退规则侧优化点。
+    opt = load_resume_optimization(run_dir, index)
+    opt_path = os.path.join(out_dir, '优化建议.md')
+    with open(opt_path, 'w', encoding='utf-8') as f:
+        f.write(render_optimization(company, position, opt, job, index))
+
     missing = sorted(k for k in KNOWN_FIELDS if not (row.get(k) or '').strip())
 
     print('%s #%d %s-%s' % ('覆盖' if existed else '新建', index, company, position))
     print('    → %s' % out_path)
+    print('    → %s (%s)' % (opt_path, opt['source'] if opt else '规则匹配'))
     if csv_path:
         print('    CSV: %s' % csv_path)
     else:
