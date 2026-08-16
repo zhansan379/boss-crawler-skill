@@ -161,10 +161,9 @@ def _text_probe(cfg, stage: str):
 def _hint() -> str:
     return ('\n排查顺序：\n'
             '  1. base_url 是否带了版本段（DeepSeek 用 /v1，火山方舟用 /api/v3）\n'
-            '  2. protocol 是否对上：404 既不重试也不回退时，多半是协议或模型名错。\n'
-            '     Claude Code 的协议是 anthropic（/v1/messages）；base_url 指向\n'
-            '     api.anthropic.com 或以 /messages 结尾会自动识别，否则需显式配\n'
-            '     --protocol anthropic。本脚本已在 404 时自动用另一协议回退探测过一轮\n'
+            '  2. protocol 是否对上：默认就是 anthropic（Claude Code 的协议，/v1/messages）；\n'
+            '     openai 兼容端点（DeepSeek / 火山方舟等）需显式配 --protocol openai，\n'
+            '     否则会在 404 上多花一次回退请求。本脚本已在 404 时自动用另一协议回退过一轮\n'
             '  3. model 名称是否是该服务商的合法模型 ID（401 是 key 错）\n'
             '  4. 是否需要代理（本模块直连，不读 HTTP_PROXY 之外的设置）')
 

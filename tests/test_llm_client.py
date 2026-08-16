@@ -88,9 +88,15 @@ def anthropic_body(content, tokens=(10, 5)):
 
 
 def cfg(**over):
-    """测试用配置：不读真实配置文件、不读真实环境变量。"""
+    """测试用配置：不读真实配置文件、不读真实环境变量。
+
+    默认显式声明 protocol='openai'：本 helper 的 ok_body/anthropic_body 都是
+    openai 形态，而 CF.LLMConfig 的默认协议已改为 anthropic，不显式声明就会
+    把 openai 响应按 anthropic 解析而失败。
+    """
     base = dict(base_url='https://fake.local/v1', api_key=SECRET, model='m-test',
-                max_retries=2, timeout=5, temperature=0.3, json_mode=True)
+                max_retries=2, timeout=5, temperature=0.3, json_mode=True,
+                protocol='openai')
     base.update(over)
     return CF.LLMConfig(**base)
 
@@ -493,9 +499,9 @@ def main():
         check('自动识别来源标 auto', ca.source['protocol'] == 'auto', ca.source)
         check('自动识别的 endpoint 是 /v1/messages',
               ca.endpoint() == 'https://api.anthropic.com/v1/messages', ca.endpoint())
-        check('普通端点默认 openai',
+        check('未显式配协议时默认 anthropic',
               CF.resolve(config_path=empty_cfg, env={},
-                         base_url='https://api.deepseek.com/v1').protocol == 'openai')
+                         base_url='https://api.deepseek.com/v1').protocol == 'anthropic')
         cex = CF.resolve(config_path=empty_cfg, env={},
                          base_url='https://api.deepseek.com/v1', protocol='anthropic')
         check('显式 protocol 覆盖自动判断', cex.protocol == 'anthropic', cex.protocol)
@@ -515,8 +521,8 @@ def main():
         cinv = CF.resolve(config_path=empty_cfg, env={},
                           base_url='https://api.deepseek.com/v1', protocol='grpc',
                           warnings_out=warns)
-        check('非法协议告警 + 回落 openai',
-              cinv.protocol == 'openai' and any('不合法' in w for w in warns),
+        check('非法协议告警 + 回落 anthropic',
+              cinv.protocol == 'anthropic' and any('不合法' in w for w in warns),
               (cinv.protocol, warns))
 
         # ================================================================

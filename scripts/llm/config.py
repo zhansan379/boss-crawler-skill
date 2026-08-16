@@ -55,8 +55,8 @@ class ConfigError(Exception):
 
 @dataclass
 class LLMConfig:
-    protocol: str = 'openai'
-    base_url: str = 'https://api.openai.com/v1'
+    protocol: str = 'anthropic'
+    base_url: str = 'https://api.anthropic.com'
     api_key: str = ''
     model: str = 'gpt-4o-mini'
     timeout: int = 120
@@ -98,18 +98,14 @@ def mask_key(key: str) -> str:
 
 
 def _detect_protocol(base_url: str) -> str:
-    """按 base_url 猜协议：host 含 anthropic 或路径以 /messages 结尾 → anthropic。
+    """协议默认按 anthropic（Claude Code 的协议，POST /v1/messages）算。
 
-    只在用户没显式配 protocol 时调用。Claude Code 的协议就是 Anthropic Messages API
-    （POST /v1/messages），所以 base_url 指向 api.anthropic.com 或某个 /messages 网关时，
-    自动切到 anthropic 能省掉一次显式配置。
+    只在用户没显式配 protocol 时调用。本仓库默认走 Claude Code 的协议，所以
+    base_url 不管长什么样都按 anthropic 处理；openai 兼容端点（DeepSeek / 火山
+    方舟等）请显式配 protocol=openai，而不是靠猜 —— 猜错会在 404 上多花一次
+    回退请求（llm_check 的协议回退会提示应配哪个）。
     """
-    low = ((base_url or '').strip().rstrip('/')).lower()
-    if not low:
-        return 'openai'
-    if low.endswith('/messages') or 'anthropic' in low:
-        return 'anthropic'
-    return 'openai'
+    return 'anthropic'
 
 
 def chat_endpoint(base_url: str, protocol: str = 'openai') -> str:
@@ -312,7 +308,8 @@ def _missing_key_message() -> str:
         '       （也认 OPENAI_API_KEY / OPENAI_BASE_URL）\n'
         '       用 Claude Code 的协议时认 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL /\n'
         '       ANTHROPIC_MODEL，base_url 指向 api.anthropic.com 会自动识别协议\n'
-        '  3) 命令行：--api-key sk-... --base-url https://... --model xxx --protocol openai\n'
+        '  3) 命令行：--api-key sk-... --base-url https://... --model xxx --protocol anthropic\n'
+        '        （默认即 anthropic；仅 openai 兼容端点才需显式 --protocol openai）\n'
         '配好后用 `python scripts/utils/llm_check.py` 验证连通。'
         % (os.path.relpath(EXAMPLE_PATH, _SKILL_ROOT),
            os.path.relpath(CONFIG_PATH, _SKILL_ROOT))
