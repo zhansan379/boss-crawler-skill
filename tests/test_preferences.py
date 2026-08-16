@@ -184,7 +184,7 @@ def test_crawl_args():
                      count=20, degree='本科', match_mode='deep', top_n=10)
     command = preferences.crawl_command(preferences.load())
 
-    check('是完整命令', command.startswith('python scripts/boss_post_interactive.py'),
+    check('是完整命令', command.startswith('python scripts/stages/boss_post_interactive.py'),
           command)
     check('带 -m custom', '-m custom' in command, command)
     check('中文关键词被引号包住', '-p "AI应用开发,Python"' in command, command)

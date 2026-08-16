@@ -163,8 +163,8 @@ def save_deep_candidates(
     print(f"\n深度分析候选已保存: {output_path}")
     print(f"共 {len(candidates)} 个候选岗位待 LLM 深度分析")
     print(f"规则评分范围: {candidates[-1]['rule_score']} ~ {candidates[0]['rule_score']}")
-    print(f"\n下一步: python scripts/deep_analyze.py {output_dir}")
-    print(f"然后运行: python scripts/run_matcher.py --mode deep --merge "
+    print(f"\n下一步: python scripts/stages/deep_analyze.py {output_dir}")
+    print(f"然后运行: python scripts/stages/run_matcher.py --mode deep --merge "
           f"--run-id {os.path.basename(output_dir)}")
 
     return output_path

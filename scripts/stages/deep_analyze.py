@@ -6,14 +6,14 @@
 并发单位天然就是「一个岗位一次请求」，彼此不共享上下文，所以直接按 concurrency 铺开。
 
 产出格式与 `merge_deep_results` 期望的完全一致（靠 rank 回填），所以合并那步一行不改：
-    python scripts/run_matcher.py --mode deep --merge --output-dir <run_dir>
+    python scripts/stages/run_matcher.py --mode deep --merge --output-dir <run_dir>
 
 用法：
-    python scripts/deep_analyze.py <run_dir>
-    python scripts/deep_analyze.py <run_dir> --workers 6 --model deepseek-reasoner
-    python scripts/deep_analyze.py <run_dir> --resume          # 续跑，跳过已有 rank
-    python scripts/deep_analyze.py <run_dir> --limit 3         # 先拿 3 个试水
-    python scripts/deep_analyze.py <run_dir> --dry-run         # 只打印将发什么，不花钱
+    python scripts/stages/deep_analyze.py <run_dir>
+    python scripts/stages/deep_analyze.py <run_dir> --workers 6 --model deepseek-reasoner
+    python scripts/stages/deep_analyze.py <run_dir> --resume          # 续跑，跳过已有 rank
+    python scripts/stages/deep_analyze.py <run_dir> --limit 3         # 先拿 3 个试水
+    python scripts/stages/deep_analyze.py <run_dir> --dry-run         # 只打印将发什么，不花钱
 
 退出码：0 = 全部成功，1 = 读不到输入/全部失败，3 = 部分失败（deep_results.json 已写）。
 """
@@ -24,6 +24,9 @@ import json
 import time
 import argparse
 import threading
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 import stage_timer
 from resume_matcher.prompts import get_match_analysis_prompt
@@ -258,7 +261,7 @@ def main():
         description='深度模式阶段 2：逐岗位调 LLM 分析，产出 deep_results.json',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='跑完接阶段 3:\n'
-               '  python scripts/run_matcher.py --mode deep --merge --output-dir <run_dir>\n')
+               '  python scripts/stages/run_matcher.py --mode deep --merge --output-dir <run_dir>\n')
     ap.add_argument('run_dir', help='运行目录（含 deep_candidates.json）')
     ap.add_argument('--workers', '-w', type=int, help='并发数，默认取配置里的 concurrency')
     ap.add_argument('--limit', type=int, help='只分析前 N 个候选（试水用）')
@@ -279,7 +282,7 @@ def main():
         profile, candidates = load_candidates(run_dir)
     except FileNotFoundError as exc:
         print('❌ 找不到 %s' % exc)
-        print('  先跑阶段 1: python scripts/run_matcher.py --mode deep '
+        print('  先跑阶段 1: python scripts/stages/run_matcher.py --mode deep '
               '--profile "%s/profile.json" --top 15 --output-dir "%s"' % (run_dir, run_dir))
         return 1
     except ValueError as exc:
@@ -404,11 +407,11 @@ def main():
 
     print('\n' + format_usage(run_dir))
     print('\n下一步（阶段 3，合并规则分与模型分并出报告）：')
-    print('  python scripts/run_matcher.py --mode deep --merge --output-dir "%s"' % run_dir)
+    print('  python scripts/stages/run_matcher.py --mode deep --merge --output-dir "%s"' % run_dir)
 
     if failures or interrupted:
         print('\n失败的可以续跑（跳过已成功的）：')
-        print('  python scripts/deep_analyze.py "%s" --resume' % run_dir)
+        print('  python scripts/stages/deep_analyze.py "%s" --resume' % run_dir)
         return 3
     return 0
 

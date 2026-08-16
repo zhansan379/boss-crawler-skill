@@ -14,9 +14,9 @@ deliver/（最终交付）一律不碰。
 - 删完打印保留的三个桶，方便对照确认。
 
 用法：
-    python scripts/clean_run.py <run_dir>            # dry-run：打印清单
-    python scripts/clean_run.py <run_dir> --yes      # 真删 intermediate/
-    python scripts/clean_run.py <run_dir> --keep run_timings.jsonl   # 保留个别文件
+    python scripts/utils/clean_run.py <run_dir>            # dry-run：打印清单
+    python scripts/utils/clean_run.py <run_dir> --yes      # 真删 intermediate/
+    python scripts/utils/clean_run.py <run_dir> --keep run_timings.jsonl   # 保留个别文件
 
 退出码：0 = 完成（无论删没删），1 = run_dir 不存在。
 """
@@ -24,6 +24,9 @@ deliver/（最终交付）一律不碰。
 import os
 import sys
 import argparse
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 from resume_matcher import intermediate_dir
 

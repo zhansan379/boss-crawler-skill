@@ -6,10 +6,10 @@
 （profile_validation.json）。
 
 用法：
-    python scripts/parse_resume.py 简历.pdf
-    python scripts/parse_resume.py 简历.pdf --output-dir assets/2026-08-15_10-00-00
-    python scripts/parse_resume.py 简历.md --cross-check       # 校验有缺口时再让模型复核一遍
-    python scripts/parse_resume.py 简历.pdf --model gpt-4o     # 单次覆盖模型
+    python scripts/stages/parse_resume.py 简历.pdf
+    python scripts/stages/parse_resume.py 简历.pdf --output-dir assets/2026-08-15_10-00-00
+    python scripts/stages/parse_resume.py 简历.md --cross-check       # 校验有缺口时再让模型复核一遍
+    python scripts/stages/parse_resume.py 简历.pdf --model gpt-4o     # 单次覆盖模型
 
 支持 PDF / Word / md / markdown / txt（由 resume_matcher.parse_resume_file 决定）。
 
@@ -20,6 +20,9 @@ import os
 import sys
 import json
 import argparse
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 import stage_timer
 from resume_matcher import parse_resume_file, create_run_dir
@@ -134,8 +137,8 @@ def main():
         description='解析简历文件为 profile.json（OpenAI 兼容接口）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='示例:\n'
-               '  python scripts/parse_resume.py 简历.pdf\n'
-               '  python scripts/parse_resume.py 简历.pdf --output-dir assets/2026-08-15_10-00-00 --cross-check\n')
+               '  python scripts/stages/parse_resume.py 简历.pdf\n'
+               '  python scripts/stages/parse_resume.py 简历.pdf --output-dir assets/2026-08-15_10-00-00 --cross-check\n')
     ap.add_argument('resume_file', help='简历文件路径（PDF / Word / md / txt）')
     ap.add_argument('--output-dir', '-o', help='运行目录，默认在 assets/ 下新建时间戳目录')
     ap.add_argument('--cross-check', action='store_true',
@@ -247,8 +250,8 @@ def main():
 
     print('\n' + format_usage(run_dir))
     print('\n下一步：')
-    print('  python scripts/infer_params.py "%s" --save     # 从简历推断爬取参数' % profile_path)
-    print('  python scripts/run_matcher.py --mode deep --profile "%s" --top 15 --output-dir "%s"'
+    print('  python scripts/stages/infer_params.py "%s" --save     # 从简历推断爬取参数' % profile_path)
+    print('  python scripts/stages/run_matcher.py --mode deep --profile "%s" --top 15 --output-dir "%s"'
           % (profile_path, run_dir))
     return 0
 

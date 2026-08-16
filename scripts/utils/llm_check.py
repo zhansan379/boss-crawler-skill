@@ -6,16 +6,20 @@
 key 没配）。所以给它一个一秒钟的独立入口，跑长流程之前先跑这个。
 
 用法：
-    python scripts/llm_check.py                 # 打印配置 + 发一条最小请求
-    python scripts/llm_check.py --no-call       # 只打印配置，不花钱
-    python scripts/llm_check.py --stage deep    # 看某阶段的实际生效配置
-    python scripts/llm_check.py --json          # 也验一遍 JSON 模式能否工作
+    python scripts/utils/llm_check.py                 # 打印配置 + 发一条最小请求
+    python scripts/utils/llm_check.py --no-call       # 只打印配置，不花钱
+    python scripts/utils/llm_check.py --stage deep    # 看某阶段的实际生效配置
+    python scripts/utils/llm_check.py --json          # 也验一遍 JSON 模式能否工作
 
 退出码：0 = 可用，1 = 配置缺失/非法，2 = 配置齐全但请求打不通。
 """
 
+import os
 import sys
 import argparse
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 from llm import (
     ConfigError, LLMError, resolve, describe, chat, chat_json,

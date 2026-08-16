@@ -27,6 +27,8 @@ import tempfile
 
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'stages'))
+sys.path.insert(0, os.path.join(HERE, 'utils'))
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK
     _stream.reconfigure(encoding='utf-8', errors='replace')
@@ -229,7 +231,7 @@ def test_cli():
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
 
     def run(*args):
-        return subprocess.run([sys.executable, os.path.join(HERE, 'read_thin.py')] + list(args),
+        return subprocess.run([sys.executable, os.path.join(HERE, 'utils', 'read_thin.py')] + list(args),
                               capture_output=True, text=True, encoding='utf-8', env=env)
 
     ok = run(run_dir, '--kind', 'ranked')

@@ -16,8 +16,8 @@ merge / materials / verify / render），所以它给出的下一步永远能直
 撤销的一步，本脚本只会把命令摆出来，绝不建议加 `--yes`。
 
 用法：
-    python scripts/where_am_i.py <run_dir>
-    python scripts/where_am_i.py               # 自动取 LATEST.txt 指的运行目录
+    python scripts/utils/where_am_i.py <run_dir>
+    python scripts/utils/where_am_i.py               # 自动取 LATEST.txt 指的运行目录
 
 退出码恒为 0——这是查询工具，不是 gate。
 """
@@ -28,8 +28,8 @@ import json
 import glob
 import argparse
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _HERE)
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 from resume_matcher import (                        # noqa: E402  (sys.path 之后)
     profile_path, resume_text_path, profile_validation_path,
@@ -38,7 +38,7 @@ from resume_matcher import (                        # noqa: E402  (sys.path 之�
     materials_dir, deliver_dir, apply_log_path,
 )
 
-SKILL_ROOT = os.path.dirname(_HERE)
+SKILL_ROOT = os.path.dirname(_SCRIPTS)
 
 # 需要 api_key 的阶段。下一步落在这些阶段上时，提醒先跑一次 llm_check。
 _LLM_STAGES = ('parse', 'infer', 'match', 'deep', 'materials')
@@ -117,7 +117,7 @@ def survey(run_dir):
         if stage in _LLM_STAGES:
             ok, why = _llm_ready()
             if not ok:
-                ns.append('%s —— 先跑 python scripts/llm_check.py --no-call' % why)
+                ns.append('%s —— 先跑 python scripts/utils/llm_check.py --no-call' % why)
         return done, ('%s（pipeline 阶段 %s）' % (title, stage), cmds), ns
 
     # ── parse: 简历 → profile.json ──
@@ -126,7 +126,7 @@ def survey(run_dir):
         if not has(profile_validation_path(run_dir)):
             # parse_resume.py 自己会写这个文件，缺了说明那一步是旧版/半途中断的产物
             notes.append('没有 profile_validation.json（正常由 parse_resume.py 一起写）：'
-                         'python scripts/validate_profile.py "%s/resume_text.txt" '
+                         'python scripts/stages/validate_profile.py "%s/resume_text.txt" '
                          '"%s/profile.json"' % (run_dir, run_dir))
     else:
         return nxt('parse', '解析简历',
@@ -154,7 +154,7 @@ def survey(run_dir):
                        '缺 crawl_summary.json —— 这一轮没爬到东西（岗位池现有 %d 个 CSV）'
                        % len(csvs),
                        '最常见的原因是没登录：'
-                       'python scripts/boss_post_interactive.py --ensure-login',
+                       'python scripts/stages/boss_post_interactive.py --ensure-login',
                        '爬取动辄几十分钟：放后台跑，别在前台等'])
 
     # ── match / deep / merge: 三步一组 ──
@@ -190,7 +190,7 @@ def survey(run_dir):
     greets, resumes = _count(gen, 'greeting_*'), _count(gen, 'resume_*')
     if greets < n or resumes < n:
         return nxt('materials', '生成招呼语 + 优化简历',
-                   extra_cmds=['python scripts/gen_materials.py "%s" --only <序号>   '
+                   extra_cmds=['python scripts/stages/gen_materials.py "%s" --only <序号>   '
                                '# 只补缺的那几个' % run_dir],
                    extra_notes=['materials/ 有 %d 个招呼语、%d 份简历，期望各 %d 个'
                                 % (greets, resumes, n),
@@ -237,7 +237,7 @@ def survey(run_dir):
     ready = [d for d in job_dirs if os.path.exists(os.path.join(d, '投递.md'))]
     if len(ready) < n:
         return done, ('写各岗位的 投递.md（流水线之外）', [
-            'python scripts/write_application_md.py "%s" --all' % run_dir,
+            'python scripts/deliver/write_application_md.py "%s" --all' % run_dir,
         ]), ['%d/%d 个岗位目录有 投递.md' % (len(ready), n)]
     done.append('材料：%d/%d 个岗位目录齐全' % (len(ready), n))
 
@@ -245,8 +245,8 @@ def survey(run_dir):
     log = _load(apply_log_path(run_dir))
     if not log:
         return done, ('确认后投递（唯一不可撤销的一步）', [
-            'python scripts/verify_image.py "%s" --all   # 投出去之前先查图，别用 Read 看' % apps,
-            'python scripts/apply.py "%s"                # 空跑：只打印名单，不碰浏览器' % run_dir,
+            'python scripts/verify/verify_image.py "%s" --all   # 投出去之前先查图，别用 Read 看' % apps,
+            'python scripts/deliver/apply.py "%s"                # 空跑：只打印名单，不碰浏览器' % run_dir,
         ]), ['缺 apply_log.json',
              '真投递要用户明确同意后才加 --yes —— 消息一发对方立刻收到，撤不回来']
     done.append('投递：apply_log.json 有 %d 条'
@@ -268,7 +268,7 @@ def main():
 
     run_dir = args.run_dir or _latest_run()
     if not run_dir or not os.path.isdir(run_dir):
-        print('找不到运行目录。显式传一个：python scripts/where_am_i.py <run_dir>')
+        print('找不到运行目录。显式传一个：python scripts/utils/where_am_i.py <run_dir>')
         print('全新一轮从解析简历开始：python scripts/pipeline.py 简历.pdf')
         return 0
 

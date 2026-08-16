@@ -12,12 +12,12 @@ ShowCV 渲染都按它对齐：
 即使某个岗位失败，其余岗位的序号也不能挪动。
 
 用法：
-    python scripts/gen_materials.py <run_dir>
-    python scripts/gen_materials.py <run_dir> --greeting-mode default   # 不调模型，套模板
-    python scripts/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
-    python scripts/gen_materials.py <run_dir> --only 1,3,5              # 只补这几个
-    python scripts/gen_materials.py <run_dir> --force                   # 覆盖已有产物
-    python scripts/gen_materials.py <run_dir> --scene 实习 --dry-run
+    python scripts/stages/gen_materials.py <run_dir>
+    python scripts/stages/gen_materials.py <run_dir> --greeting-mode default   # 不调模型，套模板
+    python scripts/stages/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
+    python scripts/stages/gen_materials.py <run_dir> --only 1,3,5              # 只补这几个
+    python scripts/stages/gen_materials.py <run_dir> --force                   # 覆盖已有产物
+    python scripts/stages/gen_materials.py <run_dir> --scene 实习 --dry-run
 
 退出码：0 = 需要的产物齐全，1 = 输入缺失/全部失败，3 = 部分失败。
 """
@@ -29,6 +29,9 @@ import json
 import time
 import argparse
 import threading
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 import stage_timer
 from resume_matcher.prompts import get_greeting_prompt, get_optimize_prompt
@@ -380,7 +383,7 @@ def main():
         description='为 qualified_jobs.json 的每个岗位生成招呼语与优化简历',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='产物落在 <run_dir>/materials/，文件名契约与 check_artifacts.py 一致。\n'
-               '跑完可选：python scripts/render_images.py <run_dir>（简历转图片）\n')
+               '跑完可选：python scripts/deliver/render_images.py <run_dir>（简历转图片）\n')
     ap.add_argument('run_dir', help='运行目录（含 qualified_jobs.json 与 profile.json）')
     ap.add_argument('--greeting-mode', choices=('ai', 'default', 'skip'), default='ai',
                     help='ai=调模型（默认）；default=套规则模板不花钱；skip=不生成')
@@ -406,7 +409,7 @@ def main():
         jobs = load_jobs(run_dir)
     except FileNotFoundError as exc:
         print('❌ 找不到 %s' % exc)
-        print('  先跑匹配：python scripts/run_matcher.py …（会自动生成 qualified_jobs.json）')
+        print('  先跑匹配：python scripts/stages/run_matcher.py …（会自动生成 qualified_jobs.json）')
         return 1
     except ValueError as exc:
         print('❌ qualified_jobs.json 解析失败: %s' % exc)
@@ -419,7 +422,7 @@ def main():
         profile = load_profile(run_dir)
     except FileNotFoundError as exc:
         print('❌ 找不到 %s' % exc)
-        print('  先跑：python scripts/parse_resume.py <简历文件> --output-dir "%s"' % run_dir)
+        print('  先跑：python scripts/stages/parse_resume.py <简历文件> --output-dir "%s"' % run_dir)
         return 1
     except ValueError as exc:
         print('❌ profile.json 解析失败: %s' % exc)
@@ -603,10 +606,10 @@ def main():
         # 直接跑（不经 pipeline）：render_images.py 不写 投递.md，
         # 那份要么走 pipeline.py --from materials 让 materials 自动写，要么单独跑它。
         if args.resume_mode != 'skip':
-            print('  python scripts/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)
-        print('  python scripts/write_application_md.py "%s" --all   # 或改走 pipeline 让 materials 自动写'
+            print('  python scripts/deliver/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)
+        print('  python scripts/deliver/write_application_md.py "%s" --all   # 或改走 pipeline 让 materials 自动写'
               % run_dir)
-    print('  python scripts/apply.py "%s" --yes                # 真投递（不加 --yes 只预演）'
+    print('  python scripts/deliver/apply.py "%s" --yes                # 真投递（不加 --yes 只预演）'
           % run_dir)
 
     if failures or interrupted:

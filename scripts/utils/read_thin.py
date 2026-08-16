@@ -9,10 +9,10 @@ extracts just the fields the main agent actually needs (link, company,
 position, score, verdicts) and prints them as compact JSON.
 
 Usage:
-  python scripts/read_thin.py <file> --kind jobs      # qualified_jobs.json
-  python scripts/read_thin.py <file> --kind profile   # profile.json
-  python scripts/read_thin.py <file> --kind deep      # deep_results.json
-  python scripts/read_thin.py <run_dir> --kind ranked # 序号+公司+职位+分数+判定 一张表
+  python scripts/utils/read_thin.py <file> --kind jobs      # qualified_jobs.json
+  python scripts/utils/read_thin.py <file> --kind profile   # profile.json
+  python scripts/utils/read_thin.py <file> --kind deep      # deep_results.json
+  python scripts/utils/read_thin.py <run_dir> --kind ranked # 序号+公司+职位+分数+判定 一张表
 
 `ranked` 吃的是 **run 目录**而不是单个文件，因为「分数 + 判定 + 公司 + 职位」
 本来就散在 4 个文件里（qualified_jobs / scored_jobs / job_classification /
@@ -28,6 +28,9 @@ for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding='utf-8', errors='replace')
     except (AttributeError, ValueError, OSError):
         pass
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 
 def thin_jobs(data: list) -> list:
@@ -170,7 +173,7 @@ KINDS = {
 # ranked 不在 KINDS 里：它的入参是 run 目录，不是一个 JSON 文件，走另一条分支。
 DIR_KINDS = ('ranked',)
 
-USAGE = 'Usage: python scripts/read_thin.py <file|run_dir> --kind {jobs|profile|deep|ranked}'
+USAGE = 'Usage: python scripts/utils/read_thin.py <file|run_dir> --kind {jobs|profile|deep|ranked}'
 
 
 def main():

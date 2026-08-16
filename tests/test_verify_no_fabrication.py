@@ -27,6 +27,7 @@ import tempfile
 
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'verify'))
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK
     _stream.reconfigure(encoding='utf-8', errors='replace')
@@ -35,7 +36,7 @@ import verify_no_fabrication as V
 
 FAILURES = []
 _TMP = None
-SCRIPT = os.path.join(HERE, 'verify_no_fabrication.py')
+SCRIPT = os.path.join(HERE, 'verify', 'verify_no_fabrication.py')
 
 
 def check(label, cond, detail=''):

@@ -35,7 +35,7 @@ parse → infer → crawl → match → deep → merge → materials → verify 
 每个推断阶段都需要 API key。**pipeline 会在计划里含任何 LLM 阶段时自动跑预检**（`llm_check.py --no-call`，紧跟运行目录之后、`parse` 之前），所以不用单独敲这条命令——预检退出 1 会停掉整次运行，把三种配置方式打给你看。单独跑仍然可用，当你只想查配置、不想走整条流水线时：
 
 ```bash
-python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺失/非法
+python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺失/非法
 ```
 
 `--no-call` 不花任何钱。退出 1 → 把三种配置方式展示给用户（脚本会打印它们）然后停下；不要启动一场会在 `match` 处死掉的爬取。加 `--stage deep` 看单个阶段被解析成什么，或去掉 `--no-call` 顺便发一个最小请求——**那一条路径会多出第三个码，`2` = 配置完整但端点不可达**（这个脚本是仓库范围内 `2 = 用法错误` 的唯一例外；是网络或 base-URL 的问题，不是配置问题）。**绝不打印、记录或回显 `api_key`**——脚本会把它打码，所以只传路径和阶段名，别传 key。
@@ -100,21 +100,21 @@ python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺
 **迷失了位置（例如在上下文压缩之后）？不要重读文档来重建状态。** 问文件系统：
 
 ```bash
-python scripts/where_am_i.py           # 或传一个显式的 <run_dir>
+python scripts/utils/where_am_i.py           # 或传一个显式的 <run_dir>
 ```
 
 它会根据磁盘上的产物推断出当前阶段，并用约 1k 字符打印下一条命令。只在它指向的那*一个*章节去查参考资料。
 
 **让一次运行保持廉价的三个习惯。**
 
-1. **绝不 `Read` 一张渲染好的简历图片。** 用 `scripts/verify_image.py`。一张 0.5 MB 的 PNG 花掉 638,960 个输入 token——单次工具调用就占了那个会话 79% 的新鲜输入。
+1. **绝不 `Read` 一张渲染好的简历图片。** 用 `scripts/verify/verify_image.py`。一张 0.5 MB 的 PNG 花掉 638,960 个输入 token——单次工具调用就占了那个会话 79% 的新鲜输入。
 2. **绝不 `Read` 完整数据文件——用 `read_thin.py`。** `qualified_jobs.json` 带着完整的 JD 和公司描述；你只需要 link/公司/职位/分数/判定：
 
    ```bash
-   python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → 表格字段
-   python scripts/read_thin.py {run_dir}/profile.json --kind profile         # → 汇总统计
-   python scripts/read_thin.py {run_dir}/deep_results.json --kind deep       # → 只看判定
-   python scripts/read_thin.py {run_dir} --kind ranked                       # → 序号+公司+职位+分数+判定
+   python scripts/utils/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → 表格字段
+   python scripts/utils/read_thin.py {run_dir}/profile.json --kind profile         # → 汇总统计
+   python scripts/utils/read_thin.py {run_dir}/deep_results.json --kind deep       # → 只看判定
+   python scripts/utils/read_thin.py {run_dir} --kind ranked                       # → 序号+公司+职位+分数+判定
    ```
 
    `ranked` 接受的是**运行目录**，不是文件——分数和判定依模式分散在最多四个不同的文件里（`scored_jobs` → `job_classification` → `deep_results`，通过 `deep_candidates` 按 `rank` 连接），而 `qualified_jobs.json` 两者都没有。它是唯一能回答"我该挑几号岗位"的视图，因为它的 `index` 就是 `--only`、`materials_*_N` 和 `apply --max` 用的同一个从 1 开始计数的编号。**优先用它，而不要手工去连文件。** 它会同时报告 `matched` 和 `total`：`matched < total` 说明有些岗位从未出现在任何匹配产物里（通常是只爬不匹配的运行），而不是分数真地是空的。
@@ -190,7 +190,7 @@ PDF / Word / md / markdown / txt。它把 `resume_text.txt`、`profile.json` 和
 `profile_validation.json` 就是那个校验器的输出。parse 阶段退出码 1 表示简历里出现了一个已知的技术术语却没进 profile——那是一次字典查找（`KNOWN_TECH_TERMS`），是这里唯一不依赖产生 JSON 的那个模型的信号。它在 `hints` 下打印的任何东西（未匹配的项目/公司名、稀薄的技能类别）都来自宽松的正则：读 hints，别照做，也别让某一条变成闸门。单独重跑它：
 
 ```bash
-python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
+python scripts/stages/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
 ```
 
 需要确认某个具体字段时用 `read_thin.py --kind profile`。**你绝不手写 `profile.json`。**
@@ -244,7 +244,7 @@ python scripts/preferences.py save --replace --city 太原 --keywords "AI应用�
 先登录。这一步天然是交互式的，跑在前台：
 
 ```bash
-python scripts/boss_post_interactive.py --ensure-login
+python scripts/stages/boss_post_interactive.py --ensure-login
 ```
 
 `[LOGIN_OK]` → 浏览器关闭，继续。`[LOGIN_NEEDED]` → 浏览器保持打开，用户登录后告诉你 已登录，然后重跑。登录状态保存在 `assets/chrome_user_data/`。
@@ -287,7 +287,7 @@ python scripts/pipeline.py --from match          # deep 模式：后台任务，
 **deep 模式每个岗位发一次请求，所以部分失败是常态。** `deep` 退出 **3** 表示结果文件已写但部分 rank 缺失——用 `--resume` 补齐，而不是重跑整个阶段：
 
 ```bash
-python scripts/deep_analyze.py <run_dir> --resume    # 跳过 deep_results.json 里已有的 rank
+python scripts/stages/deep_analyze.py <run_dir> --resume    # 跳过 deep_results.json 里已有的 rank
 ```
 
 `deep_results.json` 靠 **`rank`** 映射回候选，而不是靠 `job_id` 或 link——那是唯一的对齐键，一旦 rank 错位，就会把某岗位的分析安到另一个岗位上而没有任何地方报错。`read_thin.py --kind ranked` 已经做这个连接了；用它而不是自己重建。
@@ -346,7 +346,7 @@ python scripts/pipeline.py --from materials --only 1,3,5     # 后台任务
 
 ```bash
 python scripts/check_artifacts.py {run_dir}
-python scripts/gen_materials.py {run_dir} --only 4        # 只补那个失败的
+python scripts/stages/gen_materials.py {run_dir} --only 4        # 只补那个失败的
 ```
 
 **材料失败的岗位会从批次里剔除，而不是无限重试。** 把它从 `render` 和投递列表里排除，并在 `gate:send` 告诉用户。
@@ -363,7 +363,7 @@ python scripts/pipeline.py --from verify
 
 ```bash
 # 确系编造 → 重新生成那些岗位
-python scripts/gen_materials.py {run_dir} --only 1,3 --force
+python scripts/stages/gen_materials.py {run_dir} --only 1,3 --force
 # 站得住脚（它*确实*在简历里，只是措辞不同）→ 加白名单并继续
 python scripts/pipeline.py --run-dir {run_dir} --from verify --all --allow PyTorch,nginx
 ```
@@ -395,7 +395,7 @@ python scripts/pipeline.py --from render --only 1,3,5
 长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/deliver" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
 
 ```bash
-python scripts/verify_image.py "{run_dir}/deliver" --all
+python scripts/verify/verify_image.py "{run_dir}/deliver" --all
 ```
 
 `verify_image.py` 是你检查图片的方式：它返回十几行数字，而不是一张 639k token 的截图。如果用户想看某一张，把路径给他们，让他们自己打开。
@@ -405,8 +405,8 @@ python scripts/verify_image.py "{run_dir}/deliver" --all
 一次 `AskUserQuestion`：全部投递 / 返回修改 / 取消投递。然后，也只有在这之后：
 
 ```bash
-python scripts/apply.py "{run_dir}"                # 干跑：打印列表，不碰浏览器
-python scripts/apply.py "{run_dir}" --yes          # 发送
+python scripts/deliver/apply.py "{run_dir}"                # 干跑：打印列表，不碰浏览器
+python scripts/deliver/apply.py "{run_dir}" --yes          # 发送
 ```
 
 **`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--all` 也不。

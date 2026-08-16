@@ -279,7 +279,7 @@ def crawl_args(prefs):
 
 def crawl_command(prefs):
     args = crawl_args(prefs)
-    return 'python scripts/boss_post_interactive.py %s' % args if args else ''
+    return 'python scripts/stages/boss_post_interactive.py %s' % args if args else ''
 
 
 # ==================== 子命令 ====================

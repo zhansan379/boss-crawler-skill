@@ -157,7 +157,7 @@ def main():
 
     if missing:
         print('\n缺 %d 个。只补缺的这几个：' % len(missing))
-        print('  python scripts/gen_materials.py "%s" --only <序号>' % args.run_dir)
+        print('  python scripts/stages/gen_materials.py "%s" --only <序号>' % args.run_dir)
         print('已有产物会自动跳过，不会被覆盖（要覆盖得显式 --force）。')
         return 1
 

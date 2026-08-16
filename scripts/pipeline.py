@@ -101,8 +101,24 @@ def show(cmd):
     return ' '.join(('"%s"' % a if (' ' in a or not a) else a) for a in cmd)
 
 
+# 入口脚本不再平铺在 scripts/ 根：按阶段/模块归到子目录。留在根的是 4 个共享助手
+# （check_artifacts / match_index / preferences / stage_timer）+ pipeline 本身。
+# 这里维护「脚本名 → 子目录」映射，script() 据此拼出真实路径。
+_SCRIPT_SUBDIR = {
+    'parse_resume.py': 'stages', 'infer_params.py': 'stages',
+    'boss_post_interactive.py': 'stages', 'run_matcher.py': 'stages',
+    'deep_analyze.py': 'stages', 'gen_materials.py': 'stages',
+    'write_application_md.py': 'deliver', 'render_images.py': 'deliver',
+    'apply.py': 'deliver',
+    'verify_no_fabrication.py': 'verify', 'verify_image.py': 'verify',
+    'llm_check.py': 'utils', 'clean_run.py': 'utils',
+    'where_am_i.py': 'utils', 'read_thin.py': 'utils',
+}
+
+
 def script(name):
-    return os.path.join(_HERE, name)
+    sub = _SCRIPT_SUBDIR.get(name)
+    return os.path.join(_HERE, sub, name) if sub else os.path.join(_HERE, name)
 
 
 # ==================== 运行目录与参数 ====================
@@ -230,7 +246,7 @@ def check_crawl(run_dir, min_jobs):
         # crawl_summary.json 只在真的爬完之后才写，所以用它判定。
         msgs.append(('bad', '没有 crawl_summary.json —— 这一轮实际上没爬到东西。\n'
                             '  最常见的原因是没登录：\n'
-                            '    python scripts/boss_post_interactive.py --ensure-login\n'
+                            '    python scripts/stages/boss_post_interactive.py --ensure-login\n'
                             '  登录后接着跑：--from crawl'))
         return False, msgs
 
@@ -602,7 +618,7 @@ def main(argv=None):
 
     if 'infer' not in plan and 'crawl' in plan and not params:
         print('❌ 要跑 crawl 却没有 crawl_params.json（%s）' % run_dir)
-        print('  先跑推断：python scripts/infer_params.py "%s"' % run_dir)
+        print('  先跑推断：python scripts/stages/infer_params.py "%s"' % run_dir)
         print('  或把起点挪到 infer：--from infer')
         return 1
 
@@ -724,7 +740,7 @@ def main(argv=None):
             else:
                 for item in missing:
                     print('  ❌ 缺失：%s' % item)
-                print('  只补缺的这几个：python scripts/gen_materials.py "%s" --only <序号>'
+                print('  只补缺的这几个：python scripts/stages/gen_materials.py "%s" --only <序号>'
                       % run_dir)
                 if 'materials' not in partial:
                     partial.append('materials')
@@ -744,7 +760,7 @@ def main(argv=None):
                 # render 是终点阶段，停不停都拿不到更多产物，所以记成部分成功（退 3）
                 # 让收尾提示带上它，而不是硬拦下来。
                 print('  ⚠ 上面有图有可疑项（空图/截断/大片留白）。逐条看数字判断：')
-                print('    确属坏图 → python scripts/render_images.py "%s" --only <序号> 重渲'
+                print('    确属坏图 → python scripts/deliver/render_images.py "%s" --only <序号> 重渲'
                       % run_dir)
                 print('    只是留白可接受 → 继续无妨。')
                 if 'render' not in partial:
@@ -788,12 +804,12 @@ def main(argv=None):
             print('    %s' % qualified_jobs_path(run_dir))
     elif STAGES.index(plan[-1]) >= STAGES.index('materials'):
         print('\n材料已生成。**投递是单独一条命令**，本流水线不会自己投：')
-        print('  python scripts/apply.py "%s" --yes%s'
+        print('  python scripts/deliver/apply.py "%s" --yes%s'
               % (run_dir, ' --no-image' if (args.no_images or args.resume_mode == 'skip')
                  else ''))
         print('  不带 --yes 是空跑：只打印要投的岗位与材料，不碰浏览器。')
         print('  建议先空跑一次看清名单：')
-        print('    python scripts/apply.py "%s"' % run_dir)
+        print('    python scripts/deliver/apply.py "%s"' % run_dir)
 
     return 3 if partial else 0
 

@@ -69,10 +69,10 @@ export LLM_MODEL=deepseek-chat
 **先验一下再跑**（`pipeline.py` 会在任何 LLM 阶段前自动跑 `--no-call` 预检，这里单独跑是给「只想查配置、不整轮跑」的场景）：
 
 ```bash
-python scripts/llm_check.py               # 打印生效配置（key 打码）并真发一次请求
-python scripts/llm_check.py --no-call     # 只看配置，不花钱
-python scripts/llm_check.py --stage deep  # 看某个阶段最终生效的是什么
-python scripts/llm_check.py --json        # 额外验 JSON 模式能不能拿到合法 JSON
+python scripts/utils/llm_check.py               # 打印生效配置（key 打码）并真发一次请求
+python scripts/utils/llm_check.py --no-call     # 只看配置，不花钱
+python scripts/utils/llm_check.py --stage deep  # 看某个阶段最终生效的是什么
+python scripts/utils/llm_check.py --json        # 额外验 JSON 模式能不能拿到合法 JSON
 ```
 
 输出里每一项后面都标了它从哪一层来（`← file:stages.deep`、`← env:LLM_MODEL`、`← cli`），「我明明配了却没生效」看这一栏就知道被谁盖了。
@@ -109,7 +109,7 @@ python scripts/pipeline.py 简历.pdf --all --greeting-mode default        # 招
 **首次运行需要登录**。爬虫检测到未登录时会正常退出（不是报错），流水线会停在 crawl 这一步。先单独把登录做掉：
 
 ```bash
-python scripts/boss_post_interactive.py --ensure-login
+python scripts/stages/boss_post_interactive.py --ensure-login
 ```
 
 它会打开浏览器让你扫码，然后**停下来等你按回车**（不轮询、不定时探测）。按回车后复检一次：过了就正常关闭浏览器把会话写进 `assets/chrome_user_data`，并直接印出续跑命令；没过就告诉你还差什么，再按回车重试（最多 5 次，输入 `q` 放弃）。
@@ -162,11 +162,11 @@ python scripts/pipeline.py --from match --to merge          # 显式区间
 ## 4. 投递（单独一条命令）
 
 ```bash
-python scripts/apply.py "assets/2026-08-15_10-00-00"              # 演练：列出可选公司 + 打印计划
-python scripts/apply.py "assets/2026-08-15_10-00-00" --yes        # 真投
-python scripts/apply.py "assets/…" --yes --company 百度,棱镜数聚   # 只投这两家
-python scripts/apply.py "assets/…" --yes --only 1,3,5 --max 3     # 按序号只投这几个、最多 3 个
-python scripts/apply.py "assets/…" --yes --no-image               # 不发简历图
+python scripts/deliver/apply.py "assets/2026-08-15_10-00-00"              # 演练：列出可选公司 + 打印计划
+python scripts/deliver/apply.py "assets/2026-08-15_10-00-00" --yes        # 真投
+python scripts/deliver/apply.py "assets/…" --yes --company 百度,棱镜数聚   # 只投这两家
+python scripts/deliver/apply.py "assets/…" --yes --only 1,3,5 --max 3     # 按序号只投这几个、最多 3 个
+python scripts/deliver/apply.py "assets/…" --yes --no-image               # 不发简历图
 ```
 
 不加 `--yes` 时**不做任何浏览器操作**，只把「有哪些公司可选」「要投谁、用哪条招呼语、发哪张图」列出来。建议先演练一次，确认名单和招呼语，再加 `--yes`。
@@ -209,10 +209,10 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 ### parse_resume.py — 简历 → profile.json
 
 ```bash
-python scripts/parse_resume.py 简历.pdf                      # 新建时间戳运行目录
-python scripts/parse_resume.py 简历.pdf -o "assets/2026-08-15_10-00-00"
-python scripts/parse_resume.py 简历.pdf --cross-check        # 校验发现缺口时再让模型复核一遍
-python scripts/parse_resume.py 简历.pdf --force              # 覆盖已有 profile.json
+python scripts/stages/parse_resume.py 简历.pdf                      # 新建时间戳运行目录
+python scripts/stages/parse_resume.py 简历.pdf -o "assets/2026-08-15_10-00-00"
+python scripts/stages/parse_resume.py 简历.pdf --cross-check        # 校验发现缺口时再让模型复核一遍
+python scripts/stages/parse_resume.py 简历.pdf --force              # 覆盖已有 profile.json
 ```
 
 解析完会跑一遍字段校验并把缺口打印出来（缺联系方式、没有项目经历之类）。`--cross-check` 会带着缺口清单再做一次全文推理，多花一次调用换准确度。
@@ -220,11 +220,11 @@ python scripts/parse_resume.py 简历.pdf --force              # 覆盖已有 pr
 ### infer_params.py — profile → 爬取参数
 
 ```bash
-python scripts/infer_params.py "assets/2026-08-15_10-00-00"
-python scripts/infer_params.py <run_dir> --city "杭州,上海" --keywords "Python,Go"
-python scripts/infer_params.py <run_dir> --match-mode deep --count 30 --min-count 40
-python scripts/infer_params.py <run_dir> --save            # 同时写 assets/preferences.json
-python scripts/infer_params.py <run_dir> --dry-run         # 只打印提示词
+python scripts/stages/infer_params.py "assets/2026-08-15_10-00-00"
+python scripts/stages/infer_params.py <run_dir> --city "杭州,上海" --keywords "Python,Go"
+python scripts/stages/infer_params.py <run_dir> --match-mode deep --count 30 --min-count 40
+python scripts/stages/infer_params.py <run_dir> --save            # 同时写 assets/preferences.json
+python scripts/stages/infer_params.py <run_dir> --dry-run         # 只打印提示词
 ```
 
 任何字段都能用命令行覆盖推断结果；传空串表示不筛该项（如 `--salary ""`）。**参数全部由命令行给出时不会调用模型。** 公司规模（`--scale`）不做推断 —— 简历里没有能推出它的信息。
@@ -232,9 +232,9 @@ python scripts/infer_params.py <run_dir> --dry-run         # 只打印提示词
 **城市是唯一必须有值的字段**（关键词模型基本都能推出来，城市推不出来就只能停）。全国搜是一个**城市值**，不是「省略即全国」：
 
 ```bash
-python scripts/infer_params.py <run_dir> --city 全国            # BOSS 的全国代码，一次搜完（也可写 不限）
-python scripts/infer_params.py <run_dir> --city "西安,北京,杭州"  # 多个城市，逐个爬
-python scripts/boss_post_interactive.py --list-cities           # 全部城市名
+python scripts/stages/infer_params.py <run_dir> --city 全国            # BOSS 的全国代码，一次搜完（也可写 不限）
+python scripts/stages/infer_params.py <run_dir> --city "西安,北京,杭州"  # 多个城市，逐个爬
+python scripts/stages/boss_post_interactive.py --list-cities           # 全部城市名
 ```
 
 省略 `--city` 时脚本会直接停下（退出码 1）并把上面这些印出来 —— 不会悄悄按全国去爬。
@@ -242,8 +242,8 @@ python scripts/boss_post_interactive.py --list-cities           # 全部城市�
 **experience 默认 `["经验不限"]`，把收窄留给匹配打分 —— 别在爬取阶段就把池子筛空**（1 个关键词 + 应届生筛选曾只爬到 19 条，白爬一场）。只有简历明确是应届（毕业年份就是今年且已过 7 月）或在校找实习（毕业年份 > 今年）才给 `["应届生"]` / `["在校生"]`。**job_type 另说，它是拿今天的日期跟毕业年份比出来的**：提示词在 `scripts/prompts/crawl_params.st`（约束 6），脚本默认把系统日期传进去：毕业年份晚于今年 → 在校 → `["实习"]`；毕业年份就是今年则按 6 月毕业季再比月份；已毕业 → `["全职"]`。简历里明确在找实习（期望职位带「实习」、给了可实习时长）时按实习算，不看日期。
 
 ```bash
-python scripts/infer_params.py <run_dir> --today 2027-03-01   # 换个「今天」再推一次
-python scripts/infer_params.py <run_dir> --dry-run            # 看装配好的提示词，含日期那行
+python scripts/stages/infer_params.py <run_dir> --today 2027-03-01   # 换个「今天」再推一次
+python scripts/stages/infer_params.py <run_dir> --dry-run            # 看装配好的提示词，含日期那行
 ```
 
 `--today` 只影响这条判断，用来预演「明年三月我该投实习还是全职」，或者机器时钟不对时兜一手。不传就取系统日期。改判定口径直接改 `.st` 文件，不用碰 Python —— 但那四行枚举（`{salary}` / `{experience}` / `{degree}` / `{job_type}`）是从爬虫的 `FILTER_LABELS` 注进去的，别在模板里抄一份写死。
@@ -251,11 +251,11 @@ python scripts/infer_params.py <run_dir> --dry-run            # 看装配好的�
 ### deep_analyze.py — 逐岗位调模型
 
 ```bash
-python scripts/deep_analyze.py <run_dir>
-python scripts/deep_analyze.py <run_dir> --workers 6 --model deepseek-reasoner
-python scripts/deep_analyze.py <run_dir> --limit 3        # 先拿 3 个试水，看看质量和花费
-python scripts/deep_analyze.py <run_dir> --resume         # 续跑，跳过已有结果的 rank
-python scripts/deep_analyze.py <run_dir> --dry-run        # 打印将发什么、发几次，不花钱
+python scripts/stages/deep_analyze.py <run_dir>
+python scripts/stages/deep_analyze.py <run_dir> --workers 6 --model deepseek-reasoner
+python scripts/stages/deep_analyze.py <run_dir> --limit 3        # 先拿 3 个试水，看看质量和花费
+python scripts/stages/deep_analyze.py <run_dir> --resume         # 续跑，跳过已有结果的 rank
+python scripts/stages/deep_analyze.py <run_dir> --dry-run        # 打印将发什么、发几次，不花钱
 ```
 
 按岗位并发。单个岗位失败不影响其余（退出码 3），失败的用 `--resume` 补。合并时未分析成功的岗位会沿用规则侧分类，**不会丢岗位**。
@@ -263,12 +263,12 @@ python scripts/deep_analyze.py <run_dir> --dry-run        # 打印将发什么�
 ### gen_materials.py — 招呼语 + 优化简历
 
 ```bash
-python scripts/gen_materials.py <run_dir>
-python scripts/gen_materials.py <run_dir> --greeting-mode default   # 套规则模板，不花钱
-python scripts/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
-python scripts/gen_materials.py <run_dir> --only 1,3,5-7            # 只补这几个
-python scripts/gen_materials.py <run_dir> --force                   # 覆盖已有产物
-python scripts/gen_materials.py <run_dir> --scene 实习
+python scripts/stages/gen_materials.py <run_dir>
+python scripts/stages/gen_materials.py <run_dir> --greeting-mode default   # 套规则模板，不花钱
+python scripts/stages/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
+python scripts/stages/gen_materials.py <run_dir> --only 1,3,5-7            # 只补这几个
+python scripts/stages/gen_materials.py <run_dir> --force                   # 覆盖已有产物
+python scripts/stages/gen_materials.py <run_dir> --scene 实习
 ```
 
 默认**跳过已有产物**，所以重跑一次就是「补齐缺的」，手工改过的招呼语不会被冲掉（要覆盖得显式 `--force`）。
@@ -278,10 +278,10 @@ python scripts/gen_materials.py <run_dir> --scene 实习
 ### render_images.py — 简历 JSON → PNG
 
 ```bash
-python scripts/render_images.py <run_dir>
-python scripts/render_images.py <run_dir> --mode paginated --scale 2
-python scripts/render_images.py <run_dir> --only 1,3
-python scripts/render_images.py <run_dir> --headless
+python scripts/deliver/render_images.py <run_dir>
+python scripts/deliver/render_images.py <run_dir> --mode paginated --scale 2
+python scripts/deliver/render_images.py <run_dir> --only 1,3
+python scripts/deliver/render_images.py <run_dir> --headless
 ```
 
 通过内置的 ShowCV 编辑器渲染，所有简历共用一个浏览器和一份 localStorage，**因此必须串行，没有 `--workers`**。
@@ -320,12 +320,12 @@ assets/2026-08-15_10-00-00/
 
 `materials/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名，也别删改 `qualified_jobs.json` 的行或顺序**。要少投几个用 `--only`，那是为此存在的参数。
 
-`.md` 简历和 `优化建议.md` 已并入 `materials/resume_*.json`，不再向岗位目录派生 —— 要看那份优化后简历就用 `read_thin.py` 读 JSON，避免同一份内容在多地漂移。清理一轮跑完的 `intermediate/` 用 `python scripts/clean_run.py <run_dir>`（`--yes` 真删，`--keep run_timings.jsonl` 保留个别文件）。
+`.md` 简历和 `优化建议.md` 已并入 `materials/resume_*.json`，不再向岗位目录派生 —— 要看那份优化后简历就用 `read_thin.py` 读 JSON，避免同一份内容在多地漂移。清理一轮跑完的 `intermediate/` 用 `python scripts/utils/clean_run.py <run_dir>`（`--yes` 真删，`--keep run_timings.jsonl` 保留个别文件）。
 
 查看状态与花费：
 
 ```bash
-python scripts/where_am_i.py                       # 这一轮跑到哪了、缺什么
+python scripts/utils/where_am_i.py                       # 这一轮跑到哪了、缺什么
 python scripts/stage_timer.py report <run_dir>     # 各阶段耗时
 python scripts/check_artifacts.py <run_dir>        # 材料齐不齐（缺谁的哪一项）
 ```
@@ -358,7 +358,7 @@ if [ $code -eq 3 ]; then echo "部分产物缺失，检查后重跑"; fi
 |---|---|
 | `❌ 没有配置 api_key` | 见第 2 节；`llm_check.py --no-call` 看当前生效的是哪一层 |
 | 提示要扫码登录，之后什么都没爬到 | 爬虫未登录时会正常退出（退出码 0），流水线靠 `crawl_summary.json` 判定这一轮到底爬没爬。先跑 `--ensure-login`（见第 4 节），它会等你扫完码复检并印出续跑命令 |
-| `can't open file 'boss_post_interactive.py'` | 脚本在 `scripts/` 下，从仓库根目录要写 `python scripts/boss_post_interactive.py …`。提示里的路径现在按当前目录算，照着粘就行 |
+| `can't open file 'boss_post_interactive.py'` | 脚本在 `scripts/` 下，从仓库根目录要写 `python scripts/stages/boss_post_interactive.py …`。提示里的路径现在按当前目录算，照着粘就行 |
 | 扫完码了，下次爬取还是说未登录 | 会话是浏览器**正常关闭**时写盘的。让 `--ensure-login` 自己走完复检，别中途叉掉终端或杀进程 |
 | `❌ 没有推断出城市，也没有 --city` | 简历里没写期望城市，模型不会替你编 —— **不给城市不等于全国搜**，全国得显式写 `--city 全国`（或 `不限`）。报错时会把完整命令和常见参数都印出来。注意只补 `--city` 会再调一次模型，想完全跳过推断得连 `--keywords` 一起给，但那样学历/经验/工作类型也要自己填 |
 | `❌ 岗位池只有 N 行，低于最低岗位数` | 池子太小不值得往下烧 token。放宽筛选重爬，或 `--from match --min-jobs 0` 强行继续 |

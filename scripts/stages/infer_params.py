@@ -10,13 +10,13 @@
 用 --scale 显式给。
 
 用法：
-    python scripts/infer_params.py <run_dir>                    # 推断并写 crawl_params.json
-    python scripts/infer_params.py <run_dir> --save             # 同时存进 assets/preferences.json
-    python scripts/infer_params.py --profile path/to/profile.json
-    python scripts/infer_params.py <run_dir> --city 杭州 --keywords "Python,后端开发"
-    python scripts/infer_params.py <run_dir> --scale 100-499人 --min-count 15
-    python scripts/infer_params.py <run_dir> --dry-run          # 只打印提示词
-    python scripts/infer_params.py <run_dir> --today 2027-03-01 # 换个「今天」再推一次
+    python scripts/stages/infer_params.py <run_dir>                    # 推断并写 crawl_params.json
+    python scripts/stages/infer_params.py <run_dir> --save             # 同时存进 assets/preferences.json
+    python scripts/stages/infer_params.py --profile path/to/profile.json
+    python scripts/stages/infer_params.py <run_dir> --city 杭州 --keywords "Python,后端开发"
+    python scripts/stages/infer_params.py <run_dir> --scale 100-499人 --min-count 15
+    python scripts/stages/infer_params.py <run_dir> --dry-run          # 只打印提示词
+    python scripts/stages/infer_params.py <run_dir> --today 2027-03-01 # 换个「今天」再推一次
 
 参数全部由命令行给出时不调模型（一次都不请求）。
 
@@ -33,6 +33,9 @@ import json
 import argparse
 import unicodedata
 from datetime import date
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 import preferences
 from boss_crawler.config import FILTER_LABELS
@@ -289,9 +292,9 @@ def print_missing_hint(field, run_dir, profile_path, args):
         cmd = ('python scripts/pipeline.py --run-dir "%s" --from infer --all %s'
                % (run_dir, example))
     elif run_dir:
-        cmd = 'python scripts/infer_params.py "%s" %s' % (run_dir, example)
+        cmd = 'python scripts/stages/infer_params.py "%s" %s' % (run_dir, example)
     else:
-        cmd = ('python scripts/infer_params.py --profile "%s" %s'
+        cmd = ('python scripts/stages/infer_params.py --profile "%s" %s'
                % (profile_path, example))
 
     print('  补上就能接着跑：\n    %s' % cmd)
@@ -317,14 +320,14 @@ def print_field_help(field):
         width = max(_cjk_width(flag) for flag, _ in rows)
         for flag, note in rows:
             print('    %s  %s' % (_cjk_pad(flag, width), note))
-        print('    全部城市名：python scripts/boss_post_interactive.py --list-cities')
+        print('    全部城市名：python scripts/stages/boss_post_interactive.py --list-cities')
     else:
         print('  关键词怎么填：')
         print('    --keywords "AI应用开发,全栈开发"   逗号分隔，一个词一个方向')
         print('    热门城市最多 %d 个、其余城市 %d 个，超了会截断 —— '
               '小城市里多给关键词大多只换来重复岗位'
               % (HOT_CITY_KEYWORDS, SMALL_CITY_KEYWORDS))
-        print('    岗位名参考：python scripts/boss_post_interactive.py --list-positions')
+        print('    岗位名参考：python scripts/stages/boss_post_interactive.py --list-positions')
 
 
 def _cjk_width(text):
@@ -416,7 +419,7 @@ def main():
         return 1
     if not os.path.exists(profile_path):
         print('❌ 找不到 %s' % profile_path)
-        print('  先跑：python scripts/parse_resume.py <简历文件>%s'
+        print('  先跑：python scripts/stages/parse_resume.py <简历文件>%s'
               % (' --output-dir "%s"' % run_dir if run_dir else ''))
         return 1
 
@@ -521,14 +524,14 @@ def main():
     print('  %s%s' % (command, ' --run-dir "%s"' % run_dir if run_dir else ''))
     if params.get('match_mode') == 'deep':
         print('\n爬完之后（deep 模式）：')
-        print('  python scripts/run_matcher.py --mode deep --profile "%s" --top %d --output-dir "%s"'
+        print('  python scripts/stages/run_matcher.py --mode deep --profile "%s" --top %d --output-dir "%s"'
               % (profile_path, params.get('top_n', 15), run_dir or '<run_dir>'))
-        print('  python scripts/deep_analyze.py "%s"' % (run_dir or '<run_dir>'))
-        print('  python scripts/run_matcher.py --mode deep --merge --output-dir "%s"'
+        print('  python scripts/stages/deep_analyze.py "%s"' % (run_dir or '<run_dir>'))
+        print('  python scripts/stages/run_matcher.py --mode deep --merge --output-dir "%s"'
               % (run_dir or '<run_dir>'))
     else:
         print('\n爬完之后：')
-        print('  python scripts/run_matcher.py --mode quick --profile "%s" --output-dir "%s"'
+        print('  python scripts/stages/run_matcher.py --mode quick --profile "%s" --output-dir "%s"'
               % (profile_path, run_dir or '<run_dir>'))
 
     if run_dir and not manual_core:

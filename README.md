@@ -63,7 +63,7 @@ pip install -r ~/.claude/skills/boss-crawler/requirements.txt
 # 3. 配模型（必需，两条路径都要）
 cd ~/.claude/skills/boss-crawler
 cp assets/llm_config.example.json assets/llm_config.json   # 填 base_url / api_key / model
-python scripts/llm_check.py                                # 验一下通不通（api_key 打码显示）
+python scripts/utils/llm_check.py                                # 验一下通不通（api_key 打码显示）
 ```
 
 > **第 3 步不能省。** 简历解析、深度匹配、招呼语、简历优化都要调模型；没配好模型，流程第一步就会停下。三层配置优先级：命令行参数 > 环境变量（`LLM_*`，其次 `OPENAI_*`）> `assets/llm_config.json`。`llm_check.py --no-call` 只查配置、不发请求，不花钱。
@@ -261,9 +261,9 @@ python scripts/pipeline.py 简历.pdf --all --dry-run
 python scripts/pipeline.py 简历.pdf --all --city "杭州,上海" --keywords "Python,后端开发" --count 30
 
 # 3. 投递是单独一步，而且必须显式 --yes（不加就只演练、打印计划和可选公司）
-python scripts/apply.py "assets/<时间戳>"                          # 演练，顺便看有哪些公司可选
-python scripts/apply.py "assets/<时间戳>" --yes --max 5
-python scripts/apply.py "assets/<时间戳>" --yes --company 百度,棱镜数聚   # 只投指定公司
+python scripts/deliver/apply.py "assets/<时间戳>"                          # 演练，顺便看有哪些公司可选
+python scripts/deliver/apply.py "assets/<时间戳>" --yes --max 5
+python scripts/deliver/apply.py "assets/<时间戳>" --yes --company 百度,棱镜数聚   # 只投指定公司
 ```
 
 > ⚠️ **投递不在流水线上。** `pipeline.py --all` 跑完停在「材料已生成」，只把投递命令打印出来 —— 投递是整条链上唯一不可撤销的一步（消息一发对方立刻收到），不该由「我跑一下全流程」顺手完成。
@@ -274,7 +274,7 @@ python scripts/apply.py "assets/<时间戳>" --yes --company 百度,棱镜数聚
 python scripts/pipeline.py --from crawl                 # 只重跑爬取（自动定位 assets/LATEST.txt）
 python scripts/pipeline.py --from crawl --all           # 从爬取起一路跑到底
 python scripts/pipeline.py --run-dir "assets/<时间戳>" --from materials
-python scripts/where_am_i.py                            # 这一轮跑到哪了、缺什么
+python scripts/utils/where_am_i.py                            # 这一轮跑到哪了、缺什么
 ```
 
 退出码是可以脚本化的：`0` 成功、`1` 前置条件不满足或整体失败、`2` 参数用错、`3` **部分成功**（产物写了但不齐，比如 20 个岗位里有 2 个模型调用失败）。
@@ -282,10 +282,10 @@ python scripts/where_am_i.py                            # 这一轮跑到哪了�
 单独跑某一阶段（所有脚本都有 `--help`）：
 
 ```bash
-python scripts/parse_resume.py 简历.pdf                  # → profile.json
-python scripts/run_matcher.py --mode quick --profile assets/<ts>/profile.json -o assets/<ts>
-python scripts/deep_analyze.py assets/<ts> --limit 3     # 先拿 3 个试水，看看质量和花费
-python scripts/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默认跳过已有产物）
+python scripts/stages/parse_resume.py 简历.pdf                  # → profile.json
+python scripts/stages/run_matcher.py --mode quick --profile assets/<ts>/profile.json -o assets/<ts>
+python scripts/stages/deep_analyze.py assets/<ts> --limit 3     # 先拿 3 个试水，看看质量和花费
+python scripts/stages/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默认跳过已有产物）
 ```
 
 两条路径**产物格式完全一致**，可以混着用：Skill 跑到一半接着用命令行续跑同一个运行目录，反过来也行。区别只在**谁来问你**——Skill 路径在投递范围和发送前各有一道确认闸门，命令行路径把这两道换成了显式的 `--only` 和 `--yes`。
@@ -327,7 +327,7 @@ python scripts/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默
 | **阶段耗时**          | `intermediate/run_timings.jsonl`                             | 各阶段耗时埋点，便于优化                                 |
 | **模型花费**          | `intermediate/llm_usage.jsonl`                               | 每次模型调用的 token 与重试次数                          |
 
-> **对你最有用的**是 `deliver/{公司}-{职位}/` 下的两件套：定制简历图片 + 投递.md——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。`intermediate/` 里的深度分析、日志、ShowCV 暂存都是跑完即无用的，用 `python scripts/clean_run.py <run_dir>` 整体清掉。
+> **对你最有用的**是 `deliver/{公司}-{职位}/` 下的两件套：定制简历图片 + 投递.md——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。`intermediate/` 里的深度分析、日志、ShowCV 暂存都是跑完即无用的，用 `python scripts/utils/clean_run.py <run_dir>` 整体清掉。
 
 ---
 
@@ -366,7 +366,7 @@ SKILL.md（逐阶段问你确认）               scripts/pipeline.py（参数�
                     ▼
     apply.py --yes ／ resume_matcher/auto_apply.py   浏览器自动投递
 
-app/ 内置 ShowCV 编辑器 ──→ 简历长图渲染（render_images.py）／ assets/<ts>/intermediate/exports/
+app/ 内置 ShowCV 编辑器 ──→ 简历长图渲染（deliver/render_images.py）／ assets/<ts>/intermediate/exports/
 ```
 
 ```
@@ -416,35 +416,44 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │   ├── resume-editor.md              # 内置简历编辑器
 │   └── scripts.md                    # 包/函数参考
 │
-└── scripts/                          # 🐍 可执行脚本（自包含）
-    ├── boss_post_interactive.py      # 爬虫 CLI 入口
-    ├── run_matcher.py                # 匹配系统 CLI 入口
+└── scripts/                          # 🐍 可执行脚本（按阶段/模块分目录）
+    ├── pipeline.py                   # 🔑 一条命令串完 9 个阶段（不含投递）
     │
-    │   ── 命令行路径（每个阶段都能单独跑，详见 references/cli.md）──
-    ├── pipeline.py                   # 一条命令串完 9 个阶段（不含投递）
-    ├── parse_resume.py               # 简历 → profile.json
-    ├── infer_params.py               # profile → crawl_params.json
-    ├── deep_analyze.py               # 逐岗位调模型 → deep_results.json
-    ├── gen_materials.py              # 招呼语 + 优化简历 → materials/
-    ├── verify_no_fabrication.py      # 查材料里有没有简历原文没有的技术词（查到就拦住 render）
-    ├── render_images.py              # 简历 JSON → 简历长图（串行，共用一个浏览器）
-    ├── apply.py                      # 投递（必须显式 --yes，不加只演练）
-    ├── llm_check.py                  # 体检模型配置（打印生效值 + 试发一次）
-    ├── llm/                          # OpenAI 兼容客户端（config 三层优先级 + 重试 + 并发）
+    │   ── 流水线各阶段入口（每个阶段都能单独跑，详见 references/cli.md）──
+    ├── stages/
+    │   ├── parse_resume.py           # 简历 → profile.json
+    │   ├── infer_params.py           # profile → crawl_params.json
+    │   ├── boss_post_interactive.py  # 爬虫 CLI 入口
+    │   ├── run_matcher.py            # 匹配系统 CLI 入口
+    │   ├── deep_analyze.py           # 逐岗位调模型 → deep_results.json
+    │   ├── gen_materials.py          # 招呼语 + 优化简历 → materials/
+    │   └── validate_profile.py       # Profile 交叉校验
     │
-    │   ── 辅助 ──
+    ├── deliver/                      # 投递
+    │   ├── write_application_md.py   # 组装 deliver/ 下的投递.md
+    │   ├── render_images.py          # 简历 JSON → 简历长图（串行，共用一个浏览器）
+    │   └── apply.py                  # 投递（必须显式 --yes，不加只演练）
+    │
+    ├── verify/                       # 校验（图/内容质量门）
+    │   ├── verify_no_fabrication.py  # 查材料里有没有简历原文没有的技术词（查到就拦住 render）
+    │   └── verify_image.py           # 简历图体检（空白图发出去比不发更糟）
+    │
+    ├── utils/                        # 工具
+    │   ├── llm_check.py              # 体检模型配置（打印生效值 + 试发一次）
+    │   ├── clean_run.py              # 清掉 intermediate/（无用桶），保留 state/materials/deliver
+    │   ├── where_am_i.py             # 从产物反推当前阶段，提示下一步命令
+    │   └── read_thin.py              # 瘦读数据文件（避免撑爆上下文）
+    │
+    │   ── 共享助手（被上述子目录跨用，留在根）──
     ├── check_artifacts.py            # 材料齐不齐（缺谁的哪一项）
-    ├── clean_run.py                  # 清掉 intermediate/（无用桶），保留 state/materials/deliver
-    ├── verify_image.py               # 简历图体检（空白图发出去比不发更糟）
-    ├── write_application_md.py       # 组装 deliver/ 下的投递.md
-    ├── read_thin.py                  # 瘦读数据文件（避免撑爆上下文）
-    ├── where_am_i.py                 # 从产物反推当前阶段，提示下一步命令
+    ├── match_index.py                # 匹配索引（材料/瘦读共用）
+    ├── preferences.py                # 爬取参数预设
     ├── stage_timer.py                # 阶段计时埋点
-    ├── validate_profile.py           # Profile 交叉校验
-    ├── test_*.py                     # 离线测试（不发真实请求、不碰浏览器）
     │
     ├── boss_crawler/                 # 爬虫引擎包
+    ├── llm/                          # OpenAI 兼容客户端（config 三层优先级 + 重试 + 并发）
     ├── resume_matcher/               # 匹配引擎包（评分/解析/报告/投递/深度分析）
+    ├── showcv/                       # 简历长图渲染（ShowCV 编辑器）
     └── prompts/                      # LLM 提示词模板 (.st)，两条路径共用
         ├── resume_parse.st           #   简历 → 结构化字段
         ├── match_analysis.st         #   岗位深度匹配打分

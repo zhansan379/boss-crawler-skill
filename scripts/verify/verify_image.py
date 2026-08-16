@@ -21,9 +21,9 @@
   - 与同目录 .md 源文件的内容量是否对得上（顺带确认不是别人的简历）
 
 用法：
-    python scripts/verify_image.py <图片路径>
-    python scripts/verify_image.py <图片路径> --md <源 markdown>   # 默认自动找同名 .md
-    python scripts/verify_image.py <run_dir>/applications --all    # 批量查一整轮
+    python scripts/verify/verify_image.py <图片路径>
+    python scripts/verify/verify_image.py <图片路径> --md <源 markdown>   # 默认自动找同名 .md
+    python scripts/verify/verify_image.py <run_dir>/applications --all    # 批量查一整轮
 
 退出码：0 = 看起来正常，1 = 有可疑项（逐条打印原因）。
 """

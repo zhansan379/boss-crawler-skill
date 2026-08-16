@@ -17,12 +17,12 @@
   问题，不该挡住用户明确要投的动作。
 
 用法：
-    python scripts/apply.py <run_dir>                  # 演练：先列出可选公司，再打印计划
-    python scripts/apply.py <run_dir> --yes            # 真投
-    python scripts/apply.py <run_dir> --yes --only 1,3 # 按序号只投这两个
-    python scripts/apply.py <run_dir> --yes --company 百度,棱镜数聚   # 按公司名只投这两家
-    python scripts/apply.py <run_dir> --yes --no-image # 不带附件
-    python scripts/apply.py <run_dir> --yes --image my.png   # 整批共用一张图
+    python scripts/deliver/apply.py <run_dir>                  # 演练：先列出可选公司，再打印计划
+    python scripts/deliver/apply.py <run_dir> --yes            # 真投
+    python scripts/deliver/apply.py <run_dir> --yes --only 1,3 # 按序号只投这两个
+    python scripts/deliver/apply.py <run_dir> --yes --company 百度,棱镜数聚   # 按公司名只投这两家
+    python scripts/deliver/apply.py <run_dir> --yes --no-image # 不带附件
+    python scripts/deliver/apply.py <run_dir> --yes --image my.png   # 整批共用一张图
 
 退出码：0 = 演练完成或全部投出，1 = 前置检查不通过（什么都没投），
 3 = 投了但有失败/仅部分成功的岗位。
@@ -36,6 +36,9 @@ import argparse
 import subprocess
 import unicodedata
 from types import SimpleNamespace
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 from write_application_md import sanitize, load_jobs, resolve_greeting, resolve_csv_row, merge
 from render_images import parse_only, resolve_name, job_dir_name
@@ -59,7 +62,7 @@ try:
 except ImportError:                                  # pragma: no cover
     has_wasted_preview = None
 
-_SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SKILL_ROOT = os.path.dirname(_SCRIPTS)
 
 # verify_image.py 缺 Pillow 时是 `sys.exit('需要 Pillow：…')`，退出码同样是 1。
 # 不区分的话，「没装 Pillow」会被报成「每张图都有问题」，然后拦下一次本该正常的投递。
@@ -457,7 +460,7 @@ def main():
             elif not ok:
                 print('❌ 下面这些图看着不对（空白 / 内容过少 / 底部大片留白）：')
                 print(detail)
-                print('\n  重新渲染：python scripts/render_images.py "%s"' % run_dir)
+                print('\n  重新渲染：python scripts/deliver/render_images.py "%s"' % run_dir)
                 print('  确认没问题就加 --skip-verify。')
                 return 1
             else:
@@ -469,7 +472,7 @@ def main():
         print('\n%s' % ('=' * 60))
         print('  这是演练，**没有投递任何岗位**，也没有打开浏览器。')
         print('  确认无误后加 --yes 真投：')
-        cmd = 'python scripts/apply.py "%s" --yes' % run_dir
+        cmd = 'python scripts/deliver/apply.py "%s" --yes' % run_dir
         if args.only:
             cmd += ' --only %s' % args.only
         if args.company:

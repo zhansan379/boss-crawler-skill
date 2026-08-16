@@ -313,7 +313,7 @@ def _missing_key_message() -> str:
         '       用 Claude Code 的协议时认 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL /\n'
         '       ANTHROPIC_MODEL，base_url 指向 api.anthropic.com 会自动识别协议\n'
         '  3) 命令行：--api-key sk-... --base-url https://... --model xxx --protocol openai\n'
-        '配好后用 `python scripts/llm_check.py` 验证连通。'
+        '配好后用 `python scripts/utils/llm_check.py` 验证连通。'
         % (os.path.relpath(EXAMPLE_PATH, _SKILL_ROOT),
            os.path.relpath(CONFIG_PATH, _SKILL_ROOT))
     )

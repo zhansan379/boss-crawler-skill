@@ -19,11 +19,11 @@
    直接报错要 --name，绝不用占位符。
 
 用法：
-    python scripts/render_images.py <run_dir>
-    python scripts/render_images.py <run_dir> --only 1,3,5-7
-    python scripts/render_images.py <run_dir> --dry-run          # 只暂存 md 并打印命令
-    python scripts/render_images.py <run_dir> --url http://127.0.0.1:3090
-    python scripts/render_images.py <run_dir> --keep-temp        # 不删 ShowCV 里的临时简历
+    python scripts/deliver/render_images.py <run_dir>
+    python scripts/deliver/render_images.py <run_dir> --only 1,3,5-7
+    python scripts/deliver/render_images.py <run_dir> --dry-run          # 只暂存 md 并打印命令
+    python scripts/deliver/render_images.py <run_dir> --url http://127.0.0.1:3090
+    python scripts/deliver/render_images.py <run_dir> --keep-temp        # 不删 ShowCV 里的临时简历
 
 退出码：0 = 全部岗位拿到图，1 = 前置条件不满足（没简历产物/没姓名/端口归属不对），
 3 = 跑完了但有岗位缺图。
@@ -41,13 +41,16 @@ import zipfile
 import argparse
 import subprocess
 
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
+
 import stage_timer
 from write_application_md import sanitize, load_jobs, resolve_csv_row, merge
 from resume_matcher import (materials_dir, resume_pattern, deliver_dir,
                             profile_path as _profile_path,
                             showcv_staging_dir, showcv_exports_dir)
 
-_SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SKILL_ROOT = os.path.dirname(_SCRIPTS)
 _SHOWCV_DIR = os.path.join(_SKILL_ROOT, 'scripts', 'showcv')
 
 SHOWCV_DEBUG_PORT = 9333          # 与 showcv/_browser.py 的 DEBUG_PORT 一致
@@ -466,7 +469,7 @@ def main():
         print('  ⚠ #%d 跳过：%s' % (index, reason))
     if not items:
         print('\n❌ 没有一个岗位有可用的简历产物，无事可做。')
-        print('  先跑：python scripts/gen_materials.py "%s"' % run_dir)
+        print('  先跑：python scripts/stages/gen_materials.py "%s"' % run_dir)
         return 1
     print('\n已暂存 %d 份 markdown → %s'
           % (len(items), showcv_staging_dir(run_dir)))

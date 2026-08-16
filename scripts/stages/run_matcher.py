@@ -32,6 +32,9 @@ import json
 import os
 import sys
 
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
+
 import stage_timer
 from resume_matcher import (
     ResumeProfile,
@@ -57,7 +60,7 @@ def load_profile(profile_path: str) -> ResumeProfile:
     """从 JSON 文件加载简历 profile"""
     if not os.path.exists(profile_path):
         print(f"错误: profile 文件不存在: {profile_path}")
-        print("请先解析简历: python scripts/parse_resume.py <简历文件>")
+        print("请先解析简历: python scripts/stages/parse_resume.py <简历文件>")
         sys.exit(1)
 
     with open(profile_path, 'r', encoding='utf-8') as f:
@@ -195,8 +198,8 @@ def run_deep_prepare(profile: ResumeProfile, output_dir: str, top_n: int) -> Non
     print("  ⏳ 阶段 2: 深度分析（调 LLM）")
     print(f"{'=' * 60}")
     print(f"\n候选文件: {candidate_path}")
-    print(f"\n  python scripts/deep_analyze.py {output_dir}")
-    print(f"  python scripts/run_matcher.py --mode deep --merge --run-id {os.path.basename(output_dir)}")
+    print(f"\n  python scripts/stages/deep_analyze.py {output_dir}")
+    print(f"  python scripts/stages/run_matcher.py --mode deep --merge --run-id {os.path.basename(output_dir)}")
     print(f"\n或一条命令跑完这两步: python scripts/pipeline.py --run-dir {output_dir} --from deep")
 
 
@@ -218,7 +221,7 @@ def run_deep_merge(output_dir: str) -> None:
 
     if not os.path.exists(results_file):
         print(f"错误: 深度分析结果文件不存在 {results_file}")
-        print(f"  先跑深度分析: python scripts/deep_analyze.py {output_dir}")
+        print(f"  先跑深度分析: python scripts/stages/deep_analyze.py {output_dir}")
         sys.exit(1)
 
     classification = merge_deep_results(

@@ -27,6 +27,7 @@ import time
 
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'utils'))
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK
     _stream.reconfigure(encoding='utf-8', errors='replace')
@@ -330,7 +331,7 @@ def test_robustness(tmp):
 def run_cli(*args):
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     proc = subprocess.run(
-        [sys.executable, os.path.join(HERE, 'where_am_i.py')] + list(args),
+        [sys.executable, os.path.join(HERE, 'utils', 'where_am_i.py')] + list(args),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=HERE,
     )
     return proc.returncode, proc.stdout.decode('utf-8', 'replace')

@@ -9,7 +9,11 @@ BOSS直聘交互式岗位爬虫
 
 此文件为薄入口，实际逻辑已拆分至 boss_crawler/ 包。
 """
+import os
 import sys
+
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 from boss_crawler import main
 

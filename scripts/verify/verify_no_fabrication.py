@@ -32,10 +32,10 @@
   3  部分：查过的都干净，但有岗位没有材料可查
 
 用法:
-  python scripts/verify_no_fabrication.py <run_dir>
-  python scripts/verify_no_fabrication.py <run_dir> --only 1,3,5-7
-  python scripts/verify_no_fabrication.py <run_dir> --allow PyTorch,nginx
-  python scripts/verify_no_fabrication.py <run_dir> --resume-text path/to/base.txt
+  python scripts/verify/verify_no_fabrication.py <run_dir>
+  python scripts/verify/verify_no_fabrication.py <run_dir> --only 1,3,5-7
+  python scripts/verify/verify_no_fabrication.py <run_dir> --allow PyTorch,nginx
+  python scripts/verify/verify_no_fabrication.py <run_dir> --resume-text path/to/base.txt
 """
 
 import argparse
@@ -45,9 +45,8 @@ import os
 import re
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
 
 import check_artifacts
 from check_artifacts import parse_only          # 与 materials/核对侧共用同一份严格解析
@@ -447,7 +446,7 @@ def main(argv=None):
     print('\n下一步（二者选一，别直接跑 render）：')
     print('  有据可依 → 放行后重跑本条：--allow %s%s'
           % (','.join(shown), ('   （另有 %d 个词未列出）' % extra) if extra > 0 else ''))
-    print('  确属编造 → 重生成这几个岗位：python scripts/gen_materials.py "%s" --only %s --force'
+    print('  确属编造 → 重生成这几个岗位：python scripts/stages/gen_materials.py "%s" --only %s --force'
           % (args.run_dir, ','.join(str(i) for i in indices)))
     print('\n注意：本脚本只查「原文没有的技术词」。夸大、把「了解」写成「精通」、'
           '语气不当都查不出来 —— 发送前仍要逐条过一遍。')

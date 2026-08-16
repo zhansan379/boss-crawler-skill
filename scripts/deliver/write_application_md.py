@@ -15,10 +15,10 @@
    （crawler.py:368-399），那里的值全量且未截断。
 
 用法：
-    python scripts/write_application_md.py <run_dir> --all
-    python scripts/write_application_md.py <run_dir> --index 1
-    python scripts/write_application_md.py <run_dir> --index 1 --greeting-file P
-    python scripts/write_application_md.py <run_dir> --index 1 --greeting "文本"
+    python scripts/deliver/write_application_md.py <run_dir> --all
+    python scripts/deliver/write_application_md.py <run_dir> --index 1
+    python scripts/deliver/write_application_md.py <run_dir> --index 1 --greeting-file P
+    python scripts/deliver/write_application_md.py <run_dir> --index 1 --greeting "文本"
 
 退出码：0 = 全部写出且字段完整，1 = 有岗位的原始 CSV 行没找到（字段可能不全，
 详情见 stdout 的警告）。
@@ -33,12 +33,15 @@ import re
 import sys
 import time
 
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _SCRIPTS)
+
 from resume_matcher import qualified_jobs_path, greeting_pattern, deliver_dir
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
 
-_SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SKILL_ROOT = os.path.dirname(_SCRIPTS)
 POST_DATA_DIR = os.path.join(_SKILL_ROOT, 'assets', 'post_data')
 
 # 爬取字段的分组与展示顺序。必须覆盖 boss_crawler/config.py 的 CSV_FIELDS 全部字段，

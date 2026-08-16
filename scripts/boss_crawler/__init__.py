@@ -120,7 +120,7 @@ from .menu import list_all_positions, list_all_cities
 
 # ── 计时埋点
 # 埋点绝不能因为自己失败而带崩爬取，所以导入和调用两层都兜住。
-# scripts/ 通常已在 sys.path（入口是 scripts/boss_post_interactive.py），
+# scripts/ 通常已在 sys.path（入口是 scripts/stages/boss_post_interactive.py），
 # 换个 cwd 或被别处 import 时兜底补一次路径。
 try:
     import stage_timer
