@@ -111,7 +111,7 @@ description instead — it is available from the table above.
 | 招呼语 `自定义` | write the text to `{run_dir}/generated/greeting_{i}_custom.txt` for each selected `i`. `gen_materials.py` skips any job that already has a non-empty `greeting_{i}_` artifact, so the AI mode leaves it alone — no separate flag needed |
 | 招呼语 `默认` | `--greeting-mode default` — `generate_greeting()` template, no LLM request |
 | 招呼语 `AI生成` | `--greeting-mode ai` (the default) |
-| 图片 `自定义上传` | validate the path, `--resume-mode skip` so no resume is generated, then `apply.py --image <path>` at send time |
+| 图片 `自定义上传` | validate the path, `--resume-mode skip`, then `apply.py --image <path>` at send time. `skip` also suppresses `render` (`pipeline.py` emits no render command when the resume is skipped), which is what you want — the generated PNG would never be sent, so generating it would only burn LLM tokens and render time |
 | 图片 `AI调整` | default — `materials` writes `resume_{i}_*.json`, `render` turns it into the PNG |
 | 图片 `不发送` | `pipeline.py --no-images` (render is skipped entirely) and `apply.py --no-image` |
 
@@ -375,16 +375,17 @@ missed field is just an absent line, not an error. The 2026-08-13 run produced 1
 商圈/领域/性质/规模/技能标签/福利标签/位置/公司信息/JD/HR×3, and the field set differed per job.
 
 **Why it re-reads the crawl CSV instead of using `qualified_jobs.json`.** `build_job_view()`
-(`scoring.py:725`) is the only field mapper, and it **drops `区域` `商圈` `领域` `性质` `位置`
+(in `resume_matcher/scoring.py`) is the only field mapper, and it **drops `区域` `商圈` `领域` `性质` `位置`
 `地址` `已失效` `代招` `HR姓名` `HR公司` entirely** while truncating `公司信息` to 500 and `岗位要求和职责` to 1000 (300/500 on the HTML
 path). `领域` (industry) and `性质` (financing stage) are core company facts. So the script resolves
-each job's original CSV row by `link` — details are written back into that same CSV
-(`crawler.py:368-399`), so its values are complete and untruncated. It falls back to
+each job's original CSV row by `link` — detail-page fields are written back into that same CSV by the
+crawler's detail pass, so its values are complete and untruncated. It falls back to
 `job['source_file']`, then to a recursive scan of `assets/post_data/`, and if no row matches it
 **warns and exits 1** rather than quietly emitting a thin file.
 
 Empty cells render as `未采集`, never as blank or `否` — `HR在线` empty means *not collected*, not
-offline (`crawler.py:274`), and the same trap already produced a report where collected activity
+offline (the field only exists when `-d` fetched `zpData.bossInfo`), and the same trap already
+produced a report where collected activity
 displayed as 「未采集」 on every card. `已失效` and `代招` share that tri-state via `_tri_state()`.
 Match-analysis fields use `未裁定` instead.
 

@@ -3,7 +3,7 @@
 """从 run_dir 的磁盘产物反推「现在跑到第几阶段、下一条命令是什么」。
 
 为什么需要它：上下文被压缩后，流程状态是最先丢的东西之一，而重建它的默认做法
-是重读 SKILL.md / docs/cli.md ——那是几万字符。本脚本用约 1k 字符回答同一个问题。
+是重读 SKILL.md / references/cli.md ——那是几万字符。本脚本用约 1k 字符回答同一个问题。
 它**不依赖任何状态文件**，纯粹从产物反推，所以不会因为忘记更新状态而说谎。
 
 阶段名与 `pipeline.py` 的八阶段完全一致（parse / infer / crawl / match / deep /
@@ -253,7 +253,7 @@ def main():
     for cmd in commands:
         print('  $ %s' % cmd)
 
-    print('\n阶段细节看 docs/cli.md 的对应小节——只读那一节，别整篇读。')
+    print('\n阶段细节看 references/cli.md 的对应小节——只读那一节，别整篇读。')
     return 0
 
 

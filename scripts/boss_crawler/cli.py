@@ -12,7 +12,7 @@ from .utils import entry_cmd
 def parse_args():
     """解析命令行参数"""
     # 示例里的路径按 cwd 算（entry_cmd），不写死。从仓库根目录跑 --help 时，写死的
-    # `python boss_post_interactive.py …` 这七行没有一行粘得动 —— 而 docs/cli.md 恰恰
+    # `python boss_post_interactive.py …` 这七行没有一行粘得动 —— 而 references/cli.md 恰恰
     # 是教人从根目录跑的。
     entry = entry_cmd()
     parser = argparse.ArgumentParser(

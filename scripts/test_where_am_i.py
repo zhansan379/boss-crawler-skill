@@ -271,7 +271,7 @@ def test_cli(tmp, deep_run):
     check('印了 run_dir', 'run_dir:' in out, out[:200])
     check('印了已完成清单', '已完成' in out, out[:200])
     check('印了下一步', '下一步' in out, out[:400])
-    check('收尾指向 docs/cli.md', 'docs/cli.md' in out, out[-200:])
+    check('收尾指向 references/cli.md', 'references/cli.md' in out, out[-200:])
 
     code, out = run_cli(os.path.join(tmp, '不存在的目录'))
     check('不存在的目录退出码仍是 0', code == 0, out[-300:])

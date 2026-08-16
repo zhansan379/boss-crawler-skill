@@ -17,7 +17,7 @@ parse → infer → crawl → match → deep → merge → materials → render 
 ```
 
 `scripts/pipeline.py` is the driver. The full flag table, per-stage scripts, exit-code conventions
-and troubleshooting live in **[docs/cli.md](docs/cli.md)** — read the one section you need, not the
+and troubleshooting live in **[references/cli.md](references/cli.md)** — read the one section you need, not the
 file. All scripts live under `scripts/` relative to this skill directory.
 
 **Drive one stage at a time.** `pipeline.py --from <stage>` runs exactly that stage (`match` also
@@ -351,7 +351,7 @@ Map the answers onto flags rather than post-editing files:
 | 招呼语 **自定义** | write the text to `{run_dir}/generated/greeting_{i}_custom.txt` for each chosen `i`, then run materials with `--greeting-mode skip`… or leave the mode at `ai`: an existing non-empty artifact is skipped, never overwritten |
 | 招呼语 **默认模板** | `--greeting-mode default` (rule template, no model call) |
 | 招呼语 **AI生成** | `--greeting-mode ai` (default) |
-| 图片 **自定义上传** | validate the path, then `apply.py --image <path>` at send time; `--resume-mode skip` if no optimized resume is wanted at all |
+| 图片 **自定义上传** | validate the path, `--resume-mode skip`, then `apply.py --image <path>` at send time. `skip` also suppresses `render` — the generated PNG would never be sent ([auto-apply.md](references/auto-apply.md)) |
 | 图片 **AI调整** | default: `materials` writes the resume JSON, `render` turns it into the long image |
 | 图片 **不发送** | `pipeline.py --no-images`, and `apply.py --no-image` at send time |
 
@@ -436,7 +436,7 @@ send-then-verify readback.
 
 See [references/scripts.md](references/scripts.md) for module tables and key functions of
 `boss_crawler/` and `resume_matcher/`, [references/resume-editor.md](references/resume-editor.md) for
-`showcv/`, and [docs/cli.md](docs/cli.md) for every command's flags and exit codes.
+`showcv/`, and [references/cli.md](references/cli.md) for every command's flags and exit codes.
 
 ## Key Principles
 

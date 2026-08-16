@@ -13,12 +13,15 @@ python scripts/boss_post_interactive.py --ensure-login
 ```
 
 - Opens Chrome to BOSS Zhipin homepage
-- Single XPath detection (no polling, no stdin interaction):
+- Single XPath detection, no polling. Whether it blocks on stdin depends on the caller: with a TTY it
+  waits for Enter and rechecks (up to 5 times, `q` aborts); when stdin is piped — the skill path — it
+  prints its verdict and exits without ever calling `input()`
+  ([cli.md §3](cli.md)). `test_ensure_login.py` locks that branch.
   - **Logged in**: `//a[@href='https://www.zhipin.com/web/geek/recommend']//img` exists → prints `[LOGIN_OK]`, closes browser
   - **Not logged in**: `//a[@class='btn btn-outline header-login-btn']` exists → prints `[LOGIN_NEEDED]`, keeps browser open, script exits
 - If not logged in: the user logs in manually and says 已登录 — then re-run `--ensure-login` to
   confirm rather than assuming it worked
-- Login state (cookies) persists to `./chrome_user_data/`
+- Login state (cookies) persists to `assets/chrome_user_data/` (skill-root-relative, not cwd)
 
 ### Phase 1b: Execute Crawl
 
@@ -31,7 +34,7 @@ Login confirmed → run crawl. Script reuses persistent Chrome profile, login st
 | `--ensure-login` | Phase 1a: detect login, persist session | Standalone command |
 | `-m, --mode` | Job search mode | `custom` (keyword, recommended), `list` (by category) |
 | `-p, --position` | Position / keywords | Comma-separated: `"Python,Java,数据分析"` |
-| `-c, --city` | Target city | City name or `all`: `"北京,上海,深圳"` |
+| `-c, --city` | Target city | Comma-separated names: `"北京,上海,深圳"`. `全国` / `不限` → the single nationwide code. `all` → **every one of the 374 cities**, crawled one by one — almost never what you want |
 | `-n, --count` | Max per city per keyword | `20` (omit for unlimited) |
 | `-d, --detail` | Crawl detail pages | Include for matching quality |
 | `--no-sleep` | Disable request delay | Not recommended (anti-crawl protection) |
@@ -57,8 +60,9 @@ python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 
 # Multi-position, multi-city
 python scripts/boss_post_interactive.py -m custom -p "Python,Java,数据分析" -c "北京,上海,深圳" -n 15 -y
 
-# Nationwide search
-python scripts/boss_post_interactive.py -m custom -p "AI工程师" -c "all" -n 10 -d -y
+# Nationwide search — one crawl against BOSS's 全国 code.
+# NOT `-c all`, which loops all 374 cities separately.
+python scripts/boss_post_interactive.py -m custom -p "AI工程师" -c "全国" -n 10 -d -y
 
 # With filters: 3-5yr experience, bachelor's, 20-50K salary
 python scripts/boss_post_interactive.py -m custom -p "Python后端" -c "北京" -n 20 -e "3-5年" -deg "本科" -s "20-50K" -d -y
@@ -131,7 +135,7 @@ and no preset field reaches it.
 
 - `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly. It is also the only source of the three HR-activity columns (`HR活跃度` / `HR在线` / `HR职位`): they come from `zpData.bossInfo` on the detail API, so a crawl without `-d` leaves them empty, the report shows 活跃度未采集, and `apply.py`'s send ordering falls back to pure `match_score`
 - HR activity is a **crawl-time snapshot**, never re-fetched. `HR在线` in particular is stale by the time you apply — treat `HR活跃度` as the durable signal. An empty value means "not collected", which is *not* the same as "offline"
-- The CSV header is migrated in place: opening an older 17-column file rewrites it to the current 20-column schema (missing cells filled with `''`) and prints a `[迁移]` line. Existing rows are preserved but keep empty HR columns — re-crawl to populate them
+- The CSV header is migrated in place: any header that differs from the current `CSV_FIELDS` is rewritten to it (missing cells filled with `''`) and prints a `[迁移]` line. The check is a whole-list comparison, not a column count, so it catches reordering too. Existing rows are preserved but keep empty HR columns — re-crawl to populate them. `CSV_FIELDS` in `boss_crawler/config.py` is the only place the schema is defined; don't restate its length here
 - Default request delay is on (anti-crawl); use `--no-sleep` only if you understand the risk
-- Persistent Chrome profile at `./chrome_user_data/` means login once, crawl many times
+- Persistent Chrome profile at `assets/chrome_user_data/` means login once, crawl many times
 - CSV output lands in `assets/post_data/` — `custom/{关键词}_{城市}.csv` for keyword mode, one directory per category for list mode. The pool is cumulative across runs, which is why a row count there is not this run's yield

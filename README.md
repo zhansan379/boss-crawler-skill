@@ -74,7 +74,7 @@ python scripts/llm_check.py                                # 验一下通不通�
 
 然后用 Claude Code 打开项目目录，输入 `/boss-crawler` 即可。
 
-**只想用命令行、不用 Claude Code？** 克隆到任意目录即可（不必放进 `~/.claude/skills/`），用法见 [docs/cli.md](./docs/cli.md)。
+**只想用命令行、不用 Claude Code？** 克隆到任意目录即可（不必放进 `~/.claude/skills/`），用法见 [references/cli.md](./references/cli.md)。
 
 
 ---
@@ -250,7 +250,7 @@ C:\Users\feng1\ \.claude\skills\boss-crawler\assets\2026-08-14_17-32-26\applicat
 
 **同一套脚本、同一个模型接口**，只是参数一次给全、不再逐步问你。适合定时任务、批量重跑，或者不想开 Claude Code 的时候。
 
-**完整用法见 [docs/cli.md](./docs/cli.md)** —— 下面是最短路径（模型配置见上面的安装第 3 步）：
+**完整用法见 [references/cli.md](./references/cli.md)** —— 下面是最短路径（模型配置见上面的安装第 3 步）：
 
 ```bash
 # 1. 先看要执行什么，不动任何东西
@@ -374,7 +374,6 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 ├── SKILL.md                          # 🔑 Skill 定义（编排完整流程）
 ├── README.md                         # 使用文档
 ├── requirements.txt                  # 依赖（分「必需」和「按需」两段）
-├── docs/cli.md                       # 📖 命令行路径完整用法
 │
 ├── assets/                           # 📦 运行输出（无需加载到上下文的最终产物）
 │   ├── llm_config.json               # 🔑 你的模型配置（api_key 在这里，不进 Git）
@@ -404,6 +403,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 ├── app/                              # 🌐 内置 ShowCV 简历编辑器（静态站点 + 字体）
 │
 ├── references/                       # 📚 参考文档（按需加载）
+│   ├── cli.md                        # 📖 命令行路径完整用法
 │   ├── crawl-commands.md             # 爬取命令与参数
 │   ├── resume-parsing.md             # 简历解析与交叉校验
 │   ├── matching.md                   # 双模式匹配与评分
@@ -415,7 +415,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── boss_post_interactive.py      # 爬虫 CLI 入口
     ├── run_matcher.py                # 匹配系统 CLI 入口
     │
-    │   ── 命令行路径（每个阶段都能单独跑，详见 docs/cli.md）──
+    │   ── 命令行路径（每个阶段都能单独跑，详见 references/cli.md）──
     ├── pipeline.py                   # 一条命令串完 8 个阶段（不含投递）
     ├── parse_resume.py               # 简历 → profile.json
     ├── infer_params.py               # profile → crawl_params.json
