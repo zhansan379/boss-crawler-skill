@@ -36,7 +36,7 @@ import time
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
-from resume_matcher import qualified_jobs_path, greeting_pattern, deliver_dir
+from resume_matcher import qualified_jobs_path, match_analysis_path, greeting_pattern, deliver_dir
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
@@ -135,6 +135,26 @@ def load_jobs(run_dir):
     if isinstance(data, dict):
         data = data.get('jobs') or data.get('data') or []
     return data
+
+
+def load_match_analysis(run_dir):
+    """读 state/match_analysis.json（merge 时按 link 落盘的逐岗裁定结论）。
+
+    qualified_jobs.json 按设计只含**原始爬取字段**，匹配结论不在这；write_application_md
+    早期只读它，导致 匹配分析 四列永远「未裁定」、下方各小节整块缺失。真正的匹配数据由
+    merge_deep_results 写进这个文件（keyed by link），这里按 link 连回来。文件缺失
+    说明还没走到 merge 或用的不是深度模式 —— 返回空 dict 让 render 走原来的占位符，
+    不抛错。
+    """
+    path = match_analysis_path(run_dir)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _csv_candidates(job, explicit_csv):
@@ -318,7 +338,9 @@ def render(row, job, greeting, csv_path, index, csv_row=None):
     parts.append(jd if jd else NOT_COLLECTED)
     parts.append('')
 
-    # 匹配分析：分数与结论来自 job dict（CSV 里没有这些）
+    # 匹配分析：分数与结论来自 job dict。这些字段不在 CSV 里，也不在 qualified_jobs
+    # （它只含原始爬取字段），由 write_one 在写前置入了 state/match_analysis.json 的
+    # 按-link 记录（merge 阶段落盘），所以这里直接 job.get(...) 就能读到。
     parts.append('## 匹配分析')
     parts.append('')
     score = job.get('match_score', '')
@@ -375,6 +397,15 @@ def write_one(run_dir, job, index, args):
     """返回 (out_path, missing_fields)。missing_fields 非空表示字段不全。"""
     csv_row, csv_path = resolve_csv_row(job, args.csv)
     row = merge(job, csv_row)
+
+    # 把匹配分析按 link 连进 job dict：qualified_jobs 里没有 match_score/category/…，
+    # render() 那些 `job.get(...)` 正是读这几个键。连上后它们才有值，否则回退占位符
+    # 「未裁定」。快速模式 / merge 前跑本脚本时数据源缺失，load 会返回空 dict 不报错。
+    key = (job.get('link') or '').strip()
+    if key:
+        match_analysis = load_match_analysis(run_dir)
+        if key in match_analysis:
+            job = {**job, **(match_analysis[key] or {})}
 
     greeting, greeting_src = resolve_greeting(run_dir, index, args)
 

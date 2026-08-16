@@ -15,7 +15,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
-from .paths import deep_candidates_path, qualified_jobs_path
+from .paths import deep_candidates_path, qualified_jobs_path, match_analysis_path
 from .scoring import (
     compute_difficulty,
     build_job_view,
@@ -265,12 +265,21 @@ def merge_deep_results(
     qualified_raw = []
     need_optimization_raw = []
 
+    # 每个岗位的裁定结论，按 link 收集，稍后写 match_analysis.json（投递.md 生成时按
+    # link 连回来）。qualified_jobs.json 只存原始爬取字段，裁定结论单独落这一个文件；
+    # 放 state/ 而非 intermediate/ —— 后者文档明言「跑完即无用：可整体删除」，被清掉后
+    # 投递.md 的匹配分析就又要从 deep_results 反向拼了。
+    match_by_link = {}
+
     for candidate in candidates_data.get('candidates', []):
         job = candidate.get('job', {})
         rank = candidate.get('rank')
         rule_score = candidate.get('rule_score', 50)
         rule_analysis = candidate.get('rule_analysis', {})
         rule_category = candidate.get('rule_application_category', CATEGORY_NEED_OPTIMIZATION)
+        # 用与 qualified_jobs.json 相同的原始 link 做键，write_application_md 端按同样
+        # 的 strip 后取值比对，两个文件才连得上。
+        link_key = (job.get('link') or '').strip()
 
         # 提取 job_id（用于输出标识，不影响匹配）
         import re
@@ -344,6 +353,24 @@ def merge_deep_results(
             'is_deep': deep is not None,
         })
 
+        # 按 link 存下投递.md 要展示的全部裁定字段。键名就是 write_application_md
+        # 在 render() 里 `job.get(...)` 直接读的那几个，连名都对上，不需要再映射。
+        # 命中原因/技能（match_reasons/matched_skills）只有规则侧 rule_analysis 有，
+        # deep_results 不含 —— 这两个键是 匹配分析 里 匹配理由/命中技能 小节的来源。
+        if link_key:
+            match_by_link[link_key] = {
+                'match_score': int(blended),
+                'difficulty': difficulty,
+                'application_category': category,
+                'application_category_reason': reasons,
+                'match_reasons': rule_analysis.get('match_reasons', []),
+                'matched_skills': rule_analysis.get('matched_skills', []),
+                'missing_items': (missing[:5] if isinstance(missing, list) else []),
+                'optimization_points': (optimization if isinstance(optimization, list) else []),
+                'highlight': highlight,
+                'risk': risk,
+            }
+
         if category == CATEGORY_QUALIFIED:
             qualified.append(job_result)
             qualified_raw.append(job)
@@ -390,5 +417,13 @@ def merge_deep_results(
     with open(qualified_path, 'w', encoding='utf-8') as f:
         json.dump(qualified_raw + need_optimization_raw, f, ensure_ascii=False, indent=2)
     print(f"  ✅ 已生成投递候选池: {qualified_path}（{len(qualified_raw) + len(need_optimization_raw)} 个岗位，含符合+需优化）")
+
+    # 逐岗匹配分析（按 link），write_application_md 生成投递.md 时靠它把空的
+    # 「匹配分析」补齐。没有 link 的岗位不落进来 —— 投递.md 本来也按 link 回查 CSV。
+    match_path = match_analysis_path(output_dir)
+    os.makedirs(os.path.dirname(match_path), exist_ok=True)
+    with open(match_path, 'w', encoding='utf-8') as f:
+        json.dump(match_by_link, f, ensure_ascii=False, indent=2)
+    print(f"  ✅ 已生成逐岗匹配分析: {match_path}（{len(match_by_link)} 个岗位，按 link 键）")
 
     return classification

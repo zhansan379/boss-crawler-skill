@@ -37,7 +37,7 @@ from resume_matcher.deep_analysis import (
 )
 from resume_matcher.paths import (
     deep_candidates_path, deep_results_path, matching_report_path,
-    qualified_jobs_path, timings_path,
+    qualified_jobs_path, match_analysis_path, timings_path,
 )
 from resume_matcher.scoring import (
     CATEGORY_QUALIFIED, CATEGORY_NEED_OPTIMIZATION, CATEGORY_CANNOT_APPLY,
@@ -349,6 +349,29 @@ def main():
                  if k not in CSV_FIELDS and k != 'source_file']
         check('没有自造字段名（否则 write_application_md 回查不到）',
               not stray, stray)
+
+        # ── match_analysis.json：投递.md 补齐匹配分析的来源 ──
+        ma_path = match_analysis_path(run_dir)
+        check('match_analysis.json 写出来了', os.path.exists(ma_path), ma_path)
+        match = read_json(ma_path)
+        check('三个岗位全在（含判不可投的乙）',
+              len(match) == 3, list(match.keys()))
+        ma_甲 = match.get('https://www.zhipin.com/job_detail/aaaaaaa1.html')
+        check('甲按 link 命中，混合分 88（与报告一致）',
+              ma_甲 and ma_甲['match_score'] == 88, ma_甲)
+        check('甲的模型结论进分析（reason 来自深度分析而非规则）',
+              ma_甲 and '技能与 JD 高度契合' in ma_甲['application_category_reason'],
+              (ma_甲 or {}).get('application_category_reason'))
+        check('甲的命中原因/技能来自规则侧 rule_analysis',
+              ma_甲 and ma_甲['match_reasons'] == ['技能高度匹配']
+              and ma_甲['matched_skills'] == ['Python'], ma_甲)
+        check('甲的 highlight 传到了分析记录', ma_甲 and ma_甲['highlight'],
+              (ma_甲 or {}).get('highlight'))
+        ma_乙 = match.get('https://www.zhipin.com/job_detail/bbbbbbb2.html')
+        check('乙判不可投、分 48，理由写的是模型那句',
+              ma_乙 and ma_乙['application_category'] == CATEGORY_CANNOT_APPLY
+              and ma_乙['match_score'] == 48
+              and '8 年经验' in ma_乙['application_category_reason'], ma_乙)
 
         # ================================================================
         print('\n=== 5. 部分失败：不带崩全批，失败的沿用规则分类 ===')

@@ -9,7 +9,7 @@ run_dir 目录结构的**唯一真源**：所有脚本都从这里取产物路�
     ├── state/         机器状态（续跑/回溯用，人不直接看）
     │   ├── profile.json / resume_text.txt / profile_validation.json
     │   ├── crawl_params.json / crawl_summary.json / scored_jobs.json
-    │   ├── qualified_jobs.json / verify_report.json / apply_log.json
+    │   ├── qualified_jobs.json / match_analysis.json / verify_report.json / apply_log.json
     ├── materials/     LLM 源（机器源，花钱的，再渲染靠它）
     │   ├── greeting_#_<公司>.txt
     │   └── resume_#_<公司>.json
@@ -75,6 +75,17 @@ def scored_jobs_path(run_dir):
 
 def qualified_jobs_path(run_dir):
     return os.path.join(state_dir(run_dir), 'qualified_jobs.json')
+
+
+def match_analysis_path(run_dir):
+    """按 link 存的裁定结论（merge_deep_results 在写 qualified_jobs 时一并产出）。
+
+    qualified_jobs.json 按设计只含原始爬取字段（投递阶段按 link 回查 CSV），匹配
+    结论单独落在这里，供 write_application_md 生成 投递.md 时按 link 连回来。
+    放 state/（随 run 存在、删 run 即删）而不是 intermediate/（文档明言可整删），
+    否则 投递.md 在中间产物被清理后就没匹配分析了。
+    """
+    return os.path.join(state_dir(run_dir), 'match_analysis.json')
 
 
 def verify_report_path(run_dir):
