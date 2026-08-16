@@ -6,15 +6,18 @@
 
 > 🚀 **这是一个 Claude Code Skill** — 在 Claude Code 中输入 `/boss-crawler` 即可启动完整的求职自动化流程。
 
-一套完整的 BOSS 直聘求职自动化工具：**爬取岗位 → 解析简历 → 智能匹配 → 可视化报告 → 自动生成优化简历图片 → 自动投递**。所有 LLM 分析走**你自己配置的 OpenAI 兼容接口**（DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM 都行），帮助你更好**精投简历**。
+一套完整的 BOSS 直聘求职自动化工具：**爬取岗位 → 解析简历 → 智能匹配 → 可视化报告 → 自动生成优化简历图片 → 自动投递**。所有 LLM 分析走**你自己配置的模型接口**——默认原生 Anthropic Messages（Claude Code 协议），同样兼容 OpenAI 格式的端点（DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM 都行）——帮助你更好**精投简历**。
 
 **最新亮点（2026-08 更新）**：
 
-- 🔌 **LLM 完全由你掌握**——解析、深度匹配、招呼语、简历优化统一走 OpenAI 兼容接口，Skill 与命令行同一套脚本
+- 🔌 **LLM 完全由你掌握**——解析、深度匹配、招呼语、简历优化统一走你配置的模型接口（默认 `anthropic` / Claude Code 协议），Skill 与命令行同一套脚本
 - ✨ **内置 ShowCV 简历编辑器**（路径 D）——直接在编辑器里写/改简历，无需 PDF 往返
 - 🖼️ **自动生成简历图片**——投递时自动生成不含个人信息的简历图片随招呼语一起发送，更醒目
 - 🎚️ **新增筛选项**——经验 / 岗位类型 / 薪资 / 公司规模，做成预设一次确认，减少重复提问
 - 📉 **岗位下限校验（min_count）**——爬取数量不足时主动停下问你是否换关键词/放宽/接受
+- 📄 **每岗位一页「优化建议.md」**——deliver 每岗位并行生成，跟投递.md 相邻，专给「改简历」用
+- 🧮 **投递目录带序号**——`deliver/#N-公司-岗位`，同名岗位各自独立，不再互相覆盖
+- 🛡️ **风控对抗**——详情页访问间隔随机抖动 + 分批冷却
 - ⚡ **提问次数从 6 次压到 4 次**——更少的打断，更快的流程
 
 ## ⚠️ 免责声明
@@ -66,7 +69,9 @@ cp assets/llm_config.example.json assets/llm_config.json   # 填 base_url / api_
 python scripts/utils/llm_check.py                                # 验一下通不通（api_key 打码显示）
 ```
 
-> **第 3 步不能省。** 简历解析、深度匹配、招呼语、简历优化都要调模型；没配好模型，流程第一步就会停下。三层配置优先级：命令行参数 > 环境变量（`LLM_*`，其次 `OPENAI_*`）> `assets/llm_config.json`。`llm_check.py --no-call` 只查配置、不发请求，不花钱。
+> **第 3 步不能省。** 简历解析、深度匹配、招呼语、简历优化都要调模型；没配好模型，流程第一步就会停下。三层配置优先级：命令行参数 > 环境变量（`LLM_*`，其次 `OPENAI_*`/`ANTHROPIC_*`）> `assets/llm_config.json`。`llm_check.py --no-call` 只查配置、不发请求，不花钱。
+>
+> **协议默认 `anthropic`**（Claude Code 原生协议，`POST /v1/messages`），自动判断逻辑在 `scripts/llm/config.py`。把 `base_url` 指到 DeepSeek / 通义 / 智谱等 OpenAI 兼容端点时会**自动切到 `openai`**，也可以在 `llm_config.json` 里显式写 `"protocol"`。要按阶段用不同模型，用配置里的 `stages` 段（`parse / infer / deep / greeting / resume` 五个名字逐字写对）。拿不准就 `llm_check.py --stage deep` 看某一阶段最终生效的值。
 
 > `requirements.txt` 分「必需」和「按需」两段：不装 PyPDF2 就只能吃 .docx / .md / .txt 简历，不装 Pillow 则投递前的简历图体检会跳过。
 
@@ -179,8 +184,8 @@ Claude: 📊 分析完成！
 光打分不够,因为有的岗位根本不用投。系统有一套硬规矩,踩到任何一条就直接判"别投":
 
 - 学历卡死你(比如硬要硕士,你只有本科)
-- 经验差了 3 年以山
-- 薪资离你期望差了 8K 以山
+- 经验差了 3 年以上
+- 薪资离你期望差了 8K 以上
 
 没踩硬规矩,又四项(技能够、钱够、学历经验够)都满足 → 直接投。剩下的 → 改一改简历再投。
 
@@ -314,10 +319,12 @@ python scripts/stages/gen_materials.py assets/<ts> --only 1,3   # 只补这几�
 
 | 数据                  | 路径（均在 `assets/<timestamp>/` 下）                        | 用途                                                     |
 | --------------------- | ------------------------------------------------------------ | -------------------------------------------------------- |
-| **简历图片**          | `deliver/{公司}-{职位}/{姓名}-{职位}.png`                    | 不含个人信息的定制简历图片，可直接上传/发送给 HR         |
-| **岗位信息 + 招呼语** | `deliver/{公司}-{职位}/投递.md`                              | 该岗位采集信息 + 个性化招呼语，方便你核对/手动发送       |
+| **简历图片**          | `deliver/#N-{公司}-{职位}/{姓名}-{职位}.png`                | 不含个人信息的定制简历图片，可直接上传/发送给 HR         |
+| **岗位信息 + 招呼语** | `deliver/#N-{公司}-{职位}/投递.md`                          | 该岗位采集信息 + 个性化招呼语 + 匹配分析，方便你核对/手动发送 |
+| **简历优化建议**      | `deliver/#N-{公司}-{职位}/优化建议.md`                      | 只含优化建议，给「改简历」用，跟投递.md 一并生成         |
 | **可视化匹配报告**    | `deliver/matching_report.html`                               | 全部岗位的匹配度卡片、分类统计、投递状态，浏览器打开即看 |
 | **岗位评分明细**      | `state/qualified_jobs.json`                                  | 投递候选池：每个岗位的评分、匹配理由、缺失技能、风险提示（自动生成，别手工改——序号是下游对齐键） |
+| **逐岗匹配裁定**      | `state/match_analysis.json`                                  | merge 时按 link 落盘的逐岗位深度分析裁定，供投递.md 回填 |
 | **投递记录**          | `state/apply_log.json`                                       | 每次投递的时间、岗位、结果，方便复盘                     |
 | **爬取统计**          | `state/crawl_summary.json`                                   | 本次爬取写入/跳过/去重数量                               |
 | **简历解析结果**      | `state/profile.json` / `state/profile_validation.json`       | 结构化简历字段 + 交叉校验结果                            |
@@ -327,7 +334,7 @@ python scripts/stages/gen_materials.py assets/<ts> --only 1,3   # 只补这几�
 | **阶段耗时**          | `intermediate/run_timings.jsonl`                             | 各阶段耗时埋点，便于优化                                 |
 | **模型花费**          | `intermediate/llm_usage.jsonl`                               | 每次模型调用的 token 与重试次数                          |
 
-> **对你最有用的**是 `deliver/{公司}-{职位}/` 下的两件套：定制简历图片 + 投递.md——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。`intermediate/` 里的深度分析、日志、ShowCV 暂存都是跑完即无用的，用 `python scripts/utils/clean_run.py <run_dir>` 整体清掉。
+> **对你最有用的**是 `deliver/#N-{公司}-{职位}/` 下的三件套：定制简历图片 + 投递.md + 优化建议.md——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。`intermediate/` 里的深度分析、日志、ShowCV 暂存都是跑完即无用的，用 `python scripts/utils/clean_run.py <run_dir>` 整体清掉。
 
 ---
 
@@ -337,7 +344,7 @@ python scripts/stages/gen_materials.py assets/<ts> --only 1,3   # 只补这几�
 
 | 模块 | 功能 | 亮点 |
 |------|------|------|
-| 🔍 **岗位爬虫** | BOSS 直聘数据采集 | 关键词搜索、多城市、高级筛选、详情页采集、数量下限校验 |
+| 🔍 **岗位爬虫** | BOSS 直聘数据采集 | 关键词搜索、多城市、高级筛选、详情页采集、数量下限校验、访问间隔随机抖动 + 分批冷却对抗风控 |
 | 📝 **内置简历编辑器** | ShowCV 浏览器编辑器 | 无需扣简历，直接排版写改 + 实时预览 + 导出 PDF |
 | 📄 **简历解析** | PDF/Word/MD/文本 → 结构化 JSON | 模型深度理解，保留量化指标和项目要点，附字典交叉校验 |
 | 🎯 **智能匹配** | 双模式评分 | 快速模式（纯规则秒级、零 token）+ 深度模式（LLM 语义分析、按岗位并发、可续跑） |
@@ -357,7 +364,7 @@ Skill 路径                              命令行路径
 SKILL.md（逐阶段问你确认）               scripts/pipeline.py（参数一次给全）
     └───────────────┬───────────────────────┘
                     ▼
-    scripts/llm/              统一的 OpenAI 兼容客户端（三层配置 + 重试 + 并发）
+    scripts/llm/              统一模型客户端（anthropic + OpenAI 兼容，三层配置 + 重试 + 并发）
     scripts/prompts/*.st      5 个提示词模板（解析/深度匹配/招呼语/简历优化/参数推断）
     scripts/boss_crawler/     爬取   ──→  assets/post_data/**.csv
     scripts/resume_matcher/   评分   ──→  scored_jobs.json / matching_report.html
@@ -389,6 +396,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │       │   ├── crawl_summary.json    # 爬取统计（也是「这轮真爬到了」的证据）
 │       │   ├── scored_jobs.json      # 规则评分分档（tier1..tier4）
 │       │   ├── qualified_jobs.json   # 投递候选池（自动生成，序号是下游对齐键）
+│       │   ├── match_analysis.json   # 逐岗位深度匹配裁定（merge 时按 link 落盘）
 │       │   ├── apply_log.json        # 投递记录
 │       │   └── resume_text.txt       # 简历纯文本
 │       ├── materials/                # LLM 源（花钱的，再渲染靠它）
@@ -396,7 +404,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │       │   └── resume_#_*.json       # 定制简历 JSON（含优化后简历 + 建议）
 │       ├── deliver/                  # 🎁 最终交付（人看的）
 │       │   ├── matching_report.html  # HTML 可视化报告
-│       │   └── {公司}-{职位}/         # 每个岗位：简历图片 + 投递.md
+│       │   └── #N-{公司}-{职位}/     # 每个岗位：简历图片 + 投递.md + 优化建议.md
 │       └── intermediate/             # 跑完即无用：clean_run.py 可整体删
 │           ├── deep_candidates.json  # 深度模式候选
 │           ├── deep_results.json     # 深度分析结果
@@ -407,14 +415,8 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │
 ├── app/                              # 🌐 内置 ShowCV 简历编辑器（静态站点 + 字体）
 │
-├── references/                       # 📚 参考文档（按需加载）
-│   ├── cli.md                        # 📖 命令行路径完整用法
-│   ├── crawl-commands.md             # 爬取命令与参数
-│   ├── resume-parsing.md             # 简历解析与交叉校验
-│   ├── matching.md                   # 双模式匹配与评分
-│   ├── auto-apply.md                 # 招呼语与自动投递
-│   ├── resume-editor.md              # 内置简历编辑器
-│   └── scripts.md                    # 包/函数参考
+├── references/                       # 📚 参考文档（按需加载；其余阶段说明已并入 SKILL.md）
+│   └── cli.md                        # 📖 命令行路径完整用法与排查
 │
 └── scripts/                          # 🐍 可执行脚本（按阶段/模块分目录）
     ├── pipeline.py                   # 🔑 一条命令串完 9 个阶段（不含投递）
@@ -430,7 +432,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     │   └── validate_profile.py       # Profile 交叉校验
     │
     ├── deliver/                      # 投递
-    │   ├── write_application_md.py   # 组装 deliver/ 下的投递.md
+    │   ├── write_application_md.py   # 组装 deliver/ 下的投递.md + 优化建议.md
     │   ├── render_images.py          # 简历 JSON → 简历长图（串行，共用一个浏览器）
     │   └── apply.py                  # 投递（必须显式 --yes，不加只演练）
     │
@@ -451,7 +453,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── stage_timer.py                # 阶段计时埋点
     │
     ├── boss_crawler/                 # 爬虫引擎包
-    ├── llm/                          # OpenAI 兼容客户端（config 三层优先级 + 重试 + 并发）
+    ├── llm/                          # 模型客户端（anthropic + OpenAI 兼容，config 三层优先级 + 重试 + 并发）
     ├── resume_matcher/               # 匹配引擎包（评分/解析/报告/投递/深度分析）
     ├── showcv/                       # 简历长图渲染（ShowCV 编辑器）
     └── prompts/                      # LLM 提示词模板 (.st)，两条路径共用
@@ -475,9 +477,9 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 | [DrissionPage](https://github.com/g1879/DrissionPage) | Chrome CDP 协议控制，爬虫 + 浏览器自动化 |
 | PyPDF2 / python-docx | 简历文件解析（PDF/Word），按需安装 |
 | chardet | 文件编码自动检测 |
-| requests | OpenAI 兼容接口调用（LLM 客户端，零额外重依赖） |
+| requests | 模型 HTTP 调用（anthropic + OpenAI 兼容端点，LLM 客户端零额外重依赖） |
 | Pillow | 投递前给简历图体检（尺寸、内容占比、是否整张空白），按需安装 |
-| 任意 OpenAI 兼容接口 | 全部 LLM 能力：DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM |
+| Anthropic / 任意 OpenAI 兼容端点 | 全部 LLM 能力：Claude（默认） / DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM |
 | Claude Code | Skill 路径的编排层：选路径、逐阶段确认、投递前把关（不参与模型调用） |
 | HTML/CSS/JS | Bauhaus 风格双主题可视化报告 + 内置 ShowCV 编辑器 |
 

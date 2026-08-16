@@ -1,0 +1,12 @@
+{
+  "base_url": "https://api.anthropic.com",
+  "api_key": "",
+  "model": "claude-sonnet-5",
+  "protocol": "anthropic",
+  "timeout": 120,
+  "max_retries": 3,
+  "concurrency": 4,
+  "temperature": 0.3,
+  "json_mode": true,
+  "stages": {}
+}
