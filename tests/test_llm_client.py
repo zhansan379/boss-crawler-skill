@@ -34,6 +34,10 @@ import requests as _real_requests
 from llm import client as C
 from llm import config as CF
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "scripts", "utils"))
+import llm_check
+
 SECRET = 'sk-testsecret-abcdefghijklmnop-9999'
 
 
@@ -292,7 +296,9 @@ def main():
             return C.chat('问 %d' % i, cfg=cfg(), run_dir=conc_dir, stage='deep')
 
         C.map_concurrent(list(range(8)), one, workers=8, quiet=True)
-        with open(os.path.join(conc_dir, 'llm_usage.jsonl'), encoding='utf-8') as f:
+        # llm_usage.jsonl 落在 run_dir/intermediate/ 下（四桶重构后），别用旧平铺路径
+        with open(os.path.join(conc_dir, 'intermediate', 'llm_usage.jsonl'),
+                  encoding='utf-8') as f:
             lines = [l for l in f.read().splitlines() if l.strip()]
         check('8 次并发写出 8 行', len(lines) == 8, len(lines))
         parsed = 0
@@ -514,6 +520,69 @@ def main():
               (cinv.protocol, warns))
 
         # ================================================================
+        print('\n=== 8.6 404 协议回退：llm_check._text_probe ===')
+        # LLMError 带 status_code，才有结构化判断「404 端点/协议不对」的依据
+        fake = install([_Resp(404, text='not found')])
+        try:
+            C.chat('问', cfg=cfg(), stage='parse')
+            check('404 抛 LLMError', False, '没抛')
+        except C.LLMError as exc:
+            check('404 抛 LLMError', True)
+            check('404 记下 status_code=404', exc.status_code == 404, exc.status_code)
+
+        fake = install([_Resp(401, text='bad key')])
+        try:
+            C.chat('问', cfg=cfg(), stage='parse')
+        except C.LLMError as exc:
+            check('401 记下 status_code=401', exc.status_code == 401, exc.status_code)
+
+        fake = install([_real_requests.exceptions.ConnectionError('refused')])
+        try:
+            C.chat('问', cfg=cfg(max_retries=0), stage='parse')
+        except C.LLMError as exc:
+            check('网络错误 status_code 是 None', exc.status_code is None,
+                  exc.status_code)
+
+        # 回退：openai 端点打 404 → 自动换 anthropic 端点 → 成功
+        fake = install([_Resp(404, text='not found'),
+                        _Resp(200, anthropic_body('可用'))])
+        probe_cfg = cfg(base_url='https://gateway.example.com', protocol='openai')
+        working, reply = llm_check._text_probe(probe_cfg, None)
+        check('404 回退后 working.protocol=anthropic',
+              working.protocol == 'anthropic', working.protocol)
+        check('回退共发 2 次请求（1 次 404 + 1 次回退）',
+              len(fake.calls) == 2, len(fake.calls))
+        check('第二次请求打 anthropic 端点',
+              fake.calls[1]['url'].endswith('/v1/messages'), fake.calls[1]['url'])
+        check('回退后拿到回复', reply == '可用', reply)
+
+        # 协议本来就对：不发多余请求，working 原样返回
+        fake = install([_Resp(200, anthropic_body('可用'))])
+        probe_cfg = cfg(base_url='https://gateway.example.com', protocol='anthropic')
+        working, reply = llm_check._text_probe(probe_cfg, None)
+        check('协议正确时只发 1 次请求', len(fake.calls) == 1, len(fake.calls))
+        check('协议正确时 working 不变', working.protocol == 'anthropic', working.protocol)
+
+        # 非 404 错误不触发回退，直接抛
+        fake = install([_Resp(401, text='bad key')])
+        try:
+            llm_check._text_probe(cfg(), None)
+            check('401 不触发回退直接抛', False, '没抛')
+        except C.LLMError as exc:
+            check('401 不触发回退直接抛', True)
+            check('401 不触发回退就只发 1 次请求', len(fake.calls) == 1, len(fake.calls))
+
+        # 回退也失败：抛错消息里带原 404
+        fake = install([_Resp(404, text='not found'),
+                        _Resp(404, text='also not found')])
+        try:
+            llm_check._text_probe(cfg(), None)
+            check('回退也失败时抛错', False, '没抛')
+        except C.LLMError as exc:
+            check('回退也失败时抛错', True)
+            check('报错里带原 404', '原错误' in str(exc), str(exc))
+
+        # ================================================================
         print('\n=== 9. key 不外泄：报错与摘要里只有打码形态 ===')
         check('mask_key 只留前 3 后 4',
               CF.mask_key(SECRET) == 'sk-...9999', CF.mask_key(SECRET))
@@ -542,7 +611,8 @@ def main():
             C.chat('问', cfg=cfg(), run_dir=os.path.join(tmp, 'leak'), stage='parse')
         except C.LLMError as exc:
             check('HTTP 400 的报错不含 key', SECRET not in str(exc), str(exc))
-        with open(os.path.join(tmp, 'leak', 'llm_usage.jsonl'), encoding='utf-8') as f:
+        with open(os.path.join(tmp, 'leak', 'intermediate', 'llm_usage.jsonl'),
+                  encoding='utf-8') as f:
             check('记账文件不含 key', SECRET not in f.read())
 
     finally:

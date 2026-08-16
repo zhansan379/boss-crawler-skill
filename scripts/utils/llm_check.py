@@ -11,6 +11,10 @@ key 没配）。所以给它一个一秒钟的独立入口，跑长流程之前�
     python scripts/utils/llm_check.py --stage deep    # 看某阶段的实际生效配置
     python scripts/utils/llm_check.py --json          # 也验一遍 JSON 模式能否工作
 
+协议回退：请求打 404（多半是协议猜错，base_url 指向 Claude Code 网关却按 openai 算）
+时，自动用另一协议再试一次；哪个通就提示应配 protocol=xxx。自查代价是那次 404
+多一次请求。
+
 退出码：0 = 可用，1 = 配置缺失/非法，2 = 配置齐全但请求打不通。
 """
 
@@ -91,19 +95,22 @@ def main() -> int:
 
     print('\n发送最小请求验证连通 …')
     try:
-        reply = chat('回复两个字：可用', stage=args.stage, cfg=cfg, max_tokens=32)
+        working, reply = _text_probe(cfg, args.stage)
     except LLMError as exc:
         print('❌ 请求失败：%s' % exc)
         print(_hint())
         return 2
     print('✅ 文本调用正常，模型回复：%s' % reply.strip()[:80])
+    if working.protocol != cfg.protocol:
+        print('  ⚠ 你配的 protocol=%s 打 404，改用 %s 才通 —— 建议把配置改成 protocol=%s'
+              % (cfg.protocol, working.protocol, working.protocol))
 
     if args.check_json:
         print('\n验证 JSON 模式 …')
         try:
             data = chat_json(
                 '只输出这个 JSON，不要任何其他内容：{"ok": true, "n": 1}',
-                stage=args.stage, cfg=cfg, max_tokens=64)
+                stage=args.stage, cfg=working, max_tokens=64)
         except LLMError as exc:
             print('⚠ JSON 模式失败：%s' % exc)
             print('  可在配置里设 "json_mode": false —— 部分兼容端点不支持 response_format，')
@@ -119,12 +126,46 @@ def _exists(path: str) -> bool:
     return os.path.exists(path)
 
 
+def _text_probe(cfg, stage: str):
+    """发一条最小文本请求验证连通；404 时自动用另一协议回退探测一次。
+
+    404 多半是「协议猜错」：base_url 指向 Claude Code 网关（host 不含
+    anthropic、也不以 /messages 结尾）时，自动判断会误判成 openai，于是打
+    /chat/completions 打出 404。用另一协议回退一次，哪个通就提示应配
+    protocol=xxx。自查的代价是那次 404 多一次请求。
+
+    Returns:
+        (working_cfg, reply_text) —— working_cfg 是探测成功的配置（可能已换协议）。
+    Raises:
+        LLMError —— 探测彻底失败（非 404，或回退同样失败；后者消息含原 404）。
+    """
+    try:
+        reply = chat('回复两个字：可用', stage=stage, cfg=cfg, max_tokens=32)
+        return cfg, reply
+    except LLMError as first:
+        if first.status_code != 404:
+            raise
+        other = 'anthropic' if cfg.protocol == 'openai' else 'openai'
+        print('  HTTP 404 —— 当前 protocol=%s 打不通，自动用 %s 回退探测一次 …'
+              % (cfg.protocol, other))
+        working = cfg.merged(protocol=other)
+        try:
+            reply = chat('回复两个字：可用', stage=stage, cfg=working, max_tokens=32)
+        except LLMError as second:
+            raise LLMError('protocol=%s 打 404，改用 %s 回退也失败：\n'
+                           '  回退错误：%s\n  原错误：%s'
+                           % (cfg.protocol, other, second, first)) from second
+        return working, reply
+
+
 def _hint() -> str:
     return ('\n排查顺序：\n'
             '  1. base_url 是否带了版本段（DeepSeek 用 /v1，火山方舟用 /api/v3）\n'
-            '  2. model 名称是否是该服务商的合法模型 ID（401 是 key 错，404 多半是模型名错）\n'
-            '  3. 协议是否对上：Claude Code 的协议是 anthropic（/v1/messages），用\n'
-            '     --protocol anthropic 或 base_url 指向 api.anthropic.com 会自动识别\n'
+            '  2. protocol 是否对上：404 既不重试也不回退时，多半是协议或模型名错。\n'
+            '     Claude Code 的协议是 anthropic（/v1/messages）；base_url 指向\n'
+            '     api.anthropic.com 或以 /messages 结尾会自动识别，否则需显式配\n'
+            '     --protocol anthropic。本脚本已在 404 时自动用另一协议回退探测过一轮\n'
+            '  3. model 名称是否是该服务商的合法模型 ID（401 是 key 错）\n'
             '  4. 是否需要代理（本模块直连，不读 HTTP_PROXY 之外的设置）')
 
 

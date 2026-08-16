@@ -43,7 +43,15 @@ _LOCK = threading.Lock()
 
 
 class LLMError(Exception):
-    """调用失败（网络、HTTP 状态、响应结构、JSON 无法解析）。"""
+    """调用失败（网络、HTTP 状态、响应结构、JSON 无法解析）。
+
+    status_code：有 HTTP 响应时记录状态码（网络/解析类失败为 None）。让调用方
+    （如 llm_check 的协议回退）能区分「404 端点/协议不对」和「其他错误」，而不是
+    去字符串里捞状态码。
+    """
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ==================== 环境 ====================
@@ -290,7 +298,8 @@ def _post(cfg: LLMConfig, payload: Dict[str, Any]) -> Dict[str, Any]:
                          resp.headers.get('Retry-After'))
     if resp.status_code >= 400:
         raise LLMError('HTTP %d（不重试）：%s\n  endpoint=%s model=%s'
-                       % (resp.status_code, resp.text[:400], cfg.endpoint(), cfg.model))
+                       % (resp.status_code, resp.text[:400], cfg.endpoint(), cfg.model),
+                       status_code=resp.status_code)
     try:
         return resp.json()
     except ValueError:
