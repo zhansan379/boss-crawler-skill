@@ -102,9 +102,9 @@ def find_greeting(run_dir, index):
     return (text or '').strip(), source
 
 
-def find_image(run_dir, job, person):
+def find_image(run_dir, job, person, index):
     """该岗位的 <姓名>-<应聘岗位>.png。走 render_images 的同一套目录/命名推导。"""
-    dir_name, position = job_dir_name(job)
+    dir_name, position = job_dir_name(job, index)
     base = '%s-%s' % (sanitize(person), sanitize(position))
     path = os.path.join(deliver_dir(run_dir), dir_name, base + '.png')
     return path if os.path.exists(path) and os.path.getsize(path) > 0 else None
@@ -224,7 +224,7 @@ def print_company_menu(jobs, groups):
 
     pad = max(_width(name) for name, _ in groups)
     for name, indexes in groups:
-        detail = '、'.join('#%d %s' % (i, job_dir_name(jobs[i - 1])[1]) for i in indexes)
+        detail = '、'.join('#%d %s' % (i, job_dir_name(jobs[i - 1], i)[1]) for i in indexes)
         print('    %s%s  %s' % (name, ' ' * (pad - _width(name)), detail))
 
     # 按公司：第一家 / 前两家
@@ -261,7 +261,7 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
     for index in indexes:
         job = jobs[index - 1]
         link = str(job.get('link') or '').strip()
-        dir_name, position = job_dir_name(job)
+        dir_name, position = job_dir_name(job, index)
 
         if not link:
             blockers.append('#%d %s 没有 link，无法打开岗位页' % (index, dir_name))
@@ -276,7 +276,7 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
 
         image = None
         if want_image:
-            image = shared_image or find_image(run_dir, job, person)
+            image = shared_image or find_image(run_dir, job, person, index)
             if not image:
                 blockers.append(
                     '#%d %s 没有简历图（先跑 render_images.py，或用 --no-image / --image）'

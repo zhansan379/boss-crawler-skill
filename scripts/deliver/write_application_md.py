@@ -213,6 +213,38 @@ def merge(job, csv_row):
     return merged
 
 
+# ==================== 交付目录与撞名 ====================
+
+def job_dir_stem(index, company, position):
+    """`deliver/` 下单份岗位的目录名：`#N-<公司>-<岗位>`。
+
+    序号前缀让同一批里「公司+岗位」撞名的两个岗位也各有独立目录。材料层
+    （greeting_N、resume_N）从 gen_materials 起就以序号定位，交付层一度拿自然键
+    `<公司>-<岗位>` 当身份 —— 一撞名，两份材料的 PNG/投递.md 就写进同一目录
+    互相覆盖（#5/#6 的病灶）。这里把自然键延续成「序号 + 自然键」，附件文件名
+    仍是干净的 `<姓名>-<岗位>.png`，序号只进目录名。
+    """
+    return '#%d-%s-%s' % (index, sanitize(company or '未知公司'),
+                          sanitize(position or '未知岗位'))
+
+
+def find_duplicate_links(run_dir, jobs, indexes):
+    """返回 {link: [序号...]}，同一 link 在选中的一批里出现多次 = 撞名。
+
+    同一 link = 同一条 BOSS 岗位 = 同一个 HR。一批里重复出现，要么是上游去重漏了、
+    要么是用户手选重复：重复投同一个 link 既浪费一次珍贵的沟通机会，又会像 #5/#6
+    那样在版本上打架。这在渲染/写出前挡下，不静默放行 —— 目录已按序号唯一，
+    但「同一个岗位投两次」不该靠那层兜着。
+    """
+    groups = {}
+    for index in indexes:
+        job = jobs[index - 1]
+        link = str(job.get('link') or '').strip()
+        if link:
+            groups.setdefault(link, []).append(index)
+    return {link: ixs for link, ixs in groups.items() if len(ixs) > 1}
+
+
 def resolve_greeting(run_dir, index, args):
     """招呼语来源优先级：命令行 > materials/greeting_{i}_*.txt > 空。"""
     if args.greeting:
@@ -348,7 +380,7 @@ def write_one(run_dir, job, index, args):
 
     company = sanitize(row.get('公司') or row.get('company') or '未知公司')
     position = sanitize(row.get('职位') or row.get('position') or '未知岗位')
-    out_dir = os.path.join(deliver_dir(run_dir), '%s-%s' % (company, position))
+    out_dir = os.path.join(deliver_dir(run_dir), job_dir_stem(index, company, position))
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, '投递.md')
 
@@ -402,6 +434,17 @@ def main():
             print('--index %d 越界，共 %d 个岗位' % (args.index, len(jobs)))
             return 1
         targets = [(args.index, jobs[args.index - 1])]
+
+    if len(targets) > 1:
+        dup = find_duplicate_links(run_dir, jobs, [i for i, _ in targets])
+        if dup:
+            for link, ixs in dup.items():
+                print('❌ 同一岗位出现多次（link=%s）：%s'
+                      % (link, '、'.join('#%d' % i for i in ixs)))
+            print('  同一 link = 同一 HR，重复写出只会产出两套几乎一样的材料，')
+            print('  且交付目录虽已按序号分开，不该靠这层兜着同一个岗位投两次。')
+            print('  请先在上游去重，或用 --index 只处理其中一个。')
+            return 1
 
     incomplete = 0
     for index, job in targets:

@@ -45,7 +45,8 @@ _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
 import stage_timer
-from write_application_md import sanitize, load_jobs, resolve_csv_row, merge
+from write_application_md import (sanitize, load_jobs, resolve_csv_row, merge,
+                                  job_dir_stem, find_duplicate_links)
 from resume_matcher import (materials_dir, resume_pattern, deliver_dir,
                             profile_path as _profile_path,
                             showcv_staging_dir, showcv_exports_dir)
@@ -139,18 +140,19 @@ def read_markdown(path):
     return text
 
 
-def job_dir_name(job):
-    """`<公司>-<岗位>` 目录名。
+def job_dir_name(job, index):
+    """`deliver/#N-<公司>-<岗位>` 目录名 + 岗位展示名。
 
-    刻意走 write_application_md 的 resolve_csv_row + merge + sanitize：那个脚本写
-    `投递.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
-    只差几个字的目录里，而且要等用户翻文件夹才发现。
+    刻意走 write_application_md 的 resolve_csv_row + merge + job_dir_stem：那个脚本
+    写 `投递.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
+    只差几个字的目录里，而且要等用户翻文件夹才发现。序号前缀（见 job_dir_stem）
+    保证同一批里「公司+岗位」撞名也不互相覆盖。
     """
     csv_row, _ = resolve_csv_row(job)
     row = merge(job, csv_row)
-    company = sanitize(row.get('公司') or row.get('company') or '未知公司')
+    company = row.get('公司') or row.get('company') or '未知公司'
     position = sanitize(row.get('职位') or row.get('position') or '未知岗位')
-    return '%s-%s' % (company, position), position
+    return job_dir_stem(index, company, position), position
 
 
 def run_stamp(run_dir, override):
@@ -166,7 +168,7 @@ def run_stamp(run_dir, override):
 # ==================== 暂存 ====================
 
 def stage_all(run_dir, jobs, indexes, person, stamp):
-    """把 materials/resume_*.json 渲染成 deliver/<公司>-<岗位>/<姓名>-<岗位>.png。
+    """把 materials/resume_*.json 渲染成 deliver/#N-<公司>-<岗位>/<姓名>-<岗位>.png。
 
     只向岗位目录写最终要交的 PNG（和投递.md，那是 write_application_md 的事）。
     优化后的简历正文不进岗位目录 —— 想看或改就用 read_thin.py 读 materials/resume_#.json，
@@ -195,7 +197,7 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
             failures.append((index, str(exc)))
             continue
 
-        dir_name, position = job_dir_name(job)
+        dir_name, position = job_dir_name(job, index)
         job_dir = os.path.join(deliver_dir(run_dir), dir_name)
         os.makedirs(job_dir, exist_ok=True)
 
@@ -457,6 +459,15 @@ def main():
         return 1
     if not indexes:
         print('❌ --only=%s 没有落在 1..%d 范围内的岗位' % (args.only, len(jobs)))
+        return 1
+
+    dup = find_duplicate_links(run_dir, jobs, indexes)
+    if dup:
+        for link, ixs in dup.items():
+            print('❌ 同一岗位出现多次（link=%s）：%s'
+                  % (link, '、'.join('#%d' % i for i in ixs)))
+        print('  同一 link = 同一 HR，重复渲染只会产出两套几乎一样的简历。')
+        print('  请先在上游去重，或用 --only 只渲染其中一个。')
         return 1
 
     stamp = run_stamp(run_dir, args.stamp)

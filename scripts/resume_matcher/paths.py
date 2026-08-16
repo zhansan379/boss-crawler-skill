@@ -15,7 +15,7 @@ run_dir 目录结构的**唯一真源**：所有脚本都从这里取产物路�
     │   └── resume_#_<公司>.json
     ├── deliver/       最终交付（人看的）
     │   ├── matching_report.html
-    │   └── <公司>-<岗位>/<姓名>-<岗位>.png + 投递.md
+    │   └── #N-<公司>-<岗位>/<姓名>-<岗位>.png + 投递.md
     └── intermediate/  跑完即无用：可整体删除
         ├── deep_candidates.json / deep_results.json
         ├── llm_usage.jsonl / run_timings.jsonl

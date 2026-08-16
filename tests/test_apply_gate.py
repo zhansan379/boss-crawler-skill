@@ -42,29 +42,39 @@ def _fake_auto_apply(**kwargs):
 
 
 def build_run_dir(with_greeting=True, with_image=True):
+    # 4 桶布局（paths.py 真源）：state/ 放 profile 与 qualified_jobs，materials/
+    # 放 greeting_N，deliver/（#N-公司-岗位/）放简历 PNG。旧 test 写的裸
+    # profile.json + generated/ + applications/ 是预 4 桶时代的路径，apply 读不到。
     run_dir = tempfile.mkdtemp(prefix='apply_gate_')
-    os.makedirs(os.path.join(run_dir, 'generated'))
+    state = os.path.join(run_dir, 'state')
+    materials = os.path.join(run_dir, 'materials')
+    os.makedirs(state)
+    os.makedirs(materials)
 
     json.dump({'basic_info': {'name': '张三'}, 'skills': None, 'projects': None},
-              open(os.path.join(run_dir, 'profile.json'), 'w', encoding='utf-8'),
+              open(os.path.join(state, 'profile.json'), 'w', encoding='utf-8'),
               ensure_ascii=False)
-    json.dump(
-        [{'company': 'XX科技', 'position': 'Java开发', 'link': 'https://zhipin.com/job/1',
-          'match_score': 88},
-         {'company': 'YY公司', 'position': '全栈工程师', 'link': 'https://zhipin.com/job/2',
-          'match_score': 80}],
-        open(os.path.join(run_dir, 'qualified_jobs.json'), 'w', encoding='utf-8'),
-        ensure_ascii=False)
+
+    jobs = [
+        {'company': 'XX科技', 'position': 'Java开发',
+         'link': 'https://zhipin.com/job/1', 'match_score': 88},
+        {'company': 'YY公司', 'position': '全栈工程师',
+         'link': 'https://zhipin.com/job/2', 'match_score': 80},
+    ]
+    json.dump(jobs, open(os.path.join(state, 'qualified_jobs.json'), 'w', encoding='utf-8'),
+              ensure_ascii=False)
 
     if with_greeting:
         for i, tag in ((1, 'XX科技'), (2, 'YY公司')):
-            path = os.path.join(run_dir, 'generated', 'greeting_%d_%s.txt' % (i, tag))
+            path = os.path.join(materials, 'greeting_%d_%s.txt' % (i, tag))
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('26届本科可实习6个月，做过日均百万请求的服务重构，应聘贵司岗位。')
 
     if with_image:
-        for company, position in (('XX科技', 'Java开发'), ('YY公司', '全栈工程师')):
-            job_dir = os.path.join(run_dir, 'applications', '%s-%s' % (company, position))
+        # deliver/ 目录带 #N- 前缀（方案一）。岗位序号 = qualified_jobs 里的 1-based 位次
+        for i, (company, position) in enumerate(
+                (('XX科技', 'Java开发'), ('YY公司', '全栈工程师')), 1):
+            job_dir = os.path.join(run_dir, 'deliver', '#%d-%s-%s' % (i, company, position))
             os.makedirs(job_dir, exist_ok=True)
             with open(os.path.join(job_dir, '张三-%s.png' % position), 'wb') as f:
                 f.write(b'\x89PNG\r\n\x1a\n' + b'x' * 5000)
@@ -151,8 +161,8 @@ def main():
     print('\n=== 5. 只有一个岗位有招呼语时，--only 才放行 ===')
     run_dir = build_run_dir()
     try:
-        os.remove([os.path.join(run_dir, 'generated', f)
-                   for f in os.listdir(os.path.join(run_dir, 'generated'))
+        os.remove([os.path.join(run_dir, 'materials', f)
+                   for f in os.listdir(os.path.join(run_dir, 'materials'))
                    if f.startswith('greeting_2_')][0])
         code = run([run_dir, '--yes'], apply_module)
         check('#2 缺料时整批拒绝', code == 1 and not CALLS, '实际 code=%s calls=%d'
@@ -168,7 +178,7 @@ def main():
     print('\n=== 6. 招呼语寒暄开头：告警但不拦 ===')
     run_dir = build_run_dir()
     try:
-        path = os.path.join(run_dir, 'generated', 'greeting_1_XX科技.txt')
+        path = os.path.join(run_dir, 'materials', 'greeting_1_XX科技.txt')
         with open(path, 'w', encoding='utf-8') as f:
             f.write('您好，我是一名应届生，看到贵司在招后端，很感兴趣，希望有机会交流。')
         code = run([run_dir, '--yes'], apply_module)
