@@ -110,7 +110,7 @@ def main() -> int:
         try:
             data = chat_json(
                 '只输出这个 JSON，不要任何其他内容：{"ok": true, "n": 1}',
-                stage=args.stage, cfg=working, max_tokens=64)
+                stage=args.stage, cfg=working, max_tokens=1024)
         except LLMError as exc:
             print('⚠ JSON 模式失败：%s' % exc)
             print('  可在配置里设 "json_mode": false —— 部分兼容端点不支持 response_format，')
@@ -140,7 +140,7 @@ def _text_probe(cfg, stage: str):
         LLMError —— 探测彻底失败（非 404，或回退同样失败；后者消息含原 404）。
     """
     try:
-        reply = chat('回复两个字：可用', stage=stage, cfg=cfg, max_tokens=32)
+        reply = chat('回复两个字：可用', stage=stage, cfg=cfg, max_tokens=1024)
         return cfg, reply
     except LLMError as first:
         if first.status_code != 404:
@@ -150,7 +150,7 @@ def _text_probe(cfg, stage: str):
               % (cfg.protocol, other))
         working = cfg.merged(protocol=other)
         try:
-            reply = chat('回复两个字：可用', stage=stage, cfg=working, max_tokens=32)
+            reply = chat('回复两个字：可用', stage=stage, cfg=working, max_tokens=1024)
         except LLMError as second:
             raise LLMError('protocol=%s 打 404，改用 %s 回退也失败：\n'
                            '  回退错误：%s\n  原错误：%s'

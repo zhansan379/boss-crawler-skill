@@ -13,7 +13,10 @@ DrissionPage>=4.1.0
 # 不该指望别人的依赖树替自己声明。
 requests>=2.28.0
 # CSV/简历文本的编码探测
-chardet>=5.0.0
+# 注意：chardet>=6 分发版带编译扩展 _charsetprober，在部分 Windows 机器上
+# import 会卡死在 DLL 加载（表现为任意脚本启动就挂起，无任何报错）。
+# 锁在上限 <6 走纯 Python 实现，规避该问题。
+chardet>=5.0.0,<6
 
 # ── 按需 ──
 # PDF 简历解析。不装则 parse_resume.py 只能吃 .docx / .md / .txt

@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+# 本地虚拟环境（pip install -r requirements.txt 生成），不进仓库
+.venv/
 chrome_user_data/
 post_data/
 assets/*
