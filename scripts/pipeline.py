@@ -14,6 +14,11 @@
     verify     verify_no_fabrication.py   查简历原文没有的技术词 → verify_report.json
     render     render_images.py           → applications/<公司>-<岗位>/<姓名>-<岗位>.png
 
+再往里挂了三道**自动子步骤**，跟着阶段跑、不是独立阶段：
+    - 计划里含任何 LLM 阶段时，跑之前先 `llm_check.py --no-call` 预检配置，缺了早停
+    - materials 之后自动 `write_application_md.py --all` 落盘 岗位信息+招呼语.md
+    - render 之后自动 `verify_image.py <applications> --all` 把图检数字打给模型看
+
 **不给 `--to` 就只跑一个阶段。** 一次跑一步，每步跑完自己看一眼再决定要不要往下 ——
 下游那几步不是免费的：materials 按岗位调两次模型（招呼语 + 简历优化），deep 按岗位调一次。
 把整轮设成默认，等于让「我先跑跑看」顺手把钱花在一批你还没过目的岗位上。
@@ -601,6 +606,22 @@ def main(argv=None):
     partial = []        # 记下退出码 3 的阶段：跑完了但有缺口
     started = time.monotonic()
 
+    # ── LLM 预检：本计划里有没有要烧模型的阶段？有就先查一遍配置，缺了早停。
+    #    这套 CLI 最高频的失败方式就是「key/model 配错，跑到爬取/匹配中段才发现」——
+    #    那正是最贵的时候。--no-call 只查配置、不发请求，连通性留到真调用时再看。
+    #    退出码：0 = 可用，1 = 配置缺失/非法（pipeline 停在这里，让用户去配）。
+    llm_plan = [s for s in plan if s in _LLM_STAGES]
+    if llm_plan:
+        pre = [sys.executable, script('llm_check.py'), '--no-call'] + llm_flags(args)
+        if args.dry_run:
+            print('\n▶ llm_check（预检）\n  %s' % show(pre))
+        else:
+            pre_code = run_stage('llm_check', pre, run_dir)
+            if pre_code != 0:
+                print('❌ LLM 配置预检失败（退出码 %d）。上面印了缺什么、三种配法。' % pre_code)
+                print('  配好后再跑：%s' % resume_cmd(run_dir, plan[0], plan[-1]))
+                return 1
+
     for name in plan:
         cmd = build_cmd(name, args, ctx)
 
@@ -629,6 +650,10 @@ def main(argv=None):
                 # write_application_md 是 materials 之后自动落盘的子步骤，dry-run 也要露出来
                 print('\n▶ write_application_md\n  %s'
                       % show([sys.executable, script('write_application_md.py'), run_dir, '--all']))
+            elif name == 'render':
+                # verify_image 是 render 之后自动图检的子步骤 —— 见 render 的核查分支
+                print('\n▶ verify_image\n  %s' % show([sys.executable, script('verify_image.py'),
+                                                      os.path.join(run_dir, 'applications'), '--all']))
             continue
 
         code = run_stage(name, cmd, run_dir, timed=(name == 'crawl'))
@@ -699,6 +724,27 @@ def main(argv=None):
                       % run_dir)
                 if 'materials' not in partial:
                     partial.append('materials')
+
+        elif name == 'render':
+            # ── render 之后顺手核查一遍渲染出来的图。之前这是 render 之后一道手工
+            #    命令（SKILL.md 里的 verify_image.py），现在并入 render —— 图刚渲出来
+            #    就把十几行数字打给模型看，不用再单独敲一条。verify_image 只读文件、
+            #    不碰浏览器，替代的是「Read 一张 0.5MB 的 PNG = 640k token」。
+            #    注意：这里只能走到 —— 说明 render 真跑了（--resume-mode skip 时 render
+            #    的 cmd 是 None，在上面的 continue 分支就跳过了，不会到这里）。
+            vdir = os.path.join(run_dir, 'applications')
+            vcmd = [sys.executable, script('verify_image.py'), vdir, '--all']
+            v_code = run_stage('verify_image', vcmd, run_dir)
+            if v_code != 0:
+                # 图检退 1 是「有可疑项」不是脚本坏了 —— 上面逐条数字就是给人读的。
+                # render 是终点阶段，停不停都拿不到更多产物，所以记成部分成功（退 3）
+                # 让收尾提示带上它，而不是硬拦下来。
+                print('  ⚠ 上面有图有可疑项（空图/截断/大片留白）。逐条看数字判断：')
+                print('    确属坏图 → python scripts/render_images.py "%s" --only <序号> 重渲'
+                      % run_dir)
+                print('    只是留白可接受 → 继续无妨。')
+                if 'render' not in partial:
+                    partial.append('render')
 
     if args.dry_run:
         print('\n--dry-run：以上命令均未执行。')

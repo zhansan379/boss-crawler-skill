@@ -66,7 +66,7 @@ export LLM_MODEL=deepseek-chat
 
 阶段名只有五个，**必须逐字写对**：`parse`（简历解析）、`infer`（爬取参数推断）、`deep`（岗位深度分析）、`greeting`（招呼语）、`resume`（简历优化）。写错不会报错，只是那段覆盖静默不生效。
 
-**先验一下再跑**：
+**先验一下再跑**（`pipeline.py` 会在任何 LLM 阶段前自动跑 `--no-call` 预检，这里单独跑是给「只想查配置、不整轮跑」的场景）：
 
 ```bash
 python scripts/llm_check.py               # 打印生效配置（key 打码）并真发一次请求
@@ -203,6 +203,8 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
 
 「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--all`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
+
+同理还有两道自动子步骤：**`render` 之后自动跑 `verify_image.py <run_dir>/applications --all`** 图检（图刚渲出来就把几十行数字打给模型看，替代 Read 一张 640k token 的 PNG）；**计划里含任何 LLM 阶段时，`parse` 之前自动跑 `llm_check.py --no-call` 预检配置**（缺了早停，不把最贵的爬取/匹配跑死在配置上）。
 
 ### parse_resume.py — 简历 → profile.json
 

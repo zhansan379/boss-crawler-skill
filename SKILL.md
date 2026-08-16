@@ -32,7 +32,7 @@ parse → infer → crawl → match → deep → merge → materials → verify 
 
 ## 前置条件：LLM 配置
 
-每个推断阶段都需要 API key。在别的任何事之前先检查一次，切莫晚于第一次 `parse`：
+每个推断阶段都需要 API key。**pipeline 会在计划里含任何 LLM 阶段时自动跑预检**（`llm_check.py --no-call`，紧跟运行目录之后、`parse` 之前），所以不用单独敲这条命令——预检退出 1 会停掉整次运行，把三种配置方式打给你看。单独跑仍然可用，当你只想查配置、不想走整条流水线时：
 
 ```bash
 python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺失/非法
@@ -81,7 +81,7 @@ python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺
 
 ```
 进度：
-- [ ] llm_check.py --no-call        (前置条件——退出 1 会停掉整次运行)
+- [ ] 前置：LLM 配置预检（pipeline 会自动跑 llm_check.py --no-call，退出 1 会停掉整次运行）
 - [ ] 路径选择：一次 AskUserQuestion，4 个选项 (A / B / C / D)
 - [ ] 阶段 0：启动简历编辑器（路径 D——终止步骤）
 - [ ] parse:     简历文件 → profile.json
@@ -89,13 +89,9 @@ python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺
 - [ ] crawl:     后台运行，然后检查下限（路径 A、C）
 - [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json
 - [ ] gate:jobs  一次 AskUserQuestion：投哪些 + 招呼语方式 + 图片方式
-- [ ] materials: 招呼语 + 优化后简历
+- [ ] materials: 招呼语 + 优化后简历（后自动落盘 岗位信息+招呼语.md）
 - [ ] verify:    没有凭空造技能（退出 1 = 发现了——停下给用户看）
-- [ ] render:    简历长图（用 --no-images 跳过）
-- [ ] materials 后自动落盘 岗位信息+招呼语.md（无需手动 — 见下）
-- [ ] verify_image.py  看一眼长图（返回数字，不加载图片）
-- [ ] gate:send  一次 AskUserQuestion → apply.py --yes
-- [ ] verify_image.py  看一眼长图（返回数字，不加载图片）
+- [ ] render:    简历长图（用 --no-images 跳过；后自动 verify_image 图检）
 - [ ] gate:send  一次 AskUserQuestion → apply.py --yes
 ```
 
@@ -396,7 +392,7 @@ python scripts/pipeline.py --from render --only 1,3,5
 
 `岗位信息+招呼语.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py --all`，为每个岗位写 `applications/{company}-{position}/岗位信息+招呼语.md`（所有爬取字段加招呼语；绝不手写）。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。
 
-你只需检查长图：
+长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/applications" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
 
 ```bash
 python scripts/verify_image.py "{run_dir}/applications" --all

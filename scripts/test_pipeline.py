@@ -83,8 +83,8 @@ def run_capture(argv):
 
 
 def stages_ran():
-    # 只数真阶段。write_application_md 是 render 的前置子步骤，不是 STAGES 一员，
-    # 不该让它把「阶段顺序」的断言搞出个子项。
+    # 只数真阶段。llm_check / write_application_md / verify_image 都是自动子步骤，
+    # 不是 STAGES 一员，不该让它们把「阶段顺序」的断言搞出个子项。
     return [name for name, _ in RAN if name in pipeline.STAGES]
 
 
@@ -474,6 +474,80 @@ def main():
               code == 0 and 'write_application_md' in names, '%s / %s' % (code, names))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+    print('\n=== 17. LLM 阶段存在时先跑 llm_check 预检，配置缺就停 ===')
+    # 计划里含 parse（LLM 阶段）→ 必须先跑 llm_check --no-call；预检失败 → 停，
+    # 一个阶段都不跑。纯 quick 但计划里没有任何 LLM 阶段时不预检（省得白跑）。
+    resume = tempfile.mktemp(suffix='.md')      # 全局 resume 在用例 15 末尾被删了，这里重建
+    with open(resume, 'w', encoding='utf-8') as f:
+        f.write('# 张三\nPython 后端开发，3 年经验。')
+    run_dir = build_run_dir(
+        params={'keywords': ['Python'], 'cities': ['杭州'], 'match_mode': 'quick'},
+        scored={'tier1': [scored_job('XX科技', 'Java开发', 'https://x/1')], 'tier2': []},
+        qualified=[{'公司': 'XX科技', '职位': 'Java开发', 'link': 'https://x/1'}],
+        materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
+    try:
+        CODES.clear()
+        CODES['llm_check'] = 1                  # 配置缺失
+        code = run([resume, '--run-dir', run_dir, '--all'])
+        check('预检失败 → 退出码 1', code == 1, '实际 %s' % code)
+        check('配置缺就停在预检，一个阶段都不跑', stages_ran() == [], str(stages_ran()))
+        check('预检用的 --no-call（不花钱）',
+              '--no-call' in cmd_of('llm_check'), pipeline.show(cmd_of('llm_check')))
+
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--all'])
+        check('预检通过 → 整轮照常跑', code == 0, '实际 %s' % code)
+        all_names = [n for n, _ in RAN]
+        check('llm_check 在 parse 之前跑',
+              'llm_check' in all_names
+              and all_names.index('llm_check') < all_names.index('parse'),
+              str(all_names))
+
+        # 计划里一个 LLM 阶段都没有（快速模式从 crawl 起）→ 不该预检
+        CODES.clear()
+        run([resume, '--run-dir', run_dir, '--from', 'crawl', '--to', 'crawl'])
+        check('无 LLM 阶段的计划不预检', 'llm_check' not in [n for n, _ in RAN],
+              str([n for n, _ in RAN]))
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        os.remove(resume)
+
+    print('\n=== 18. render 之后自动跑 verify_image 图检 ===')
+    resume = tempfile.mktemp(suffix='.md')
+    with open(resume, 'w', encoding='utf-8') as f:
+        f.write('# 张三\nPython 后端开发，3 年经验。')
+    run_dir = build_run_dir(
+        params={'keywords': ['Python'], 'cities': ['杭州'], 'match_mode': 'quick'},
+        scored={'tier1': [scored_job('XX科技', 'Java开发', 'https://x/1')], 'tier2': []},
+        materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
+    try:
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--all'])
+        names = [n for n, _ in RAN]
+        check('退出码 0', code == 0, '实际 %s' % code)
+        check('verify_image 在 render 之后跑',
+              'verify_image' in names and 'render' in names
+              and names.index('verify_image') > names.index('render'), str(names))
+        vcmd = cmd_of('verify_image')
+        check('verify_image 指向 applications 目录并 --all',
+              any('applications' in c for c in vcmd) and '--all' in vcmd,
+              pipeline.show(vcmd))
+
+        # 图检查出可疑项 → 记成部分成功（退 3），不硬拦
+        CODES.clear()
+        CODES['verify_image'] = 1
+        code = run([resume, '--run-dir', run_dir, '--all'])
+        check('图检有可疑项 → 退出码 3（部分成功）', code == 3, '实际 %s' % code)
+
+        # --no-images 不渲染 → 没有图可检，verify_image 也不该跑
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--all', '--no-images'])
+        check('--no-images 下 verify_image 不跑', 'verify_image' not in [n for n, _ in RAN],
+              str([n for n, _ in RAN]))
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        os.remove(resume)
 
     print('\n' + '=' * 60)
     if failures:
