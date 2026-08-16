@@ -36,7 +36,11 @@ def create_run_dir(base_dir: Optional[str] = None) -> str:
 
     # 四个桶：state/materials/deliver/intermediate。先建好让目录结构自明；
     # 各写方写前仍会 os.makedirs 兜底（--run-dir 指向已有目录时桶可能不存在）。
-    import paths
+    # 用相对导入：paths 与 config 同属 resume_matcher 包，裸 `import paths`
+    # 会隐式要求 scripts/resume_matcher/ 也进 sys.path（Windows 下 PYTHONPATH
+    # 还得用 ; 分隔），从 scripts/pipeline.py 直启时没有它、必挂。相对导入只要
+    # resume_matcher 包可导入就成立，与怎么加 sys.path 无关。
+    from . import paths
     for _sub in (paths.state_dir(run_dir), paths.materials_dir(run_dir),
                  paths.deliver_dir(run_dir), paths.intermediate_dir(run_dir)):
         os.makedirs(_sub, exist_ok=True)
