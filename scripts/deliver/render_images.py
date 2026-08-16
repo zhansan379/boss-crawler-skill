@@ -171,11 +171,11 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
     """把 materials/resume_*.json 渲染成 deliver/#N-<公司>-<岗位>/<姓名>-<岗位>.png。
 
     只向岗位目录写最终要交的 PNG（和投递.md，那是 write_application_md 的事）。
-    优化后的简历正文不进岗位目录 —— 想看或改就用 read_thin.py 读 materials/resume_#.json，
-    避免同一份内容在多个地方派生、漂移（见 SKILL.md 的去冗余说明）。
+    同时把完整优化简历正文以 <姓名>-<岗位>.md 落盘到同一岗位目录（与长图同名同目录，
+    供人读/改；长图是投递给 HR 的附件，md 是给主人留存编辑的副本）。
 
     返回 (items, failures)。item 是 dict：index / job_dir / staged_path /
-    staged_name / png_path。
+    staged_name / png_path / md_path。
     """
     staging_dir = showcv_staging_dir(run_dir)
     os.makedirs(staging_dir, exist_ok=True)
@@ -209,12 +209,18 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
         with open(staged_path, 'w', encoding='utf-8') as f:
             f.write(markdown if markdown.endswith('\n') else markdown + '\n')
 
+        # 完整优化简历正文落盘到岗位目录，与长图同名：<姓名>-<岗位>.md
+        md_path = os.path.join(job_dir, base + '.md')
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(markdown if markdown.endswith('\n') else markdown + '\n')
+
         items.append({
             'index': index,
             'job_dir': job_dir,
             'staged_path': staged_path,
             'staged_name': staged_name,
             'png_path': os.path.join(job_dir, base + '.png'),
+            'md_path': md_path,
         })
     return items, failures
 
@@ -388,6 +394,7 @@ def distribute(items, pngs):
         shutil.copyfile(source, item['png_path'])
         size = os.path.getsize(item['png_path']) / 1024.0
         print('    #%d → %s  %.1fKB' % (item['index'], item['png_path'], size))
+        print('      → %s（优化简历 .md）' % item['md_path'])
     return missing
 
 
@@ -508,6 +515,7 @@ def main():
                                      '--url', '<url>', '--yes'] + names))
         for item in items:
             print('    #%d %s → %s' % (item['index'], item['staged_name'], item['png_path']))
+            print('      → %s（优化简历 .md）' % item['md_path'])
         return 0
 
     # ── 2. 端口归属（写操作之前） ──
