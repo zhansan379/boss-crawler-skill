@@ -4,7 +4,7 @@
 核心断言只有一条，但它是这条流水线最重要的一条：**不给 --yes 时
 auto_apply_jobs 的调用次数必须是 0**。其余用例覆盖「材料缺失一律不投」。
 
-跑法：python scripts/test_apply_gate.py
+跑法：python tests/test_apply_gate.py
 """
 
 import os
@@ -14,7 +14,7 @@ import json
 import shutil
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

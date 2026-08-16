@@ -8,7 +8,7 @@ infer_params.py 读它来决定印哪种形态的修复命令。这种契约两�
 第 8 组盯的是同一类事的另一面：印出来的命令里那个**路径**在当前工作目录下必须真的
 存在。写死路径的提示在一半场景下粘不动，而这些提示恰恰只有卡住的人才会读到。
 
-跑法：python scripts/test_infer_hint.py
+跑法：python tests/test_infer_hint.py
 """
 
 import io
@@ -20,7 +20,7 @@ import shutil
 import tempfile
 import contextlib
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

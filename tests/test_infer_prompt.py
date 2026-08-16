@@ -10,7 +10,7 @@
 日期没进提示词的话，模型只能看简历措辞猜 —— 往届和在校的简历措辞是一样的，这种错
 表现成「爬回来一批全职岗」，看不出是提示词的问题。
 
-跑法：python scripts/test_infer_prompt.py
+跑法：python tests/test_infer_prompt.py
 """
 
 import io
@@ -24,7 +24,7 @@ import contextlib
 from string import Formatter
 from datetime import date
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

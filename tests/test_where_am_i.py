@@ -14,7 +14,7 @@
 另外盯两条安全线：投递命令不许自带 `--yes`（不可撤销），目检必须走
 verify_image.py 而不是 Read 图片。
 
-跑法: python scripts/test_where_am_i.py
+跑法: python tests/test_where_am_i.py
 """
 
 import os
@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK

@@ -12,13 +12,13 @@
    写就不能替用户猜一个。测试里给一份完全没有 availability 的简历，断言输出里不
    出现任何到岗承诺的字样。
 
-用法：python scripts/test_greeting.py
+用法：python tests/test_greeting.py
 """
 
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 from resume_matcher.config import ResumeProfile
 from resume_matcher.auto_apply import (

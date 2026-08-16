@@ -15,7 +15,7 @@
    没匹配上的岗位由 `matched < total` 报出来，而不是留一列空白让人以为分数就是空的。
 5. **不能把 JD 正文带出来**。这个视图是给主上下文读的，泄一段 JD 就失去意义。
 
-跑法: python scripts/test_match_index.py
+跑法: python tests/test_match_index.py
 """
 
 import os
@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK

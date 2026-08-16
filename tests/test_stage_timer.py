@@ -8,7 +8,7 @@ run_timings.jsonl），所以它有两条硬约束：合并同名阶段、以及
 
 原先这些用例挂在 test_deep_shards.py 里（分片方案已删），拆出来独立成文件。
 
-跑法: python scripts/test_stage_timer.py
+跑法: python tests/test_stage_timer.py
 """
 
 import os
@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK，✅ 会抛

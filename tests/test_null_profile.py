@@ -15,13 +15,13 @@
 
 结论：凡是从 JSON 读出来的值，兜底一律用 `or`，不要用 `get` 的第二参数。
 
-用法：python scripts/test_null_profile.py
+用法：python tests/test_null_profile.py
 """
 
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 from resume_matcher.config import ResumeProfile
 from resume_matcher.scoring import classify_jobs_advanced

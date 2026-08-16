@@ -370,10 +370,10 @@ if [ $code -eq 3 ]; then echo "部分产物缺失，检查后重跑"; fi
 不发任何真实请求、不碰浏览器，可离线跑：
 
 ```bash
-for f in scripts/test_*.py; do python "$f" || echo "FAIL $f"; done
+for f in tests/test_*.py; do python "$f" || echo "FAIL $f"; done
 ```
 
-其中几个是接缝测试，值得知道它们在盯什么：
+测试脚本集中在 `tests/` 目录（`python tests/test_xxx.py` 单独跑）。其中几个是接缝测试，值得知道它们在盯什么：
 
 - `test_llm_client.py` — JSON 提取三形态、重试边界（429 重试 / 401 不重试）、并发隔离与顺序、配置优先级、api_key 不出现在任何报错或日志里
 - `test_deep_analyze.py` — 产出真的能被**真实的** `merge_deep_results` 吃下，rank 不错位

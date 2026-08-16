@@ -7,7 +7,7 @@
 
 用 BOSS_SKILL_ASSETS 指向临时目录，不碰真实的 assets/preferences.json。
 
-跑法: python scripts/test_preferences.py
+跑法: python tests/test_preferences.py
 """
 
 import json
@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 FAILURES = []

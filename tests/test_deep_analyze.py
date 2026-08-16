@@ -14,7 +14,7 @@
 所以这里不 mock merge —— 真的调 resume_matcher.deep_analysis.merge_deep_results，
 真的读它写出来的 qualified_jobs.json。只有 LLM 请求是假的（stub chat_json）。
 
-跑法：python scripts/test_deep_analyze.py
+跑法：python tests/test_deep_analyze.py
 """
 
 import os
@@ -23,7 +23,7 @@ import json
 import shutil
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

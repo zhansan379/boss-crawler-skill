@@ -16,7 +16,7 @@
 所以这里不 mock check_artifacts，也不 mock write_application_md 的回找逻辑 ——
 真的调它们。只有 LLM 请求是假的。
 
-跑法：python scripts/test_gen_materials.py
+跑法：python tests/test_gen_materials.py
 """
 
 import os
@@ -26,7 +26,7 @@ import shutil
 import tempfile
 import argparse
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

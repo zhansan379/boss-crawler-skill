@@ -10,7 +10,7 @@ HR 活跃度就这么丢过一次：JSON 正常，HTML 每张卡都显示「未�
 两个产出（HTML 内嵌 JSON / job_classification.json）× 两种模式，
 字段集必须完全一致，且都必须等于 JOB_VIEW_FIELDS。
 
-用法: python scripts/test_job_view.py
+用法: python tests/test_job_view.py
 """
 import json
 import os
@@ -18,7 +18,7 @@ import re
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 from resume_matcher import (  # noqa: E402
     JOB_VIEW_FIELDS,

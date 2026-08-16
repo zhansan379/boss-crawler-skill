@@ -15,7 +15,7 @@
 6. **提示要能直接粘出去跑**。序号去重、放行名单按词截断。
 7. **退出码**：0 干净 / 1 有发现或缺前置 / 2 用法错 / 3 部分材料读不动。
 
-跑法: python scripts/test_verify_no_fabrication.py
+跑法: python tests/test_verify_no_fabrication.py
 """
 
 import os
@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK

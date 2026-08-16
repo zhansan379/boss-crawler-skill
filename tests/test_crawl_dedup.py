@@ -7,7 +7,7 @@
   crawler.should_skip_remaining_pages  单页重复率判定
   resume_matcher.load_job_data         加载侧兜底去重
 
-不开浏览器，全是纯函数。跑法: python scripts/test_crawl_dedup.py
+不开浏览器，全是纯函数。跑法: python tests/test_crawl_dedup.py
 """
 
 import csv
@@ -17,7 +17,7 @@ import shutil
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, HERE)
 
 from boss_crawler.config import CSV_FIELDS, DUP_PAGE_MIN_LINKS, ENCODING

@@ -14,7 +14,7 @@
   · 配置优先级：「我明明配了却没生效」是这类模块最常见的困惑，五个阶段名也在这里钉住。
   · key 不外泄：报错信息和配置摘要会被贴进 issue、日志、终端截图。
 
-跑法：python scripts/test_llm_client.py
+跑法：python tests/test_llm_client.py
 """
 
 import os
@@ -24,7 +24,7 @@ import shutil
 import tempfile
 import threading
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

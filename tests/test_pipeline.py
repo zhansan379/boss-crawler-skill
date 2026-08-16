@@ -11,7 +11,7 @@
 做法：换掉 pipeline.run_stage（真正 fork 子进程的地方），记录被调用的阶段与命令。
 阶段之后的产物核查照旧真跑（读真文件），因为那正是要测的东西。
 
-跑法：python scripts/test_pipeline.py
+跑法：python tests/test_pipeline.py
 """
 
 import os
@@ -22,7 +22,7 @@ import shutil
 import tempfile
 import contextlib
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')

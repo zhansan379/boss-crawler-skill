@@ -13,7 +13,7 @@
 判据是 isatty()。这个测试把两边都钉住：交互式必须等回车，非交互式必须一次都不问。
 外加一条：复检只由回车触发，脚本自己不许轮询重试。
 
-跑法：python scripts/test_ensure_login.py
+跑法：python tests/test_ensure_login.py
 """
 
 import io
@@ -24,7 +24,7 @@ import shutil
 import tempfile
 import contextlib
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')
