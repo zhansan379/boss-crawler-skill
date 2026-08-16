@@ -40,6 +40,17 @@ except ImportError:                                          # pragma: no cover
     except ImportError:
         stage_timer = None
 
+# 浏览器可执行文件定位：本模块是 resume_matcher 包，browser_finder 在 scripts/ 根，
+# 同样靠把父目录塞进 sys.path（与上面 stage_timer 同款做法）。找不到也不碍事，
+# 找不到浏览器时下方投递代码自然退化成「不显式 set_browser_path」。
+_STAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # scripts/
+if _STAGE_DIR not in sys.path:
+    sys.path.insert(0, _STAGE_DIR)
+try:
+    from browser_finder import find_chrome_browser
+except ImportError:                                          # pragma: no cover
+    find_chrome_browser = None
+
 # 尝试导入浏览器自动化库
 try:
     from DrissionPage import WebPage, ChromiumOptions
@@ -768,11 +779,14 @@ def _auto_apply_jobs_impl(
     print(f"  招呼语来源: {'Claude 预生成' if greetings else '模板自动生成'}")
     print(f"{'='*60}")
 
-    # 配置浏览器（复用 Chrome 用户数据，保留登录态）
+    # 配置浏览器（复用 Chrome 用户数据，保留登录态）。
+    # 浏览器可执行文件走 browser_finder 分层探测（env → PATH → 注册表 → 拼路径），
+    # 探测不到就跳过 set_browser_path，交给 DrissionPage 默认逻辑。
     co = ChromiumOptions()
-    chrome_path = r"C:\Users\feng1\AppData\Local\Google\Chrome\Application\chrome.exe"
-    if os.path.exists(chrome_path):
-        co.set_browser_path(chrome_path)
+    if find_chrome_browser:
+        chrome_path = find_chrome_browser()
+        if chrome_path:
+            co.set_browser_path(chrome_path)
 
     # 持久化 Chrome Profile（复用登录状态，位于 assets/chrome_user_data）
     user_data_dir = os.path.join(OUTPUT_DIR, 'chrome_user_data')

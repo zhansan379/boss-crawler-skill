@@ -17,6 +17,14 @@ from DrissionPage import Chromium, ChromiumOptions
 # scripts/showcv/_browser.py → 上溯三级到 skill 根
 SKILL_ROOT = Path(__file__).resolve().parents[2]
 
+# 本脚本以 `python scripts/showcv/xxx.py` 运行，sys.path[0] 是自己所在目录；
+# browser_finder 在 scripts/ 根，需手动把上一级加进来（和 stage_timer 同款做法）。
+_SCRIPTS = Path(__file__).resolve().parents[1]
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+from browser_finder import find_chrome_browser
+
 # 放在 assets/ 下有两个原因：首启后约 28MB（Chrome 自己的缓存），
 # 而 assets/* 已被 .gitignore 覆盖；且和 assets/chrome_user_data/（BOSS 登录态）
 # 刻意分开 —— 简历编辑器不该跑在登录了 zhipin.com 的那个浏览器里。
@@ -24,13 +32,6 @@ PROFILE_DIR = SKILL_ROOT / 'assets' / 'showcv_profile'
 
 # 9222 是通用默认值，也是 boss_crawler 在用的，撞上会互相接管窗口
 DEBUG_PORT = 9333
-
-BROWSER_CANDIDATES = (
-    r'C:\Program Files\Google\Chrome\Application\chrome.exe',
-    r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
-    r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
-    r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
-)
 
 
 def use_utf8_output() -> None:
@@ -40,11 +41,14 @@ def use_utf8_output() -> None:
 
 
 def find_browser() -> str:
-    """ChromiumOptions 默认的 browser_path 是裸 'chrome'，不在 PATH 里就起不来。"""
-    for candidate in BROWSER_CANDIDATES:
-        if Path(candidate).is_file():
-            return candidate
-    raise SystemExit('找不到 Chrome 或 Edge，用 --browser 显式指定可执行文件路径')
+    """定位浏览器可执行文件；自动探测全落空时给出明确的指定入口。"""
+    path = find_chrome_browser()
+    if path:
+        return path
+    raise SystemExit(
+        '找不到 Chrome 或 Edge。用 --browser <exe> 显式指定，'
+        '或设环境变量 CHROME_PATH / BROWSER_PATH。'
+    )
 
 
 def connect(browser: str | None = None, headless: bool = False) -> Chromium:
@@ -103,7 +107,7 @@ def real_profile(browser: Chromium) -> str:
     if not pid:
         return '未能确认（拿不到浏览器进程 pid）'
 
-    # Windows 专用；这个技能的浏览器探测路径本来就是 Windows 的（BROWSER_CANDIDATES）
+    # Windows 专用；这个技能的浏览器探测路径本来就是 Windows 的（见 browser_finder）
     try:
         line = subprocess.run(
             ['powershell', '-NoProfile', '-Command',
