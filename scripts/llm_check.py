@@ -43,9 +43,13 @@ def main() -> int:
     ap.add_argument('--base-url')
     ap.add_argument('--api-key')
     ap.add_argument('--model')
+    ap.add_argument('--protocol', choices=['openai', 'anthropic'],
+                    help='协议：openai（/chat/completions）或 anthropic（/v1/messages，Claude Code 的协议）。'
+                         '不传则按 base_url 自动判断')
     args = ap.parse_args()
 
-    overrides = {'base_url': args.base_url, 'api_key': args.api_key, 'model': args.model}
+    overrides = {'base_url': args.base_url, 'api_key': args.api_key,
+                 'model': args.model, 'protocol': args.protocol}
     warnings: list = []
 
     try:
@@ -115,7 +119,9 @@ def _hint() -> str:
     return ('\n排查顺序：\n'
             '  1. base_url 是否带了版本段（DeepSeek 用 /v1，火山方舟用 /api/v3）\n'
             '  2. model 名称是否是该服务商的合法模型 ID（401 是 key 错，404 多半是模型名错）\n'
-            '  3. 是否需要代理（本模块直连，不读 HTTP_PROXY 之外的设置）')
+            '  3. 协议是否对上：Claude Code 的协议是 anthropic（/v1/messages），用\n'
+            '     --protocol anthropic 或 base_url 指向 api.anthropic.com 会自动识别\n'
+            '  4. 是否需要代理（本模块直连，不读 HTTP_PROXY 之外的设置）')
 
 
 if __name__ == '__main__':

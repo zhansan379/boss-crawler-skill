@@ -77,6 +77,12 @@ def ok_body(content, tokens=(10, 5, 15)):
                       'total_tokens': tokens[2]}}
 
 
+def anthropic_body(content, tokens=(10, 5)):
+    """Anthropic Messages API 的响应形态：正文在 content 块数组里，用量是 input/output。"""
+    return {'content': [{'type': 'text', 'text': content}],
+            'usage': {'input_tokens': tokens[0], 'output_tokens': tokens[1]}}
+
+
 def cfg(**over):
     """测试用配置：不读真实配置文件、不读真实环境变量。"""
     base = dict(base_url='https://fake.local/v1', api_key=SECRET, model='m-test',
@@ -408,6 +414,104 @@ def main():
             check('base_url 空要抛 ConfigError', False, '没抛')
         except CF.ConfigError:
             check('base_url 空要抛 ConfigError', True)
+
+        # ================================================================
+        print('\n=== 8.5 Anthropic Messages API（Claude Code 的协议） ===')
+        # 请求体：x-api-key + anthropic-version 头、system 提顶层、content 块数组、
+        # max_tokens 强制、没有 response_format
+        fake = install([_Resp(200, anthropic_body('答'))])
+        C.chat('问', system='你是助手', cfg=cfg(protocol='anthropic'), stage='parse')
+        call = fake.calls[0]
+        check('anthropic 用 x-api-key 头', call['headers'].get('x-api-key') == SECRET,
+              call['headers'])
+        check('anthropic 带 anthropic-version',
+              call['headers'].get('anthropic-version') == '2023-06-01', call['headers'])
+        check('anthropic 不用 Bearer Authorization', 'Authorization' not in call['headers'],
+              call['headers'])
+        payload = call['payload']
+        check('system 提到顶层', payload.get('system') == '你是助手', payload)
+        check('messages 里只剩 user', [m['role'] for m in payload['messages']] == ['user'],
+              payload)
+        check('content 是 {type:text} 块数组',
+              payload['messages'][0]['content'] == [{'type': 'text', 'text': '问'}],
+              payload['messages'][0]['content'])
+        check('anthropic 强制带 max_tokens', isinstance(payload.get('max_tokens'), int),
+              payload)
+        check('anthropic 不加 response_format', 'response_format' not in payload, payload)
+
+        # 响应解析：content[] 里的多个 text 块拼接；用量 input/output 归一
+        multi = {'content': [{'type': 'text', 'text': '{"a":'},
+                             {'type': 'text', 'text': '1}'}],
+                 'usage': {'input_tokens': 10, 'output_tokens': 5}}
+        fake = install([_Resp(200, multi)])
+        C.chat_json('{"a":', cfg=cfg(protocol='anthropic'), stage='parse')
+        check('anthropic 只发一次请求（各块拼接后能解析）',
+              len(fake.calls) == 1, len(fake.calls))
+
+        anth_dir = os.path.join(tmp, 'anthropic')
+        fake = install([_Resp(200, anthropic_body('{"ok": true}', (10, 5)))])
+        result = C.chat_json('问', cfg=cfg(protocol='anthropic'),
+                             run_dir=anth_dir, stage='parse')
+        check('anthropic 正文解析为 JSON', result == {'ok': True}, result)
+        s = C.usage_summary(anth_dir)
+        check('anthropic 用量 input/output→prompt/completion',
+              s['prompt_tokens'] == 10 and s['completion_tokens'] == 5
+              and s['total_tokens'] == 15, s)
+
+        # anthropic 空正文也当可重试
+        fake = install([_Resp(200, {'content': [{'type': 'text', 'text': '  '}],
+                                    'stop_reason': 'max_tokens'}),
+                        _Resp(200, anthropic_body('补上了'))])
+        out = C.chat('问', cfg=cfg(protocol='anthropic'), stage='parse')
+        check('anthropic 空正文当作可重试',
+              out == '补上了' and len(fake.calls) == 2, '%r / %d 次' % (out, len(fake.calls)))
+
+        # endpoint 拼装：anthropic 走 /v1/messages，openai 不受影响
+        check('anthropic 裸域名',
+              CF.chat_endpoint('https://api.anthropic.com', 'anthropic')
+              == 'https://api.anthropic.com/v1/messages')
+        check('anthropic 已有 /v1',
+              CF.chat_endpoint('https://x.com/v1', 'anthropic')
+              == 'https://x.com/v1/messages')
+        check('anthropic 已是完整 /messages 不再追加',
+              CF.chat_endpoint('https://x.com/v1/messages', 'anthropic')
+              == 'https://x.com/v1/messages')
+        check('默认协议仍走 chat/completions',
+              CF.chat_endpoint('https://x.com/v1')
+              == 'https://x.com/v1/chat/completions')
+
+        # 协议自动识别 + 显式覆盖 + ANTHROPIC_* 环境变量
+        empty_cfg = os.path.join(tmp, '无配置文件.json')
+        ca = CF.resolve(config_path=empty_cfg, env={}, base_url='https://api.anthropic.com')
+        check('host 含 anthropic 自动识别协议', ca.protocol == 'anthropic', ca.protocol)
+        check('自动识别来源标 auto', ca.source['protocol'] == 'auto', ca.source)
+        check('自动识别的 endpoint 是 /v1/messages',
+              ca.endpoint() == 'https://api.anthropic.com/v1/messages', ca.endpoint())
+        check('普通端点默认 openai',
+              CF.resolve(config_path=empty_cfg, env={},
+                         base_url='https://api.deepseek.com/v1').protocol == 'openai')
+        cex = CF.resolve(config_path=empty_cfg, env={},
+                         base_url='https://api.deepseek.com/v1', protocol='anthropic')
+        check('显式 protocol 覆盖自动判断', cex.protocol == 'anthropic', cex.protocol)
+        check('显式来源标 cli', cex.source['protocol'] == 'cli', cex.source)
+        canth = CF.resolve(config_path=empty_cfg,
+                           env={'ANTHROPIC_BASE_URL': 'https://api.anthropic.com',
+                                'ANTHROPIC_AUTH_TOKEN': 'anth-key',
+                                'ANTHROPIC_MODEL': 'claude-sonnet-5'})
+        check('认 ANTHROPIC_* 别名',
+              canth.api_key == 'anth-key' and canth.model == 'claude-sonnet-5',
+              (canth.api_key, canth.model))
+        check('ANTHROPIC_BASE_URL 自动切协议', canth.protocol == 'anthropic', canth.protocol)
+        check('describe 显示协议', 'anthropic' in CF.describe(canth), CF.describe(canth))
+
+        # 非法协议：告警并回落到自动判断，而不是抛错
+        warns = []
+        cinv = CF.resolve(config_path=empty_cfg, env={},
+                          base_url='https://api.deepseek.com/v1', protocol='grpc',
+                          warnings_out=warns)
+        check('非法协议告警 + 回落 openai',
+              cinv.protocol == 'openai' and any('不合法' in w for w in warns),
+              (cinv.protocol, warns))
 
         # ================================================================
         print('\n=== 9. key 不外泄：报错与摘要里只有打码形态 ===')

@@ -32,6 +32,11 @@ _RETRY_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 _MAX_BACKOFF = 30.0
 _USAGE_FILE = 'llm_usage.jsonl'
 
+# Anthropic Messages API（Claude Code 的协议）版本头，以及该协议强制要求的 max_tokens
+# （OpenAI 端点不传也能跑，anthropic 不传直接 400；调用方没给时用这个保守上限）。
+_ANTHROPIC_VERSION = '2023-06-01'
+_ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
+
 # 记账写文件和进度打印都要跨线程，用同一把锁：并发下两个线程同时 print 会串行成
 # 一行乱码，同时 append 会把两条 JSON 写到同一行。
 _LOCK = threading.Lock()
@@ -246,14 +251,29 @@ def _sleep_for(attempt: int, retry_after: Optional[str]) -> float:
     return base * (0.5 + random.random() * 0.5)
 
 
+def _build_headers(cfg: LLMConfig) -> Dict[str, str]:
+    """按协议组认证头。
+
+    openai 认 `Authorization: Bearer`；anthropic（Claude Code 的协议）认
+    `x-api-key` + `anthropic-version`，这两者混用会各打各的炸 —— 所以必须按协议二选一。
+    """
+    if cfg.protocol == 'anthropic':
+        return {
+            'x-api-key': cfg.api_key,
+            'anthropic-version': _ANTHROPIC_VERSION,
+            'Content-Type': 'application/json',
+        }
+    return {
+        'Authorization': 'Bearer %s' % cfg.api_key,
+        'Content-Type': 'application/json',
+    }
+
+
 def _post(cfg: LLMConfig, payload: Dict[str, Any]) -> Dict[str, Any]:
     """发一次请求，返回解析后的 JSON body。可重试的失败抛 _Retryable。"""
     if requests is None:
         raise LLMError('requests 未安装：pip install requests')
-    headers = {
-        'Authorization': 'Bearer %s' % cfg.api_key,
-        'Content-Type': 'application/json',
-    }
+    headers = _build_headers(cfg)
     try:
         resp = requests.post(cfg.endpoint(), headers=headers, json=payload,
                              timeout=cfg.timeout)
@@ -282,12 +302,29 @@ class _Retryable(Exception):
         self.retry_after = retry_after
 
 
-def _content_of(body: Dict[str, Any]) -> str:
+def _content_of(cfg: LLMConfig, body: Dict[str, Any]) -> str:
     """从响应里取正文。
+
+    openai 从 `choices[0].message.content` 取；anthropic（Claude Code 的协议）把正文
+    放在 `content` 块数组的 `{"type":"text"}` 里，逐块拼接。
 
     空 content 视为可重试：推理模型偶尔只填 reasoning_content 就返回，
     而空正文对调用方来说和失败没区别。
     """
+    if cfg.protocol == 'anthropic':
+        blocks = body.get('content')
+        if not isinstance(blocks, list):
+            raise _Retryable('响应里没有 content 块：%s'
+                             % json.dumps(body, ensure_ascii=False)[:200], None)
+        text = ''.join(
+            (b.get('text') or '') for b in blocks
+            if isinstance(b, dict) and b.get('type') == 'text'
+        )
+        if not text.strip():
+            raise _Retryable('模型返回了空正文（stop_reason=%s）'
+                             % body.get('stop_reason'), None)
+        return text
+
     choices = body.get('choices')
     if not isinstance(choices, list) or not choices:
         raise _Retryable('响应里没有 choices：%s' % json.dumps(body, ensure_ascii=False)[:200], None)
@@ -310,11 +347,32 @@ def _build_messages(prompt: str, system: Optional[str],
     return out
 
 
-def _call(cfg: LLMConfig, messages: List[Dict[str, str]], *,
-          want_json: bool, max_tokens: Optional[int],
-          run_dir: Optional[str], stage: str) -> str:
-    """带重试的一次逻辑调用，返回正文。用量无论成败都记一条。"""
-    cfg.require_key()
+def _build_payload(cfg: LLMConfig, messages: List[Dict[str, str]], *,
+                   want_json: bool, max_tokens: Optional[int]) -> Dict[str, Any]:
+    """按协议组请求体。
+
+    anthropic 与 openai 的差异都在这里：system 提到顶层、content 用块数组、
+    max_tokens 强制必填、没有 response_format 字段（JSON 靠 extract_json 兜住）。
+    """
+    if cfg.protocol == 'anthropic':
+        system = '\n\n'.join(
+            str(m.get('content')) for m in messages if m.get('role') == 'system')
+        msgs = [m for m in messages if m.get('role') != 'system']
+        payload: Dict[str, Any] = {
+            'model': cfg.model,
+            'max_tokens': max_tokens or _ANTHROPIC_DEFAULT_MAX_TOKENS,
+            'messages': [
+                {'role': m['role'],
+                 'content': [{'type': 'text', 'text': str(m.get('content'))}]}
+                for m in msgs
+            ],
+        }
+        if cfg.temperature is not None:
+            payload['temperature'] = cfg.temperature
+        if system:
+            payload['system'] = system
+        return payload
+
     payload: Dict[str, Any] = {
         'model': cfg.model,
         'messages': messages,
@@ -325,6 +383,30 @@ def _call(cfg: LLMConfig, messages: List[Dict[str, str]], *,
     if want_json and cfg.json_mode:
         # 不是所有兼容端点都支持这个字段；支持的话省事，不支持的话由 extract_json 兜住。
         payload['response_format'] = {'type': 'json_object'}
+    return payload
+
+
+def _usage_of(usage: Dict[str, Any], protocol: str) -> Dict[str, Any]:
+    """把不同协议的用量字段统一到 prompt/completion/total。
+
+    anthropic 返回 input_tokens/output_tokens（另有 cache_* 分量，算在 input 里），
+    openai 返回 prompt_tokens/completion_tokens/total_tokens。记账格式只有一套，
+    所以在这里归一。
+    """
+    if protocol == 'anthropic':
+        inp = usage.get('input_tokens') or 0
+        out = usage.get('output_tokens') or 0
+        return {'prompt_tokens': inp, 'completion_tokens': out,
+                'total_tokens': inp + out}
+    return usage
+
+
+def _call(cfg: LLMConfig, messages: List[Dict[str, str]], *,
+          want_json: bool, max_tokens: Optional[int],
+          run_dir: Optional[str], stage: str) -> str:
+    """带重试的一次逻辑调用，返回正文。用量无论成败都记一条。"""
+    cfg.require_key()
+    payload = _build_payload(cfg, messages, want_json=want_json, max_tokens=max_tokens)
 
     started = time.time()
     retries = 0
@@ -332,7 +414,7 @@ def _call(cfg: LLMConfig, messages: List[Dict[str, str]], *,
     for attempt in range(cfg.max_retries + 1):
         try:
             body = _post(cfg, payload)
-            content = _content_of(body)
+            content = _content_of(cfg, body)
         except _Retryable as exc:
             last = str(exc)
             if attempt >= cfg.max_retries:
@@ -346,7 +428,7 @@ def _call(cfg: LLMConfig, messages: List[Dict[str, str]], *,
                                  'retries': retries, 'error': str(exc)[:300]})
             raise
 
-        usage = body.get('usage') or {}
+        usage = _usage_of(body.get('usage') or {}, cfg.protocol)
         _log_usage(run_dir, {
             'stage': stage, 'model': cfg.model, 'ok': True,
             'prompt_tokens': usage.get('prompt_tokens'),

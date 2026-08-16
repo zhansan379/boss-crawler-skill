@@ -22,18 +22,23 @@ _SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__
 CONFIG_PATH = os.path.join(_SKILL_ROOT, 'assets', 'llm_config.json')
 EXAMPLE_PATH = os.path.join(_SKILL_ROOT, 'assets', 'llm_config.example.json')
 
-# 环境变量：先认 LLM_* ，再回落到 OPENAI_* 。
-# 认 OPENAI_* 是因为使用者大概率已经为别的工具设过它们，不该逼人再设一遍。
+# 环境变量：先认 LLM_* ，再回落到 OPENAI_* 与 ANTHROPIC_* 。
+# 认 OPENAI_*/ANTHROPIC_* 是因为使用者大概率已经为别的工具设过它们（Claude Code 就用
+# ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL），不该逼人再设一遍。
 _ENV_ALIASES = {
-    'base_url':    ('LLM_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE'),
-    'api_key':     ('LLM_API_KEY', 'OPENAI_API_KEY'),
-    'model':       ('LLM_MODEL', 'OPENAI_MODEL'),
+    'base_url':    ('LLM_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'ANTHROPIC_BASE_URL'),
+    'api_key':     ('LLM_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_AUTH_TOKEN'),
+    'model':       ('LLM_MODEL', 'OPENAI_MODEL', 'ANTHROPIC_MODEL'),
+    'protocol':    ('LLM_PROTOCOL',),
     'timeout':     ('LLM_TIMEOUT',),
     'max_retries': ('LLM_MAX_RETRIES',),
     'concurrency': ('LLM_CONCURRENCY',),
     'temperature': ('LLM_TEMPERATURE',),
     'json_mode':   ('LLM_JSON_MODE',),
 }
+
+# 支持的协议。空串或非法值会让 resolve 回落到按 base_url 自动判断。
+_PROTOCOLS = ('openai', 'anthropic')
 
 _INT_FIELDS = ('timeout', 'max_retries', 'concurrency')
 _FLOAT_FIELDS = ('temperature',)
@@ -50,6 +55,7 @@ class ConfigError(Exception):
 
 @dataclass
 class LLMConfig:
+    protocol: str = 'openai'
     base_url: str = 'https://api.openai.com/v1'
     api_key: str = ''
     model: str = 'gpt-4o-mini'
@@ -68,7 +74,7 @@ class LLMConfig:
         return self
 
     def endpoint(self) -> str:
-        return chat_endpoint(self.base_url)
+        return chat_endpoint(self.base_url, self.protocol)
 
     def merged(self, **overrides: Any) -> 'LLMConfig':
         """派生一份带覆盖的副本（None 值视为「没传」，不覆盖）。"""
@@ -91,8 +97,26 @@ def mask_key(key: str) -> str:
     return '%s...%s' % (key[:3], key[-4:])
 
 
-def chat_endpoint(base_url: str) -> str:
-    """base_url → chat/completions 完整地址。
+def _detect_protocol(base_url: str) -> str:
+    """按 base_url 猜协议：host 含 anthropic 或路径以 /messages 结尾 → anthropic。
+
+    只在用户没显式配 protocol 时调用。Claude Code 的协议就是 Anthropic Messages API
+    （POST /v1/messages），所以 base_url 指向 api.anthropic.com 或某个 /messages 网关时，
+    自动切到 anthropic 能省掉一次显式配置。
+    """
+    low = ((base_url or '').strip().rstrip('/')).lower()
+    if not low:
+        return 'openai'
+    if low.endswith('/messages') or 'anthropic' in low:
+        return 'anthropic'
+    return 'openai'
+
+
+def chat_endpoint(base_url: str, protocol: str = 'openai') -> str:
+    """base_url → 协议对应的完整地址。
+
+    openai   → …/chat/completions
+    anthropic → …/v1/messages （Claude Code 的协议）
 
     不无脑追加 `/v1`：火山方舟是 `/api/v3`、Azure 是 `/openai/deployments/...`，
     追加会直接打不通。只在 base_url 是**裸域名**（完全没有路径）时补 `/v1`，
@@ -101,6 +125,14 @@ def chat_endpoint(base_url: str) -> str:
     b = (base_url or '').strip().rstrip('/')
     if not b:
         raise ConfigError('base_url 为空。' + _missing_key_message())
+    if protocol == 'anthropic':
+        if b.endswith('/messages'):
+            return b
+        if not urlparse(b).path.strip('/'):
+            b += '/v1'
+        if b.endswith('/v1'):
+            return b + '/messages'
+        return b + '/v1/messages'
     if b.endswith('/chat/completions'):
         return b
     if not urlparse(b).path.strip('/'):
@@ -224,6 +256,17 @@ def resolve(stage: Optional[str] = None, config_path: Optional[str] = None,
             continue
         source[key] = 'cli'
 
+    # ── 协议：显式给了且合法就用；非法或没给，按 base_url 自动判断 ──
+    proto = kwargs.get('protocol')
+    if proto is not None and proto not in _PROTOCOLS:
+        warn.append('协议 `%s` 不合法（可选 %s），改为按 base_url 自动判断'
+                    % (proto, ' / '.join(_PROTOCOLS)))
+        proto = None
+    if proto is None:
+        base = kwargs.get('base_url') or LLMConfig.base_url
+        kwargs['protocol'] = _detect_protocol(base)
+        source['protocol'] = 'auto'
+
     cfg = LLMConfig(stage=stage or '', source=source, **kwargs)
     if cfg.concurrency < 1:
         cfg = replace(cfg, concurrency=1)
@@ -235,8 +278,9 @@ def resolve(stage: Optional[str] = None, config_path: Optional[str] = None,
 def describe(cfg: LLMConfig) -> str:
     """人读的配置摘要。api_key 只出现打码后的形式。"""
     rows = [
+        ('protocol', cfg.protocol),
         ('base_url', cfg.base_url),
-        ('endpoint', chat_endpoint(cfg.base_url) if cfg.base_url else '(无)'),
+        ('endpoint', chat_endpoint(cfg.base_url, cfg.protocol) if cfg.base_url else '(无)'),
         ('model', cfg.model),
         ('api_key', mask_key(cfg.api_key)),
         ('timeout', '%ss' % cfg.timeout),
@@ -266,7 +310,9 @@ def _missing_key_message() -> str:
         '       PowerShell: $env:LLM_API_KEY="sk-..."; $env:LLM_BASE_URL="https://..."\n'
         '       Bash:       export LLM_API_KEY=sk-... LLM_BASE_URL=https://...\n'
         '       （也认 OPENAI_API_KEY / OPENAI_BASE_URL）\n'
-        '  3) 命令行：--api-key sk-... --base-url https://... --model xxx\n'
+        '       用 Claude Code 的协议时认 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL /\n'
+        '       ANTHROPIC_MODEL，base_url 指向 api.anthropic.com 会自动识别协议\n'
+        '  3) 命令行：--api-key sk-... --base-url https://... --model xxx --protocol openai\n'
         '配好后用 `python scripts/llm_check.py` 验证连通。'
         % (os.path.relpath(EXAMPLE_PATH, _SKILL_ROOT),
            os.path.relpath(CONFIG_PATH, _SKILL_ROOT))

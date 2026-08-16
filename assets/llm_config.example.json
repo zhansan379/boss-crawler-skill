@@ -1,4 +1,5 @@
 {
+  "protocol": "openai",
   "base_url": "https://api.deepseek.com/v1",
   "api_key": "",
   "model": "deepseek-chat",
