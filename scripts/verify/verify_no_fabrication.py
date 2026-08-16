@@ -43,6 +43,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +52,7 @@ sys.path.insert(0, _SCRIPTS)
 import check_artifacts
 from check_artifacts import parse_only          # 与 materials/核对侧共用同一份严格解析
 from resume_matcher import (resume_text_path, profile_path as _profile_path,
-                            materials_dir, verify_report_path)
+                            materials_dir, verify_report_path, deliver_dir)
 
 
 def reconfigure_stdout():
@@ -60,6 +61,24 @@ def reconfigure_stdout():
             stream.reconfigure(encoding='utf-8', errors='replace')
         except (AttributeError, ValueError, OSError):
             pass
+
+
+def open_in_file_manager(path):
+    """跨平台在文件管理器里打开 path（Windows start / macOS open / Linux xdg-open）。
+
+    打开失败只提示、绝不改变 verify 的结论或退出码 —— 路径照旧打印在 stdout。
+    """
+    try:
+        if sys.platform.startswith('win'):
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', path], check=False)
+        else:
+            subprocess.run(['xdg-open', path], check=False)
+        return True
+    except Exception as exc:                    # noqa: BLE001 —— 打开失败不该放倒 verify
+        print('  （自动打开失败：%s，可手动打开上面的路径）' % exc)
+        return False
 
 
 # ==================== 取词 ====================
@@ -435,6 +454,12 @@ def main(argv=None):
             print('    • %s' % raw)
             if ctx and not args.quiet:
                 print('      %s' % ctx)
+
+    # 提示用户投递材料在哪、并自动打开该目录，方便逐份核对被标记的内容。
+    dlv_dir = os.path.normpath(os.path.abspath(deliver_dir(args.run_dir)))
+    print('\n📂 投递可读材料/报告: %s' % dlv_dir)
+    print('   已为你打开: %s' % dlv_dir)
+    open_in_file_manager(dlv_dir)
 
     # 两个提示都要能直接粘出去跑，所以：序号去重（同一个岗位的简历和招呼语
     # 各算一条 finding，不去重会打出 --only 1,1,2）；放行名单按**词**截断而不是
