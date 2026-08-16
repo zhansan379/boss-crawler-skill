@@ -123,6 +123,17 @@ def save_deep_candidates(
                 '公司信息': job.get('company_info', job.get('公司信息', '')),
                 '位置': job.get('位置', ''),
                 'source_file': job.get('source_file', ''),
+                # 投递决策信号：爬虫 (-d) 在 CSV 里采集了，这里必须透传，否则
+                # gate:jobs / apply / 投递.md 永远是「未采集」——它们读不到就无法
+                # 拦截失效岗、识别代招、按 HR 活跃度排序。前三个是 tri-state
+                # （'是'/'否'/''，'' 才是未采集），后四个是原始文本。
+                '已失效': job.get('已失效', ''),
+                '代招': job.get('代招', ''),
+                'HR活跃度': job.get('HR活跃度', ''),
+                'HR在线': job.get('HR在线', ''),
+                'HR职位': job.get('HR职位', ''),
+                'HR姓名': job.get('HR姓名', ''),
+                'HR公司': job.get('HR公司', ''),
             },
             'rule_analysis': {
                 'match_reasons': job.get('match_reasons', []),
