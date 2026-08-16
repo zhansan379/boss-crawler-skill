@@ -580,7 +580,7 @@ def main():
         targets = [(args.index, jobs[args.index - 1])]
 
     if len(targets) > 1:
-        dup = find_duplicate_links(run_dir, jobs, [i for i, _ in targets])
+        dup = find_duplicate_links(args.run_dir, jobs, [i for i, _ in targets])
         if dup:
             for link, ixs in dup.items():
                 print('❌ 同一岗位出现多次（link=%s）：%s'
