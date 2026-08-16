@@ -416,11 +416,12 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── run_matcher.py                # 匹配系统 CLI 入口
     │
     │   ── 命令行路径（每个阶段都能单独跑，详见 references/cli.md）──
-    ├── pipeline.py                   # 一条命令串完 8 个阶段（不含投递）
+    ├── pipeline.py                   # 一条命令串完 9 个阶段（不含投递）
     ├── parse_resume.py               # 简历 → profile.json
     ├── infer_params.py               # profile → crawl_params.json
     ├── deep_analyze.py               # 逐岗位调模型 → deep_results.json
     ├── gen_materials.py              # 招呼语 + 优化简历 → generated/
+    ├── verify_no_fabrication.py      # 查材料里有没有简历原文没有的技术词（查到就拦住 render）
     ├── render_images.py              # 简历 JSON → 简历长图（串行，共用一个浏览器）
     ├── apply.py                      # 投递（必须显式 --yes，不加只演练）
     ├── llm_check.py                  # 体检模型配置（打印生效值 + 试发一次）

@@ -374,7 +374,8 @@ def main():
     ap.add_argument('run_dir', nargs='?', help='运行目录（含 profile.json）')
     ap.add_argument('--profile', help='直接指定 profile.json 路径')
     ap.add_argument('--save', action='store_true',
-                    help='同时写入 assets/preferences.json（供 --mode E 预设重放复用）')
+                    help='同时整份写入 assets/preferences.json（覆盖已有预设，'
+                         '供预设重放路径复用）')
     ap.add_argument('--dry-run', action='store_true', help='只打印提示词，不请求')
     ap.add_argument('--today', metavar='YYYY-MM-DD',
                     help='当作今天的日期传给模型（默认取系统日期）。模型靠它跟简历里的'
@@ -509,7 +510,10 @@ def main():
         print('\n  已写出: %s' % out_path)
 
     if args.save:
-        saved = preferences.save(**params)
+        # _replace=True：这里刚把整份参数打给用户确认过，落盘必须和打印出来的一致。
+        # 合并会把上一轮的旧筛选偷偷带进来 —— 文件比屏幕多几个字段，最难查。
+        # 单字段补写走 `preferences.py save`（那边默认合并）。
+        saved = preferences.save(_replace=True, **params)
         print('  已存入预设: %s（%d 个字段）' % (preferences.prefs_path(), len(saved) - 2))
 
     command = preferences.crawl_command(params)

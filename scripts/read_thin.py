@@ -12,6 +12,12 @@ Usage:
   python scripts/read_thin.py <file> --kind jobs      # qualified_jobs.json
   python scripts/read_thin.py <file> --kind profile   # profile.json
   python scripts/read_thin.py <file> --kind deep      # deep_results.json
+  python scripts/read_thin.py <run_dir> --kind ranked # 序号+公司+职位+分数+判定 一张表
+
+`ranked` 吃的是 **run 目录**而不是单个文件，因为「分数 + 判定 + 公司 + 职位」
+本来就散在 4 个文件里（qualified_jobs / scored_jobs / job_classification /
+deep_results+deep_candidates）。合并逻辑在 match_index.py，与 gen_materials
+共用同一份 —— 别在这里再拼一次。
 """
 
 import json, os, sys
@@ -28,6 +34,10 @@ def thin_jobs(data: list) -> list:
     """Extract thin fields from each job entry — no full JDs or company info."""
     thin_fields = [
         'link', '职位', '公司', '城市', '薪资',
+        # 这四列是投递决策信号，不是明细：已失效=是 投了白费，代招=是 或 HR公司≠公司
+        # 说明联系人不是用人方 HR，HR活跃度决定 apply 的排序。缺列（未采集）时下面的
+        # `if k in job` 会整个跳过 —— 空字符串和「否」不是一回事，别在这里补默认值。
+        '已失效', '代招', 'HR公司', 'HR活跃度',
         'match_score', 'difficulty',
         'application_category', 'application_category_reason',
         'match_reasons', 'matched_skills', 'missing_items',
@@ -157,41 +167,73 @@ KINDS = {
     'deep': thin_deep,
 }
 
+# ranked 不在 KINDS 里：它的入参是 run 目录，不是一个 JSON 文件，走另一条分支。
+DIR_KINDS = ('ranked',)
+
+USAGE = 'Usage: python scripts/read_thin.py <file|run_dir> --kind {jobs|profile|deep|ranked}'
+
 
 def main():
-    if len(sys.argv) < 3 or '--kind' not in sys.argv:
-        print('Usage: python scripts/read_thin.py <file> --kind {jobs|profile|deep}')
+    argv = sys.argv[1:]
+    if len(argv) < 2 or '--kind' not in argv:
+        print(USAGE)
         print()
         print('Kinds:')
         print('  jobs     — qualified_jobs.json: strip full JDs and company info')
         print('  profile  — profile.json: strip full experience/project text and PII')
         print('  deep     — deep_results.json: verdicts only, no full JD text')
+        print('  ranked   — <run_dir>: 1-based index + company + position + score + verdict,')
+        print('             joined across scored_jobs / job_classification / deep_results')
         sys.exit(1)
 
-    file_path = None
+    target = None
     kind = None
-    i = 1
-    while i < len(sys.argv):
-        if sys.argv[i] == '--kind':
-            kind = sys.argv[i + 1]
+    limit = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--kind':
+            kind = argv[i + 1] if i + 1 < len(argv) else None
+            i += 2
+        elif argv[i] == '--limit':
+            raw = argv[i + 1] if i + 1 < len(argv) else ''
+            try:
+                limit = int(raw)
+            except ValueError:
+                print(f'ERROR: --limit wants an integer, got "{raw}"')
+                sys.exit(2)
             i += 2
         else:
-            file_path = sys.argv[i]
+            target = argv[i]
             i += 1
 
-    if not file_path or not os.path.isfile(file_path):
-        print(f'ERROR: file not found: {file_path}')
-        sys.exit(1)
+    if kind not in KINDS and kind not in DIR_KINDS:
+        valid = ', '.join(list(KINDS) + list(DIR_KINDS))
+        print(f'ERROR: unknown kind "{kind}". Valid: {valid}')
+        sys.exit(2)
 
-    if kind not in KINDS:
-        print(f'ERROR: unknown kind "{kind}". Valid: {", ".join(KINDS.keys())}')
+    if kind in DIR_KINDS:
+        if not target or not os.path.isdir(target):
+            print(f'ERROR: --kind {kind} wants a run directory, got: {target}')
+            sys.exit(1)
+        import match_index
+        try:
+            result = match_index.build_ranked(target, limit=limit)
+        except (json.JSONDecodeError, OSError) as e:
+            # qualified_jobs.json 是这张表的骨架，读不到就没有序号可言。
+            print(f'ERROR: cannot build ranked view from {target}: {e}')
+            sys.exit(1)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if not target or not os.path.isfile(target):
+        print(f'ERROR: file not found: {target}')
         sys.exit(1)
 
     try:
-        with open(file_path, encoding='utf-8') as f:
+        with open(target, encoding='utf-8') as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
-        print(f'ERROR: cannot read {file_path}: {e}')
+        print(f'ERROR: cannot read {target}: {e}')
         sys.exit(1)
 
     result = KINDS[kind](data)

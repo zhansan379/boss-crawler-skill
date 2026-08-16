@@ -90,88 +90,10 @@ def _norm_list(value, limit=None):
     return out[:limit] if limit else out
 
 
-def build_match_index(run_dir):
-    """link → 匹配信息（match_score / match_reasons / missing_items / optimization_points）。
-
-    匹配信息散在三个文件里，取决于走的是快速模式还是深度模式；qualified_jobs.json
-    本身只有原始爬取字段，没有分数。这里按「精细度」从低到高叠加，后来者覆盖前者：
-
-        scored_jobs.json（规则分）→ job_classification.json（规则视图）
-        → deep_results.json（模型分，最权威）
-
-    一个都没有也能跑：招呼语可以只靠 JD + 简历写，简历优化会拿不到缺失项提示 ——
-    质量会掉，但不该因此拒绝执行（用户可能只跑了 crawl + 手写 qualified_jobs.json）。
-    """
-    index = {}
-
-    def put(link, **fields):
-        if not link:
-            return
-        slot = index.setdefault(link, {})
-        for key, value in fields.items():
-            if value:                              # 空值不覆盖已有的更好的值
-                slot[key] = value
-
-    # ── 1. scored_jobs.json：规则侧原始 tier ──
-    scored = os.path.join(run_dir, 'scored_jobs.json')
-    if os.path.exists(scored):
-        try:
-            with open(scored, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for tier in ('tier4', 'tier3', 'tier2', 'tier1'):
-                for job in (data.get(tier) or []):
-                    put(job.get('link'),
-                        match_score=job.get('match_score'),
-                        match_reasons=_norm_list(job.get('match_reasons')),
-                        missing_items=_norm_list(job.get('missing_skills')),
-                        optimization_points=_norm_list(job.get('optimization_points')))
-        except (ValueError, OSError):
-            pass
-
-    # ── 2. job_classification.json：build_job_view 之后的视图 ──
-    classification = os.path.join(run_dir, 'job_classification.json')
-    if os.path.exists(classification):
-        try:
-            with open(classification, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            buckets = data.get('classification') or {}
-            for name in ('cannot_apply', 'need_optimization', 'qualified'):
-                for view in (buckets.get(name) or []):
-                    reasons = _norm_list(view.get('classification_reason'))
-                    put(view.get('link'),
-                        match_score=view.get('match_score'),
-                        match_reasons=reasons,
-                        missing_items=_norm_list(view.get('missing_items')),
-                        optimization_points=_norm_list(view.get('optimization_points')),
-                        highlight=view.get('highlight'))
-        except (ValueError, OSError):
-            pass
-
-    # ── 3. deep_results.json：模型逐岗分析，rank 经 deep_candidates 换成 link ──
-    cand_path = os.path.join(run_dir, 'deep_candidates.json')
-    deep_path = os.path.join(run_dir, 'deep_results.json')
-    if os.path.exists(cand_path) and os.path.exists(deep_path):
-        try:
-            with open(cand_path, 'r', encoding='utf-8') as f:
-                candidates = json.load(f).get('candidates') or []
-            with open(deep_path, 'r', encoding='utf-8') as f:
-                results = json.load(f).get('results') or []
-            by_rank = {r.get('rank'): r for r in results if isinstance(r, dict)}
-            for candidate in candidates:
-                deep = by_rank.get(candidate.get('rank'))
-                if not deep:
-                    continue
-                reasons = _norm_list(deep.get('reason') or deep.get('classification_reason'))
-                put((candidate.get('job') or {}).get('link'),
-                    match_score=deep.get('score'),
-                    match_reasons=reasons,
-                    missing_items=_norm_list(deep.get('missing_items')),
-                    optimization_points=_norm_list(deep.get('optimization_points')),
-                    highlight=deep.get('highlight'))
-        except (ValueError, OSError, AttributeError):
-            pass
-
-    return index
+# build_match_index 挪到了 match_index.py，好让读取侧（read_thin.py --kind ranked）
+# 用上同一份三文件合并逻辑 —— 之前它只长在写材料侧，主代理想看「分数+判定+公司+职位」
+# 只能自己拼。这里 re-export，本文件其余代码照旧调用。
+from match_index import build_match_index          # noqa: E402,F401  (re-export)
 
 
 # ==================== 简历摘要 / 场景 ====================
@@ -445,29 +367,9 @@ def _write_atomic(path, text):
 
 # ==================== 主流程 ====================
 
-def parse_only(spec, total):
-    """--only 1,3,5-7 → 1-based 序号集合。"""
-    if not spec:
-        return None
-    picked = set()
-    for chunk in str(spec).replace(' ', '').split(','):
-        if not chunk:
-            continue
-        if '-' in chunk:
-            lo, _, hi = chunk.partition('-')
-            try:
-                picked.update(range(int(lo), int(hi) + 1))
-            except ValueError:
-                raise ValueError('--only 无法解析: %s' % chunk)
-        else:
-            try:
-                picked.add(int(chunk))
-            except ValueError:
-                raise ValueError('--only 无法解析: %s' % chunk)
-    bad = sorted(i for i in picked if i < 1 or i > total)
-    if bad:
-        raise ValueError('--only 里的序号超出 1..%d 范围: %s' % (total, bad))
-    return picked
+# --only 的解析挪到了 check_artifacts.py（那边没有依赖）。这里 re-export，让
+# 「生成哪些」和「核对哪些」共用同一份解析 —— 两份各自漂移过一次，序号错位很难查。
+from check_artifacts import parse_only          # noqa: F401  (re-export)
 
 
 def main():

@@ -125,7 +125,7 @@ python scripts/pipeline.py --from crawl --all              # 从爬取起，一�
 python scripts/pipeline.py --from match --to merge          # 显式区间
 ```
 
-阶段名：`parse → infer → crawl → match → deep → merge → materials → render`。`deep` / `merge` 只在深度模式下存在，快速模式会自动跳过并补写 `qualified_jobs.json`。
+阶段名：`parse → infer → crawl → match → deep → merge → materials → verify → render`。`deep` / `merge` 只在深度模式下存在，快速模式会自动跳过并补写 `qualified_jobs.json`。
 
 终点是这么定的：
 
@@ -140,6 +140,24 @@ python scripts/pipeline.py --from match --to merge          # 显式区间
 `--all` 就是 `--to render`，两个只能给一个（同时给按用法错误退出，码 2）。
 
 `--from match` 是唯一一个「一个阶段」不止一步的地方：深度模式下单跑 `match` 只产出 `deep_candidates.json`，没有 `qualified_jobs.json` —— 而下游（`materials` / `render` / `apply`）全都只认后者，停在那里是个谁都用不了的半成品。
+
+`--no-images` 把终点从 `render` 下压到 `verify`，**不是** `materials`：不要长图不代表不用核查，招呼语照样会发出去。所以 `--from render --no-images` 没有阶段可跑，会直接报错而不是空跑一轮。
+
+### verify 阶段
+
+`materials` 之后、`render` 之前插了一步 `verify_no_fabrication.py`：把要发出去的文本（`optimized_resume` + 招呼语）里的技术词，跟 `resume_text.txt` / `profile.json` 对一遍，报出没有出处的那些。纯标准库，不调模型，几秒钟。
+
+| 参数 | 作用 |
+|---|---|
+| `--allow 词表` | 放行这些技术词，逗号分隔，可重复给。透传给 `verify_no_fabrication.py` |
+| `--skip-verify` | 整步跳过（跳过就得自己逐份看材料） |
+| `--only` | 与 `materials` / `render` 共用同一份序号 |
+
+> `--skip-verify` 在两个脚本里是**两件不同的事**：`pipeline.py --skip-verify` 跳过的是这里的技术词核查；`apply.py --skip-verify` 跳过的是附件图的 `verify_image.py` 体检。两条命令从不同时出现，但别把结论互相搬。
+
+**退出码 1 在这一步的含义不一样：它是「查出来了」，不是「坏了」。** 流水线会停在 `render` 之前 —— 长图一渲出来，材料在人眼里就定稿了。逐条看完上下文后二选一：确属编造就 `gen_materials.py --only <序号> --force` 重生成；有据可依就加 `--allow` 续跑。
+
+查不出的东西也要知道：夸大（「了解」写成「精通」）、实习时长注水、语气不像本人，一个都查不出。另外只认拉丁字母开头的词（中文短语不参与），`optimization_suggestions` 故意不查 —— 那一栏本职工作就是提简历里还没有的技术。
 
 ## 4. 投递（单独一条命令）
 
@@ -184,7 +202,7 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
 
-「可读投递材料」那一行不在 `pipeline.py` 的阶段链上（`applications/` 下的 `.md` 和 `.png` 由 `render_images.py` 各写一份自己的）。想要那份把 20 个爬取字段和招呼语汇总在一起、能直接手动照着投的文件，就单独跑它 —— `gen_materials.py` 跑完也会把这条命令印出来。
+「可读投递材料」那一行不在 `pipeline.py` 的阶段链上（`applications/` 下的 `.md` 和 `.png` 由 `render_images.py` 各写一份自己的）。想要那份把 25 个爬取字段和招呼语汇总在一起、能直接手动照着投的文件，就单独跑它 —— `gen_materials.py` 跑完也会把这条命令印出来。
 
 ### parse_resume.py — 简历 → profile.json
 
@@ -307,7 +325,7 @@ python scripts/check_artifacts.py <run_dir>        # 材料齐不齐（缺谁的
 
 ## 7. 退出码
 
-脚本之间统一约定，方便串到 shell 或 CI 里：
+脚本之间的约定，方便串到 shell 或 CI 里：
 
 | 码 | 含义 |
 |---|---|
@@ -317,6 +335,10 @@ python scripts/check_artifacts.py <run_dir>        # 材料齐不齐（缺谁的
 | `3` | **部分成功** —— 产物已写出，但有条目失败或缺失 |
 
 `3` 是最需要注意的那个：它意味着「能用，但不全」。多数情况下重跑同一条命令就会只补缺的部分。
+
+**唯一的例外是 `llm_check.py`：它的 `2` 表示「配置齐全但端点连不上」**（`llm_check.py:90,103`，
+真实语义见 [scripts.md](scripts.md) 的 `0 可用 / 1 缺失或非法 / 2 已配置但不可达`）。
+判断 LLM 配置时按这套读，别套上面那张表。
 
 ```bash
 python scripts/pipeline.py 简历.pdf --all; code=$?

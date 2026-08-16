@@ -201,10 +201,10 @@ def test_crawl_args():
            preferences.main(['crawl-args']))[-1] == 1)
 
 
-# ==================== 6. 覆盖式更新 ====================
+# ==================== 6. 就地更新：默认合并，--replace 才整份替换 ====================
 
-def test_overwrite():
-    print('\n[6] 覆盖式更新，只留一份')
+def test_merge_and_replace():
+    print('\n[6] 默认合并 / --replace 整份替换，都只留一份')
     import preferences
 
     preferences.clear()
@@ -212,13 +212,33 @@ def test_overwrite():
     preferences.save(cities='西安', keywords='Java')
     prefs = preferences.load()
 
-    check('城市被覆盖', prefs['cities'] == ['西安'], prefs.get('cities'))
-    check('关键词被覆盖', prefs['keywords'] == ['Java'], prefs.get('keywords'))
-    check('上一次的 top_n 不残留（覆盖不是合并）',
-          'top_n' not in prefs, prefs.get('top_n'))
+    check('给出的字段被更新（城市）', prefs['cities'] == ['西安'], prefs.get('cities'))
+    check('给出的字段被更新（关键词）', prefs['keywords'] == ['Java'], prefs.get('keywords'))
+    # 这一条是 P4 的核心：省略 top_n 不等于要求清掉 top_n。
+    check('未给出的字段保留，不被静默清空', prefs.get('top_n') == 10, prefs.get('top_n'))
     check('文件只有一个', len([f for f in os.listdir(_TMP)
                           if f.endswith('.json')]) == 1,
           os.listdir(_TMP))
+
+    # 合并语义下也不能靠省略清字段 —— 要整份重写就 --replace。
+    preferences.save(_replace=True, cities='太原', keywords='Python')
+    prefs = preferences.load()
+    check('--replace 下未给出的字段被清掉', 'top_n' not in prefs, prefs.get('top_n'))
+
+    # CLI 的 --replace 走的是同一条路
+    preferences.save(cities='太原', keywords='Python', top_n=10)
+    check('CLI save --replace 退出 0',
+          preferences.main(['save', '-c', '太原', '-p', 'Python', '--replace']) == 0)
+    check('CLI --replace 也清掉未给出的字段',
+          'top_n' not in preferences.load(), preferences.load().get('top_n'))
+
+    # partial save 不该顺手改掉 mode（旧代码里 --mode 的 default='custom' 会）
+    preferences.save(_replace=True, cities='太原', keywords='Python', mode='list')
+    preferences.main(['save', '--top', '20'])
+    prefs = preferences.load()
+    check('CLI 部分保存不覆盖已存的 mode', prefs.get('mode') == 'list', prefs.get('mode'))
+    check('CLI 部分保存写入了 top_n', prefs.get('top_n') == 20, prefs.get('top_n'))
+    check('CLI 部分保存保留了城市', prefs.get('cities') == ['太原'], prefs.get('cities'))
 
 
 # ==================== 7. 损坏降级 ====================
@@ -265,7 +285,7 @@ def main():
         test_unknown_keys_dropped()
         test_bad_types_dropped()
         test_crawl_args()
-        test_overwrite()
+        test_merge_and_replace()
         test_corrupt_degrades()
         test_clear()
     finally:

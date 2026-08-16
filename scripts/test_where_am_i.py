@@ -23,6 +23,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -98,6 +99,23 @@ def materialized(run_dir, n=2):
         write(run_dir, 'generated/resume_%d_公司%d.json' % (i, i), {'name': '张三'})
 
 
+def verified(run_dir, n=2, clean=True):
+    """verify 跑过的痕迹。报告里存的 mtime 必须和材料实际的一致 ——
+    where_am_i 判的是「查过之后有没有改」，随便填个数会被当成过期。"""
+    gen = os.path.join(run_dir, 'generated')
+    checked = {}
+    for i in range(1, n + 1):
+        for name in ('greeting_%d_公司%d.txt' % (i, i), 'resume_%d_公司%d.json' % (i, i)):
+            checked[name] = os.path.getmtime(os.path.join(gen, name))
+    write(run_dir, 'verify_report.json', {
+        'baseline_sources': ['resume_text.txt', 'profile.json'],
+        'allow': [], 'checked': checked, 'unreadable': [],
+        'findings': [] if clean else [{'index': 1, 'file': 'resume_1_公司1.json',
+                                       'terms': ['PyTorch']}],
+        'clean': clean,
+    })
+
+
 def rendered(run_dir, n=2):
     for i in range(1, n + 1):
         d = os.path.join(run_dir, 'applications', '公司%d-岗位%d' % (i, i))
@@ -133,7 +151,9 @@ def test_deep_sequence(tmp):
     merged(run_dir)
     step('合并出报告', 'materials')
     materialized(run_dir)
-    step('素材齐了', 'render')
+    step('素材齐了', 'verify')
+    verified(run_dir)
+    step('核查通过', 'render')
 
     order = [pipeline.STAGES.index(s) for s in seen]
     check('推进方向单调不回头', order == sorted(order), str(seen))
@@ -171,6 +191,7 @@ def test_tail_steps(tmp):
     crawled(run_dir, 'quick')
     merged(run_dir)
     materialized(run_dir)
+    verified(run_dir)
     rendered(run_dir)
 
     title, cmds, _ = next_of(run_dir)
@@ -224,8 +245,59 @@ def test_llm_hint(tmp):
         os.environ.update(old)
 
 
+def test_verify_state(tmp):
+    print('\n[5] verify 的状态是「有没有过期」，不是「有没有跑过」')
+    run_dir = make_run(tmp, 'verify')
+    parsed(run_dir)
+    crawled(run_dir, 'quick')
+    merged(run_dir)
+    materialized(run_dir)
+
+    title, cmds, notes = next_of(run_dir)
+    check('没查过 → 阶段 verify', stage_in(cmds) == 'verify', title)
+    check('说明是还没查过', any('还没查过' in n for n in notes), str(notes))
+
+    verified(run_dir)
+    _t, cmds, _ = next_of(run_dir)
+    check('查过且干净 → 推进到 render', stage_in(cmds) == 'render', str(cmds))
+
+    # 关键一条：材料重新生成之后，旧报告的「通过」对新材料不成立
+    time.sleep(1.1)             # mtime 精度到秒，容差也是 1 秒
+    write(run_dir, 'generated/resume_1_公司1.json', {'name': '张三', 'v': 2})
+    _t, cmds, notes = next_of(run_dir)
+    check('材料改过 → 退回 verify', stage_in(cmds) == 'verify', str(cmds))
+    check('说清是哪份材料改了',
+          any('resume_1_公司1.json' in n and '又改了' in n for n in notes), str(notes))
+
+    # 新增一份材料同样算没查过
+    verified(run_dir)
+    write(run_dir, 'generated/greeting_3_公司3.txt', raw='你好')
+    _t, cmds, notes = next_of(run_dir)
+    check('新增材料 → 退回 verify', stage_in(cmds) == 'verify', str(cmds))
+    check('说清是新材料',
+          any('greeting_3_公司3.txt' in n and '新的' in n for n in notes), str(notes))
+
+    # 上次查出编造 → 不能推进，且要带上是哪几个岗位
+    os.remove(os.path.join(run_dir, 'generated', 'greeting_3_公司3.txt'))
+    verified(run_dir, clean=False)
+    _t, cmds, notes = next_of(run_dir)
+    joined = '\n'.join(notes)
+    check('上次查出编造 → 停在 verify', stage_in(cmds) == 'verify', str(cmds))
+    check('带上出问题的岗位序号', '1' in joined and '查出' in joined, joined)
+    check('两条路都给了，且提醒要先问用户',
+          '--force' in joined and '--allow' in joined and '问用户' in joined, joined)
+
+    # 坏掉的报告当成没查过，不能当通过
+    write(run_dir, 'verify_report.json', raw='{ 坏 JSON')
+    _t, cmds, _ = next_of(run_dir)
+    check('坏报告当没查过（不是当通过）', stage_in(cmds) == 'verify', str(cmds))
+    write(run_dir, 'verify_report.json', raw='[]')
+    _t, cmds, _ = next_of(run_dir)
+    check('报告是数组也不当通过', stage_in(cmds) == 'verify', str(cmds))
+
+
 def test_robustness(tmp):
-    print('\n[5] 坏输入不崩、退出码恒为 0')
+    print('\n[6] 坏输入不崩、退出码恒为 0')
     run_dir = make_run(tmp, 'broken')
 
     # 坏 JSON：每一个读 JSON 的地方都得接住
@@ -265,7 +337,7 @@ def run_cli(*args):
 
 
 def test_cli(tmp, deep_run):
-    print('\n[6] 命令行：退出码恒为 0')
+    print('\n[7] 命令行：退出码恒为 0')
     code, out = run_cli(deep_run)
     check('正常目录退出码 0', code == 0, out[-300:])
     check('印了 run_dir', 'run_dir:' in out, out[:200])
@@ -290,6 +362,7 @@ def main():
         test_quick_skips_deep(tmp)
         test_tail_steps(tmp)
         test_llm_hint(tmp)
+        test_verify_state(tmp)
         test_robustness(tmp)
         test_cli(tmp, deep_run)
     finally:

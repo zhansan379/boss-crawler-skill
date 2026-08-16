@@ -10,8 +10,11 @@
 Stage 1 一次不用问，这是回访路径上最大的一笔省时。
 
 设计取舍（2026-08-14 与用户确认）：
-  只存一份，覆盖式更新   —— 一个人找工作时的城市和关键词基本稳定，多份的成本
+  只存一份，就地更新     —— 一个人找工作时的城市和关键词基本稳定，多份的成本
                             （每轮先决定用哪份）会把省下的那一轮又加回来。
+  save 默认合并          —— 只写本次给出的字段。原先是覆盖式，`save --top 20`
+                            会把 10 个字段的预设静默削成 2 个（2026-08-16 改）。
+                            整份替换要显式 `--replace`；infer --save 走这条。
   永不过期，只报年龄     —— show 里打印「74 天前存的」，由用户自己决定要不要
                             打断。不做自动失效。
 
@@ -160,9 +163,24 @@ def load():
     return _coerce(data)
 
 
-def save(**kwargs):
-    """写预设（覆盖式）。返回落盘后的 dict。"""
-    prefs = _coerce(kwargs)
+def save(_replace=False, **kwargs):
+    """写预设。**默认合并**：只写这次显式给出的字段，其余保留原值。返回落盘后的 dict。
+
+    合并而不是覆盖，是因为这个函数的两类调用方式冲突：一类是 infer 确认后一次写全，
+    另一类是「用户改了 TopN」这种单字段补写。`_coerce` 会丢掉 None/空值，所以覆盖式
+    语义下后者会把没重复给的字段**静默清空** —— 存好的 10 个字段变成 1 个，而调用方
+    看不出任何异常，下一轮跑起来才发现筛选条件全没了。
+
+    `_replace=True` 才是整份替换（CLI 的 `--replace`），用于「重新来一遍」。
+    注意合并语义下无法靠省略来清掉某个字段：要清单个字段就 `--replace` 重写一份，
+    要全清就 `clear`。
+    """
+    incoming = _coerce(kwargs)
+    if _replace:
+        prefs = incoming
+    else:
+        prefs = load()          # load() 已过白名单；损坏时返回 {}，退化成覆盖
+        prefs.update(incoming)
     prefs['saved_at'] = date.today().isoformat()
     prefs['version'] = SCHEMA_VERSION
 
@@ -330,6 +348,7 @@ def cmd_save(args):
             return 1
 
     prefs = save(
+        _replace=args.replace,
         mode=args.mode,
         keywords=args.keywords,
         cities=args.city,
@@ -345,7 +364,8 @@ def cmd_save(args):
         scale=args.scale,
     )
     print('[OK] 预设已保存到 %s' % prefs_path())
-    print('  %d 个字段' % len([k for k in prefs if k not in META_KEYS]))
+    print('  %d 个字段%s' % (len([k for k in prefs if k not in META_KEYS]),
+                            '（整份替换）' if args.replace else '（已与原预设合并）'))
     command = crawl_command(prefs)
     if command:
         print('  爬取命令: %s' % command)
@@ -382,10 +402,14 @@ def build_parser():
     subs.add_parser('show', help='打印预设；无预设时退出码 1').set_defaults(func=cmd_show)
     subs.add_parser('missing', help='打印预设缺失的可补问字段；有缺失时退出码 1').set_defaults(func=cmd_missing)
 
-    p_save = subs.add_parser('save', help='保存预设（覆盖式）')
+    p_save = subs.add_parser('save', help='保存预设（默认合并，只写给出的字段）')
+    p_save.add_argument('--replace', action='store_true',
+                        help='整份替换而不是合并：没在本次给出的字段会被清掉')
     p_save.add_argument('--city', '-c', action='append', help='城市，可重复或逗号分隔')
     p_save.add_argument('--keywords', '-p', action='append', help='关键词，可重复或逗号分隔')
-    p_save.add_argument('--mode', '-m', choices=['custom', 'list'], default='custom')
+    # default 不能是 'custom'：合并语义下那会让 `save --top 20` 顺手把存好的
+    # mode=list 改回 custom。缺省由 crawl_command() 兜底成 custom（见 :237）。
+    p_save.add_argument('--mode', '-m', choices=['custom', 'list'], default=None)
     p_save.add_argument('--count', '-n', type=int, help='每关键词每城市的条数上限')
     p_save.add_argument('--no-detail', action='store_true', default=None,
                         help='不爬详情（默认爬，匹配质量依赖 JD）')

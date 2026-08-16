@@ -20,7 +20,7 @@ irreversible step and it is deliberately outside the pipeline.
 
 ```mermaid
 flowchart TD
-    Start[matching_report.html + qualified_jobs.json] --> J1[展示推荐岗位表<br>read_thin.py --kind jobs]
+    Start[matching_report.html + qualified_jobs.json] --> J1[展示推荐岗位表<br>read_thin.py --kind ranked]
     J1 --> Q{gate:jobs 门禁一：单次 AskUserQuestion<br>三个独立问题一轮问完}
     Q --> |取消| End[结束]
 
@@ -41,7 +41,10 @@ flowchart TD
     Scope & Opt1 & Opt2 & Opt3 & AIAdjust --> Mat[materials: gen_materials.py<br>逐岗并发调 LLM]
     NoPic --> Mat
     Mat --> Check[check_artifacts.py<br>缺哪个补哪个 --only]
-    Check --> Render[render: render_images.py<br>串行渲染长图]
+    Check --> NoFab{verify: verify_no_fabrication.py<br>有没有简历里没有的技术词}
+    NoFab --> |查出编造| Regen[gen_materials.py --only N --force<br>或 --allow 放行]
+    Regen --> NoFab
+    NoFab --> |干净| Render[render: render_images.py<br>串行渲染长图]
     Upload --> Write
     Render --> Write[write_application_md.py --all<br>run_dir/applications/公司名-岗位名]
     Write --> Verify[verify_image.py --all<br>不要 Read 图片]
@@ -71,6 +74,10 @@ Two shapes in that diagram are load-bearing:
 ## Display the job table first
 
 ```bash
+# 分数/判定散在 4 个文件里，这条已经替你合并好（序号即下游用的 1-based 序号）
+python scripts/read_thin.py {run_dir} --kind ranked
+
+# 需要爬取列（已失效 / 代招 / HR公司 / HR活跃度）时用这条
 python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs
 ```
 
@@ -242,6 +249,51 @@ resume already contains. Do not invent employers, dates, skills, or metrics. A g
 filled from the resume must stay visible — `must_add` exists to tell the *user* what to supply, not
 to license the model to supply it.
 
+## verify — The instruction above, actually enforced
+
+```bash
+python scripts/pipeline.py --run-dir {run_dir} --from verify
+# equivalently: python scripts/verify_no_fabrication.py {run_dir}
+```
+
+「Never fabricate」 in a prompt is a request, and a model that has just been told to make a resume
+look better for a specific JD is under exactly the pressure that makes it slip a term in. So the
+pipeline checks rather than trusts: every technology term in `optimized_resume` and in the greetings
+is matched against a baseline built from `resume_text.txt` **union** `profile.json`, and whatever has
+no basis there gets printed with its surrounding context. Stdlib only, no model call, seconds.
+
+It sits after `materials` and before `render` because the long image is where material starts feeling
+final. Exit 1 blocks the pipeline there.
+
+**Deliberate scoping decisions**, each of which is the difference between a check people read and one
+they learn to skip:
+
+| Decision | Why |
+|---|---|
+| Baseline is `resume_text.txt` **∪** `profile.json` | Skills, projects and awards parsed into `profile.json` are just as much "in the resume" as the raw text. Using only one source reports real skills as invented |
+| `optimization_suggestions` is **not** checked | Proposing skills the resume lacks is that field's entire purpose. Checking it manufactures noise — and this is where the 2026-08-14 post-mortem's false positive came from |
+| Only `optimized_resume`, not the whole JSON | Same principle: check what gets sent, not the model's notes to the user |
+| Latin-script terms only | Chinese phrases (多智能体面试系统) are not tokenized. Segmenting them would need a dictionary and would report ordinary prose as invented skills |
+| `/` splits, `.` `-` `_` don't | 「MySQL/Redis」 is two skills; `Node.js` and `scikit-learn` are one each. Getting this wrong reported two real skills as fabricated (found in testing) |
+| `+` and `#` survive normalization | `c`, `c++` and `c#` are three different skills |
+| Stopword list stays short | Every generic word added is one fewer chance to catch something. False positives have `--allow`; false negatives have nothing |
+| No baseline / no materials → exit 1 | "Zero findings" when nothing was checked is a false negative wearing a ✅ |
+
+Only an alias table of *certainly* equivalent spellings is applied (`k8s`↔`kubernetes`,
+`js`↔`javascript`, `tf`↔`tensorflow`, …). Inference like "knows Java so Kotlin is fine" is explicitly
+not in it.
+
+**`--allow` and `--skip-verify` are the user's call, never yours.** Show the findings and ask. What it
+cannot see at all: exaggeration — 「了解」 promoted to 「精通」, a three-month internship stretched to a
+year, a voice that isn't the user's. `gate:send` still means reading the material.
+
+**It leaves a footprint: `{run_dir}/verify_report.json`.** The stage produces no material of its own,
+and a check with no trace on disk is one `where_am_i.py` cannot see — so it gets skipped after a
+context compaction, which is precisely when it matters. The report records the **mtime of each file it
+checked**, so regenerating a resume makes the old ✅ stale rather than permanent, and `where_am_i.py`
+sends you back to `verify`. A `--only` run writes no report, since a subset result would mark
+unchecked files as checked.
+
 ## render — Resume Long-Images
 
 ```bash
@@ -339,6 +391,7 @@ One directory per job, under the run directory:
   generated/                           # materials artifacts — check_artifacts.py checks these
       greeting_1_XX科技.txt
       resume_1_XX科技.json
+  verify_report.json                   # verify's footprint: which files were checked, at which mtime
   showcv_staging/                      # temp Markdown for render, safe to delete
   showcv_exports/                      # raw ShowCV download (png or zip)
   applications/
@@ -437,7 +490,7 @@ paths before anything is sent.
 | `--image <path>` | one image for the whole batch (the `自定义上传` answer) |
 | `--no-image` | send greetings only (the `不发送` answer) |
 | `--name 张三` | override `profile.json`'s 姓名 when resolving attachments |
-| `--skip-verify` | skip the `verify_image.py` health check on the attachments (not recommended) |
+| `--skip-verify` | skip the `verify_image.py` health check on the attachments (not recommended). **Different flag from `pipeline.py --skip-verify`**, which skips the fabrication check on the text |
 | `--headless` | no visible browser |
 
 Three precondition checks that **`--yes` does not skip** — only their own explicit flags do:

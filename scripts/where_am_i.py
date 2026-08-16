@@ -4,10 +4,14 @@
 
 为什么需要它：上下文被压缩后，流程状态是最先丢的东西之一，而重建它的默认做法
 是重读 SKILL.md / references/cli.md ——那是几万字符。本脚本用约 1k 字符回答同一个问题。
-它**不依赖任何状态文件**，纯粹从产物反推，所以不会因为忘记更新状态而说谎。
+它**只看产物、不看进度记录**，所以不会因为忘记更新状态而说谎。
 
-阶段名与 `pipeline.py` 的八阶段完全一致（parse / infer / crawl / match / deep /
-merge / materials / render），所以它给出的下一步永远能直接粘去执行。两个例外是
+只有一个阶段例外：`verify` 不产出材料，它的产物就是 `verify_report.json` 本身。
+所以那一步不能光看文件在不在 —— 报告里记了被查文件的 mtime，材料重新生成过就算
+过期，得回去重查。否则改完简历还留着上一版的 ✅，正好是最该拦住的情况。
+
+阶段名与 `pipeline.py` 的九阶段完全一致（parse / infer / crawl / match / deep /
+merge / materials / verify / render），所以它给出的下一步永远能直接粘去执行。两个例外是
 流水线之外的收尾步骤：`write_application_md.py` 和 `apply.py` —— 后者是唯一不可
 撤销的一步，本脚本只会把命令摆出来，绝不建议加 `--yes`。
 
@@ -185,6 +189,30 @@ def survey(run_dir):
                                 % (greets, resumes, n),
                                 '每个岗位两次请求（招呼语 + 简历改写）—— 先确认投递池再跑'])
     done.append('materials：%d 招呼语 + %d 简历' % (greets, resumes))
+
+    # ── verify: 有没有简历原文之外的技术词 ──
+    # 这一步不产材料，只留 verify_report.json。判「过期」而不只判「有没有」：
+    # 材料重生成过之后，旧报告的通过结论对新材料不成立。
+    try:
+        import verify_no_fabrication
+        why, report = verify_no_fabrication.report_is_stale(run_dir)
+    except Exception as exc:                           # noqa: BLE001
+        why, report = None, None
+        notes.append('verify 状态读不出来（%s）—— 手动跑一次 pipeline --from verify' % exc)
+    if why:
+        extra = []
+        if report is not None and not report.get('clean'):
+            bad = report.get('findings') or []
+            extra.append('上次查出 %d 份材料有问题：%s'
+                         % (len(bad),
+                            '、'.join(str(f.get('index')) for f in bad) or '?'))
+            extra.append('确属编造就 gen_materials.py --only <序号> --force 重生成；'
+                         '有据可依就加 --allow —— 两者都要先问用户')
+        return nxt('verify', '核查材料里有没有简历原文之外的技术词',
+                   extra_notes=[why] + extra)
+    if report is not None:
+        done.append('verify：%d 份材料查过，没有简历原文之外的技术词'
+                    % len(report.get('checked') or {}))
 
     # ── render: 简历长图 ──
     apps = os.path.join(run_dir, 'applications')

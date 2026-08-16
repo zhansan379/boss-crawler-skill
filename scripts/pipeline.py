@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把八个阶段串起来跑，**默认只跑一个阶段**；整轮要显式 `--all`，且停在「材料已生成」。
+"""把九个阶段串起来跑，**默认只跑一个阶段**；整轮要显式 `--all`，且停在「材料已生成」。
 
-八个阶段，每个阶段就是调一次已有的入口脚本（业务逻辑一行都不在本文件里）：
+九个阶段，每个阶段就是调一次已有的入口脚本（业务逻辑一行都不在本文件里）：
 
     parse      parse_resume.py            简历文件 → profile.json
     infer      infer_params.py            profile.json → crawl_params.json
@@ -11,6 +11,7 @@
     deep       deep_analyze.py            逐个候选调模型（只有 deep 模式有这一步）
     merge      run_matcher.py --merge      → qualified_jobs.json（同上）
     materials  gen_materials.py           → generated/{greeting,resume}_{i}_*
+    verify     verify_no_fabrication.py   查简历原文没有的技术词 → verify_report.json
     render     render_images.py           → applications/<公司>-<岗位>/<姓名>-<岗位>.png
 
 **不给 `--to` 就只跑一个阶段。** 一次跑一步，每步跑完自己看一眼再决定要不要往下 ——
@@ -40,6 +41,10 @@ qualified_jobs.json，下游一步都走不了 —— 那是个半成品，不�
 失败就停，不跳过、不硬着头皮往下跑。屏幕上会给出接着跑的命令（`--from <失败的阶段>`），
 因为最贵的两步 —— crawl 动辄几十分钟、deep 按岗位烧 token —— 不该因为下游一个小错重来。
 
+`verify` 的失败是个例外：它退 1 表示**查出了东西**，不是脚本坏了。那时流水线停在 render
+之前（长图一渲出来，材料在人眼里就定稿了），提示走的是「重生成 or --allow 放行」两条路，
+而不是「修完接着跑」。
+
 退出码：0 = 跑到终点，1 = 某阶段失败或前置条件不满足，3 = 跑完了但有产物缺失（部分成功）。
 """
 
@@ -59,7 +64,8 @@ from resume_matcher.config import (
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-STAGES = ('parse', 'infer', 'crawl', 'match', 'deep', 'merge', 'materials', 'render')
+STAGES = ('parse', 'infer', 'crawl', 'match', 'deep', 'merge',
+          'materials', 'verify', 'render')
 
 # 只有深度模式跑的阶段。快速模式下它们不是「失败」而是「本来就没有」，
 # 所以打一行说明就过，不影响退出码。
@@ -325,6 +331,17 @@ def build_cmd(name, args, ctx):
             cmd.append('--force')
         return cmd + extra
 
+    if name == 'verify':
+        if args.skip_verify:
+            return None
+        # 招呼语也要查，所以 --resume-mode skip 时这一步照跑（那时只剩招呼语）。
+        cmd = [py, script('verify_no_fabrication.py'), run_dir]
+        if args.only:
+            cmd += ['--only', args.only]
+        for term in args.allow:
+            cmd += ['--allow', term]
+        return cmd
+
     if name == 'render':
         if args.resume_mode == 'skip':
             return None
@@ -373,11 +390,14 @@ def run_stage(name, cmd, run_dir, timed=False):
 
 # ==================== 产物核查 ====================
 
-def check_materials(run_dir, greeting_mode, resume_mode):
+def check_materials(run_dir, greeting_mode, resume_mode, only=None):
     """materials 之后的一次性快照核查。返回 (ok, 缺失列表)。
 
     gen_materials.py 是同步跑完的：它返回了就代表不会再有新产物落盘，所以这里只做
     一次性快照，不轮询、不等待。
+
+    `only` 必须是传给 materials 的那一份 `--only`（原始字符串即可）。漏传它，
+    没打算生成的岗位会被算成缺失 —— 一次成功的 `--only 1,2` 会被判成部分失败并退 3。
     """
     import check_artifacts
 
@@ -390,7 +410,9 @@ def check_materials(run_dir, greeting_mode, resume_mode):
         return True, []
 
     try:
-        _, _, missing = check_artifacts.check(run_dir, kinds)
+        jobs = check_artifacts._load_jobs(run_dir)
+        picked = check_artifacts.parse_only(only, len(jobs))
+        _, _, missing = check_artifacts.check(run_dir, kinds, jobs=jobs, only=picked)
     except (OSError, ValueError) as exc:
         return False, ['产物核查失败: %s' % exc]
     return not missing, missing
@@ -486,6 +508,12 @@ def parse_args(argv=None):
     g.add_argument('--adopt-browser', dest='adopt_browser', action='store_true',
                    help='接管端口 9333 上已有的浏览器（清楚风险再用）')
 
+    g = ap.add_argument_group('材料核查（verify 阶段）')
+    g.add_argument('--allow', action='append', default=[], metavar='词表',
+                   help='放行这些技术词，逗号分隔可重复；透传给 verify_no_fabrication.py')
+    g.add_argument('--skip-verify', dest='skip_verify', action='store_true',
+                   help='跳过「原文没有的技术词」核查（跳过就得自己逐份看材料）')
+
     g = ap.add_argument_group('模型（覆盖 assets/llm_config.json 与环境变量）')
     g.add_argument('--model')
     g.add_argument('--base-url')
@@ -510,14 +538,15 @@ def make_plan(args):
     if start > end:
         return None, ('--from %s 在 --to %s 之后，没有阶段可跑'
                       % (args.from_stage, end_stage))
+    # 下压到 verify 而不是 materials：不要长图不代表不用查材料，招呼语照样会发出去。
     if args.no_images and end == STAGES.index('render'):
-        end = STAGES.index('materials')
+        end = STAGES.index('verify')
     plan = list(STAGES[start:end + 1])
     if not plan:
-        # 只有 `--from render --no-images` 会走到这里：终点被下压到 materials，
+        # 只有 `--from render --no-images` 会走到这里：终点被下压到 verify，
         # 反而跑到了起点前面。说清楚是哪两个参数打架，别丢一个空计划下去。
         return None, ('--from render 配 --no-images 没有阶段可跑'
-                      '（--no-images 把终点压到 materials，在 render 之前）')
+                      '（--no-images 把终点压到 verify，在 render 之前）')
     return plan, None
 
 
@@ -580,6 +609,9 @@ def main(argv=None):
                 print('\n○ %s：快速模式没有这一步，跳过' % name)
             elif name == 'render':
                 print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过')
+            elif name == 'verify':
+                print('\n○ verify：--skip-verify 已跳过材料核查'
+                      '（发送前请自己逐份看一遍是否有简历里没有的技术词）')
             elif name == 'crawl' and args.dry_run:
                 # infer 还没跑，crawl_params.json 自然不在。dry-run 只是给人看命令，
                 # 不该因为「未来才会存在的文件现在不存在」就报失败。
@@ -599,8 +631,18 @@ def main(argv=None):
         if code == 3:
             partial.append(name)
         elif code != 0:
-            print('\n❌ %s 失败（退出码 %d），流水线停在这里。' % (name, code))
-            print('  修完接着跑：%s' % resume_cmd(run_dir, name, plan[-1]))
+            if name == 'verify':
+                # 这一步的失败不是「坏了」，是它查出了东西 —— 该看的是上面那份清单。
+                # 泛泛地说「修完接着跑」会让人以为是脚本出错，直接重跑一遍绕过去。
+                print('\n⛔ verify 查出了简历原文里没有的技术词，流水线停在 render 之前。')
+                print('  上面每条都带了上下文，逐条判断后二者选一：')
+                print('    确属编造 → 按上面的 gen_materials.py --only ... --force 重生成')
+                print('    有据可依 → 放行后续跑：%s'
+                      % resume_cmd(run_dir, 'verify', plan[-1]) + ' --allow <词表>')
+                print('  真不想查了：同一条命令加 --skip-verify（那就得自己逐份看材料）')
+            else:
+                print('\n❌ %s 失败（退出码 %d），流水线停在这里。' % (name, code))
+                print('  修完接着跑：%s' % resume_cmd(run_dir, name, plan[-1]))
             return 1
 
         # ── 阶段后的核查 ──
@@ -632,7 +674,8 @@ def main(argv=None):
                 return 1
 
         elif name == 'materials':
-            ok, missing = check_materials(run_dir, args.greeting_mode, args.resume_mode)
+            ok, missing = check_materials(run_dir, args.greeting_mode, args.resume_mode,
+                                          only=args.only)
             if ok:
                 print('  ✅ 材料齐全')
             else:
@@ -651,7 +694,13 @@ def main(argv=None):
     print('\n%s' % ('=' * 60))
     print('流水线结束（%.1f 分钟）' % ((time.monotonic() - started) / 60))
     if partial:
-        print('⚠ 这些阶段部分成功：%s —— 下面的岗位数可能少于预期' % '、'.join(partial))
+        print('⚠ 这些阶段部分成功：%s' % '、'.join(partial))
+        if 'verify' in partial:
+            # verify 的 3 不是「少了岗位」，是「有几份材料没查过」—— 说错了人就
+            # 不会去补查那几份，而没查过的材料恰恰是最需要看的。
+            print('  verify：有材料读不动、没查过（上面列了是哪几份），发送前自己看一眼')
+        if [s for s in partial if s != 'verify']:
+            print('  其余：下面的岗位数可能少于预期')
     print('运行目录: %s' % run_dir)
     print('耗时排行: python scripts/stage_timer.py report "%s"' % run_dir)
 

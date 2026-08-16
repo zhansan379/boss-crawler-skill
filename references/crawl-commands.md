@@ -90,8 +90,11 @@ python scripts/preferences.py missing
 # Emit a standalone crawl command from the saved preset (manual escape hatch)
 python scripts/preferences.py crawl-args
 
-# Save after the user confirms the infer parameters
-python scripts/preferences.py save --keywords "AI应用开发,大模型应用开发" --city "太原" \
+# 补写单个字段：save 默认合并，没给出的字段保持原值
+python scripts/preferences.py save --top 20
+
+# Save after the user confirms the infer parameters（整份重写 → --replace）
+python scripts/preferences.py save --replace --keywords "AI应用开发,大模型应用开发" --city "太原" \
     --count 20 --degree "本科" --match-mode deep --top 10
 
 # Forget it (the user asks to reset, or the market/target changed)
@@ -103,7 +106,7 @@ python scripts/preferences.py clear
 | `show` | `1` when no preset | Branch on the exit code, not on parsing the text |
 | `missing` | `1` when fields are missing | The fill-the-gaps question list for path C |
 | `crawl-args` | `1` when no preset | Prints one `boss_post_interactive.py …` line — run it as-is |
-| `save` | `0` | Overwrites; there is only ever one preset. Short forms mirror the crawler's own flags (`-c -p -m -n -deg -e -s -j`). Detail crawling is on by default — pass `--no-detail` to turn it off |
+| `save` | `0` | **Merges** by default — only the fields you pass are written, the rest keep their stored values; there is only ever one preset. `--replace` rewrites the whole file (used by `infer --save`, which has just printed the full set for confirmation); under merge you cannot clear a single field by omitting it. Short forms mirror the crawler's own flags (`-c -p -m -n -deg -e -s -j`). Detail crawling is on by default — pass `--no-detail` to turn it off |
 | `clear` | `0` | Idempotent — no error when the file is already gone |
 
 Stored at `assets/preferences.json`, keyed by `SCHEMA_VERSION`, stamped with `saved_at`.

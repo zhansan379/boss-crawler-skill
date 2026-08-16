@@ -36,7 +36,46 @@ def _load_jobs(run_dir):
     return data
 
 
-def check(run_dir, kinds, jobs=None):
+def parse_only(spec, total):
+    """--only 1,3,5-7 → 1-based 序号集合；spec 为空时返回 None（表示全部）。
+
+    住在这个模块里是因为它没有任何依赖：gen_materials.py 从这里 import，
+    materials 阶段的「生成哪些」和「核对哪些」于是共用同一份解析，不会各自漂移。
+    越界序号在这里是**错误**而不是静默丢弃 —— 核对产物时序号对不上就是调用方写错了。
+    （render_images.py / apply.py 另有一份宽松版：那边岗位数会随 --limit 变，
+    越界要容忍，语义不同，故意不合并。）
+    """
+    if not spec:
+        return None
+    picked = set()
+    for chunk in str(spec).replace(' ', '').split(','):
+        if not chunk:
+            continue
+        if '-' in chunk:
+            lo, _, hi = chunk.partition('-')
+            try:
+                picked.update(range(int(lo), int(hi) + 1))
+            except ValueError:
+                raise ValueError('--only 无法解析: %s' % chunk)
+        else:
+            try:
+                picked.add(int(chunk))
+            except ValueError:
+                raise ValueError('--only 无法解析: %s' % chunk)
+    bad = sorted(i for i in picked if i < 1 or i > total)
+    if bad:
+        raise ValueError('--only 里的序号超出 1..%d 范围: %s' % (total, bad))
+    return picked
+
+
+def check(run_dir, kinds, jobs=None, only=None):
+    """核对产物齐不齐。返回 (jobs, 已落盘, 缺失)。
+
+    `only` 是 1-based 序号集合（`--only` 解析后的结果），给 `None` 表示核对全部。
+    传了它就只核对这几个序号 —— materials/render 带 `--only` 跑时，其余岗位本来就
+    没打算生成，把它们算成「缺失」会让调用方（pipeline.py）把一次成功的部分运行
+    误判成部分失败并退 3。
+    """
     if jobs is None:
         jobs = _load_jobs(run_dir)
     gen = os.path.join(run_dir, 'generated')
@@ -45,6 +84,8 @@ def check(run_dir, kinds, jobs=None):
 
     missing, found = [], []
     for i, job in enumerate(jobs, 1):
+        if only is not None and i not in only:
+            continue
         company = job.get('公司') or job.get('company') or '?'
         for kind in kinds:
             prefix = '%s_%d_' % (kind, i)
@@ -78,6 +119,10 @@ def main():
     ap.add_argument('--kinds', nargs='+', metavar='KIND',
                     choices=['greeting', 'resume'],
                     help='要查的产物种类（默认两者都查）')
+    ap.add_argument('--only', metavar='SPEC',
+                    help='只核对这些 1-based 序号，如 "1,3,5-7"。'
+                         'materials/render 带 --only 跑过时必须给同一份，'
+                         '否则没打算生成的岗位会被算成缺失')
     args = ap.parse_args()
 
     kinds = list(args.kinds or [])
@@ -87,9 +132,23 @@ def main():
     if not kinds:
         kinds = ['greeting', 'resume']
 
-    jobs, found, missing = check(args.run_dir, kinds)
-    print('%d 个岗位 × %s → 齐全需 %d 个产物'
-          % (len(jobs or []), '/'.join(kinds), len(jobs or []) * len(kinds)))
+    try:
+        jobs = _load_jobs(args.run_dir)
+    except (OSError, ValueError) as exc:
+        print('❌ 读不到 qualified_jobs.json: %s' % exc)
+        return 1
+    try:
+        only = parse_only(args.only, len(jobs))
+    except ValueError as exc:
+        print('❌ %s' % exc)
+        return 2
+
+    jobs, found, missing = check(args.run_dir, kinds, jobs=jobs, only=only)
+    expected = len(only) if only is not None else len(jobs or [])
+    print('%d 个岗位%s × %s → 齐全需 %d 个产物'
+          % (expected,
+             '（--only 选中，共 %d 个）' % len(jobs or []) if only is not None else '',
+             '/'.join(kinds), expected * len(kinds)))
     for name in found:
         print('  ✅ %s' % name)
     for name in missing:
