@@ -87,6 +87,33 @@ def get_greeting_prompt(
     )
 
 
+def get_crawl_params_prompt(
+    resume: str, kw_budget: int, salary: str, experience: str,
+    degree: str, job_type: str, today: str
+) -> str:
+    """获取爬取参数推断提示词（只有命令行路径的 infer_params.py 在用）
+
+    这是 prompts/ 里唯一一个 **skill 路径不使用** 的模板：skill 路径在这一步是三轮
+    AskUserQuestion，参数由用户自己给。改它不会影响 skill 的行为。
+
+    四个枚举字符串必须由调用方从爬虫的 FILTER_LABELS 传进来，不要写死在模板里 ——
+    爬虫拿到不认识的筛选值不报错，只会安静地少筛一批，那种失败看起来跟成功一样。
+
+    today 传今天的日期（YYYY-MM-DD）。模板靠它跟简历里的毕业年份对比来判断在校/已
+    毕业，从而定 job_type；不传日期时模型只能靠简历措辞猜，实习和全职会混着出。
+    """
+    template = load_prompt("crawl_params")
+    return template.format(
+        resume=resume,
+        kw_budget=kw_budget,
+        salary=salary,
+        experience=experience,
+        degree=degree,
+        job_type=job_type,
+        today=today,
+    )
+
+
 def get_optimize_prompt(
     resume_text: str, company: str, position: str,
     salary: str, requirements: str, match_score: int,

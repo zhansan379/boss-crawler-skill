@@ -55,11 +55,18 @@ Claude 会自动克隆仓库、安装依赖、注册 skill。完成后输入 `/b
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/zhansan379/boss-crawler-skill.git ~/.claude/skills/boss-crawler
+
+# 2. 装依赖（Python 3.8+，另需本机已装 Chrome）
+pip install -r ~/.claude/skills/boss-crawler/requirements.txt
 ```
+
+> `requirements.txt` 分「必需」和「按需」两段：不装 PyPDF2 就只能吃 .docx / .md / .txt 简历，不装 Pillow 则投递前的简历图体检会跳过。
 
 > 仓库 `main` 分支即最新稳定版；`feat/showcv-resume-editor` 为内置简历编辑器试验分支，可 `git checkout feat/showcv-resume-editor` 体验。
 
 然后用 Claude Code 打开项目目录，输入 `/boss-crawler` 即可。
+
+**只想用命令行、不用 Claude Code？** 克隆到任意目录即可（不必放进 `~/.claude/skills/`），用法见 [docs/cli.md](./docs/cli.md)。
 
 
 ---
@@ -230,20 +237,51 @@ C:\Users\feng1\ \.claude\skills\boss-crawler\assets\2026-08-14_17-32-26\applicat
 
 ---
 
-### 方式二：独立命令行工具
+### 方式二：命令行（不依赖 Claude Code）
 
-Skill 中的每个阶段也可以作为独立 Python 脚本运行，不依赖 Claude Code：
+每个阶段都是可独立执行的脚本，LLM 走你自己配的 **OpenAI 兼容接口**（DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM 都行）。适合定时任务、批量重跑，或者不想开 Claude Code 的时候。
+
+**完整用法见 [docs/cli.md](./docs/cli.md)** —— 下面是最短路径：
 
 ```bash
-# 爬取岗位
-python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 -d -y
+# 1. 配模型（三层配置：命令行 > 环境变量 > 配置文件）
+cp assets/llm_config.example.json assets/llm_config.json   # 填 base_url / api_key / model
+python scripts/llm_check.py                                # 验一下通不通（key 打码显示）
 
-# 快速匹配（纯规则，零 token 消耗）
-python scripts/run_matcher.py --mode quick --profile assets/<ts>/profile.json
+# 2. 先看要执行什么，不动任何东西
+python scripts/pipeline.py 简历.pdf --all --dry-run
 
-# 深度匹配（规则预筛选 + LLM 语义分析）
-python scripts/run_matcher.py --mode deep --profile assets/<ts>/profile.json --top 15
+# 3. 一条命令跑完：解析简历 → 推断参数 → 爬取 → 匹配 → 生成材料 → 渲染简历图
+#    （不给 --all 就只跑一个阶段 —— 下游按岗位烧 token，默认不替你花）
+python scripts/pipeline.py 简历.pdf --all --city "杭州,上海" --keywords "Python,后端开发" --count 30
+
+# 4. 投递是单独一步，而且必须显式 --yes（不加就只演练、打印计划和可选公司）
+python scripts/apply.py "assets/<时间戳>"                          # 演练，顺便看有哪些公司可选
+python scripts/apply.py "assets/<时间戳>" --yes --max 5
+python scripts/apply.py "assets/<时间戳>" --yes --company 百度,棱镜数聚   # 只投指定公司
 ```
+
+> ⚠️ **投递不在流水线上。** `pipeline.py --all` 跑完停在「材料已生成」，只把投递命令打印出来 —— 投递是整条链上唯一不可撤销的一步（消息一发对方立刻收到），不该由「我跑一下全流程」顺手完成。
+
+**默认只跑一个阶段。** 不给 `--to` / `--all` 时，`pipeline.py` 跑完一个阶段就停下并印出下一步的命令 —— `materials` 按岗位调两次模型（招呼语 + 简历优化）、`deep` 按岗位调一次，这些钱不该在「我先跑跑看」时花掉。任何一步失败也能接着跑，流水线会打印确切的续跑命令：
+
+```bash
+python scripts/pipeline.py --from crawl                 # 只重跑爬取（自动定位 assets/LATEST.txt）
+python scripts/pipeline.py --from crawl --all           # 从爬取起一路跑到底
+python scripts/pipeline.py --run-dir "assets/<时间戳>" --from materials
+python scripts/where_am_i.py                            # 这一轮跑到哪了、缺什么
+```
+
+单独跑某一阶段（所有脚本都有 `--help`）：
+
+```bash
+python scripts/parse_resume.py 简历.pdf                  # → profile.json
+python scripts/run_matcher.py --mode quick --profile assets/<ts>/profile.json -o assets/<ts>
+python scripts/deep_analyze.py assets/<ts> --limit 3     # 先拿 3 个试水，看看质量和花费
+python scripts/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默认跳过已有产物）
+```
+
+两条路径**产物格式完全一致**，可以混着用：Skill 跑到一半接着用命令行续跑同一个运行目录，反过来也行。
 
 ---
 
@@ -298,41 +336,56 @@ python scripts/run_matcher.py --mode deep --profile assets/<ts>/profile.json --t
 | 🖼️ **简历图片生成** | 自动生成不含个人信息简历图片 | 针对岗位定制优化 + 自动排版调整 |
 | 📊 **可视化报告** | HTML 交互报告 | 双主题、岗位卡片含匹配度/难度/成功概率 |
 | 🚀 **自动投递** | DrissionPage 浏览器自动化 | 个性化招呼语 + 简历图片上传 + 投递记录 + 回读校验 |
+| 🧩 **双运行路径** | Claude Code Skill ／ 纯命令行 | 命令行走任意 OpenAI 兼容接口，支持分阶段续跑、`--dry-run` 预演、投递独立闸门 |
 
 
 
 ## 🏗️ 架构
 
 ```
-SKILL.md (Claude Code Skill 定义 — 编排完整流程)
-    │
-    ├─ Stage 1: scripts/boss_crawler/  ──→  post_data/*.csv
-    ├─ Stage 2-3: Claude 自身  ──→  assets/<ts>/profile.json
-    ├─ Stage 4-6: scripts/run_matcher.py ──→ 规则评分 + LLM 语义分析，
-    │                                       并直接写出 assets/<ts>/matching_report.html
-    ├─ Stage 7: scripts/resume_matcher/auto_apply.py ──→  浏览器自动投递
-    │                                                  （个性化招呼语 + 简历图片）
-    └─ Stage 0/Path D: app/ 内置 ShowCV 编辑器 ──→ assets/<ts>/showcv_exports/
+两条路径，同一套引擎和同一份产物：
+
+Skill 路径                              命令行路径
+SKILL.md（Claude 编排，边问边跑）        scripts/pipeline.py（参数一次给全）
+    │                                       │
+    │  LLM = Claude Code 自身                │  LLM = 你配的 OpenAI 兼容接口（scripts/llm/）
+    └───────────────┬───────────────────────┘
+                    ▼
+    scripts/boss_crawler/     爬取   ──→  assets/post_data/*.csv
+    scripts/resume_matcher/   评分   ──→  scored_jobs.json / matching_report.html
+    scripts/prompts/*.st      提示词（5 个模板两条路径共用，crawl_params.st 只有 CLI 用）
+                    ▼
+            assets/<ts>/qualified_jobs.json  ← 投递候选池（想收窄就直接编辑它）
+                    ▼
+    apply.py --yes ／ resume_matcher/auto_apply.py   浏览器自动投递
+
+app/ 内置 ShowCV 编辑器 ──→ assets/<ts>/showcv_exports/（简历图片）
 ```
 
 ```
 boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-crawler/)
 ├── SKILL.md                          # 🔑 Skill 定义（编排完整流程）
 ├── README.md                         # 使用文档
+├── requirements.txt                  # 依赖（分「必需」和「按需」两段）
+├── docs/cli.md                       # 📖 命令行路径完整用法
 │
 ├── assets/                           # 📦 运行输出（无需加载到上下文的最终产物）
 │   ├── LATEST.txt                    # 最近运行指针
 │   └── <timestamp>/                  # 每次运行隔离到时间戳子目录
 │       ├── profile.json              # 简历结构化解析
 │       ├── profile_validation.json   # 简历交叉校验
+│       ├── crawl_params.json         # 爬取参数（关键词/城市/筛选项/匹配模式）
+│       ├── crawl_summary.json        # 爬取统计（也是「这轮真爬到了」的证据）
+│       ├── scored_jobs.json          # 规则评分分档（tier1..tier4）
 │       ├── qualified_jobs.json       # 高分岗位评分明细（含匹配理由/风险）
 │       ├── matching_report.html      # HTML 可视化报告
 │       ├── deep_candidates.json      # 深度模式候选
-│       ├── deep_results.json         # Claude 深度分析结果
+│       ├── deep_results.json         # 深度分析结果（Claude 或你配的模型）
 │       ├── deep_shards/              # 并行分片分析中间稿
 │       ├── apply_log.json            # 投递记录
-│       ├── crawl_summary.json        # 爬取统计
 │       ├── resume_text.txt           # 简历纯文本
+│       ├── run_timings.jsonl         # 各阶段耗时
+│       ├── llm_usage.jsonl           # 每次模型调用的 token 与重试（命令行路径）
 │       ├── generated/                # 个性化招呼语 / 定制简历 JSON
 │       ├── applications/{公司}-{职位}/  # 🎁 定制简历图片 + 定制简历文本 + 岗位信息+招呼语
 │       └── showcv_exports/           # ShowCV 编辑器导出（简历图片 zip）
@@ -350,13 +403,37 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 └── scripts/                          # 🐍 可执行脚本（自包含）
     ├── boss_post_interactive.py      # 爬虫 CLI 入口
     ├── run_matcher.py                # 匹配系统 CLI 入口
+    │
+    │   ── 命令行路径（每个阶段都能单独跑，详见 docs/cli.md）──
+    ├── pipeline.py                   # 一条命令串完 8 个阶段（不含投递）
+    ├── parse_resume.py               # 简历 → profile.json
+    ├── infer_params.py               # profile → crawl_params.json
+    ├── deep_analyze.py               # 逐岗位调模型 → deep_results.json
+    ├── gen_materials.py              # 招呼语 + 优化简历 → generated/
+    ├── render_images.py              # 简历 JSON → 简历长图（串行，共用一个浏览器）
+    ├── apply.py                      # 投递（必须显式 --yes，不加只演练）
+    ├── llm_check.py                  # 体检模型配置（打印生效值 + 试发一次）
+    ├── llm/                          # OpenAI 兼容客户端（config 三层优先级 + 重试 + 并发）
+    │
+    │   ── 辅助 ──
+    ├── check_artifacts.py            # 材料齐不齐（缺谁的哪一项）
+    ├── verify_image.py               # 简历图体检（空白图发出去比不发更糟）
+    ├── write_application_md.py       # 组装 applications/ 下的可读投递材料
     ├── read_thin.py                  # 瘦读数据文件（避免撑爆上下文）
     ├── where_am_i.py                 # 从产物反推当前阶段，提示下一步命令
     ├── stage_timer.py                # 阶段计时埋点
     ├── validate_profile.py           # Profile 交叉校验
+    ├── test_*.py                     # 离线测试（不发真实请求、不碰浏览器）
+    │
     ├── boss_crawler/                 # 爬虫引擎包
     ├── resume_matcher/               # 匹配引擎包（评分/解析/报告/投递/深度分析）
     └── prompts/                      # LLM 提示词模板 (.st)
+        ├── resume_parse.st           #   解析/分析/匹配/招呼语/简历优化：两条路径共用
+        ├── job_analysis.st
+        ├── match_analysis.st
+        ├── greeting.st
+        ├── resume_optimize.st
+        └── crawl_params.st           #   爬取参数推断：只有命令行路径用（skill 是问用户）
 ```
 
 > **项目根目录**还包含运行时数据目录：`post_data/`（爬取数据）、`chrome_user_data/`（登录 cookie），这些不属于 skill 本身，由脚本在运行时自动创建。
@@ -370,9 +447,12 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 | 技术 | 用途 |
 |------|------|
 | [DrissionPage](https://github.com/g1879/DrissionPage) | Chrome CDP 协议控制，爬虫 + 浏览器自动化 |
-| PyPDF2 / python-docx | 简历文件解析（PDF/Word） |
+| PyPDF2 / python-docx | 简历文件解析（PDF/Word），按需安装 |
 | chardet | 文件编码自动检测 |
-| Claude Code | LLM 分析引擎：简历语义解析、岗位深度匹配、简历优化 |
+| requests | OpenAI 兼容接口调用（命令行路径的 LLM 客户端，零额外重依赖） |
+| Pillow | 投递前给简历图体检（尺寸、内容占比、是否整张空白），按需安装 |
+| Claude Code | Skill 路径的 LLM 引擎：简历语义解析、岗位深度匹配、简历优化 |
+| 任意 OpenAI 兼容接口 | 命令行路径的 LLM 引擎：DeepSeek / 通义 / 月之暗面 / 智谱 / 火山方舟 / 本地 ollama、vLLM |
 | HTML/CSS/JS | Bauhaus 风格双主题可视化报告 + 内置 ShowCV 编辑器 |
 
 ---

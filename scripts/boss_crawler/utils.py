@@ -19,6 +19,44 @@ from .config import (
 )
 
 
+# ==================== 给人照着粘的命令 ====================
+
+# scripts/ 的绝对路径。utils.py 在 scripts/boss_crawler/ 里，往上两级就是它。
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ENTRY = os.path.join(_SCRIPTS_DIR, 'boss_post_interactive.py')
+
+
+def _quote(text):
+    return '"%s"' % text if ' ' in text else text
+
+
+def script_cmd(script, *args):
+    """拼一条 `python <scripts/里的脚本> <参数…>`，路径按**当前工作目录**算。
+
+    别在提示里写死路径。写死裸文件名（`python boss_post_interactive.py`）在仓库根目录
+    粘就是 Errno 2 —— 脚本在 scripts/ 里；反过来写死 `scripts/…`，在 scripts/ 目录里
+    粘又是错的。而这些提示恰恰是给「已经卡住了」的人看的，让人再猜一次路径最糟。
+
+    流水线是从仓库根目录启动子进程的，所以未登录那条提示实际总在根目录下被读到 ——
+    第一版写的裸文件名在那儿 100% 粘不动。
+
+    带空格的路径和参数都会加引号（Windows 上运行目录带空格很常见）。
+    """
+    full = os.path.join(_SCRIPTS_DIR, script)
+    try:
+        path = os.path.relpath(full, os.getcwd())
+    except ValueError:          # Windows 上 cwd 与脚本不同盘时 relpath 直接抛
+        path = full
+    if len(path) > len(full):
+        path = full             # cwd 在别处时 ..\..\.. 反而更长更难读，不如给绝对路径
+    return ' '.join(['python', _quote(path)] + [_quote(str(a)) for a in args])
+
+
+def entry_cmd(*args):
+    """爬虫入口（boss_post_interactive.py）的 script_cmd 快捷方式。"""
+    return script_cmd('boss_post_interactive.py', *args)
+
+
 # ==================== 参数展开 ====================
 
 def _expand_arg(value):

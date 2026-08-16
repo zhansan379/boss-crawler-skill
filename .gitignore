@@ -6,8 +6,12 @@ chrome_user_data/
 post_data/
 assets/*
 !assets/.gitkeep
+# LLM 配置模板要进仓库；真实配置 assets/llm_config.json 带 api_key，由上面的 assets/* 挡住。
+!assets/llm_config.example.json
 
 # 简历编辑器的 Chrome profile（约 28MB）和导出的简历数据。
 # assets/* 已经覆盖了它们，这两条是防止将来挪动 assets 布局时漏掉。
 showcv_profile/
 showcv-resume.json
+
+看这个

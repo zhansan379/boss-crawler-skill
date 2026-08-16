@@ -84,7 +84,12 @@ def run_quick_mode(profile: ResumeProfile, output_dir: str) -> None:
     job_files = list_available_job_files()
     if not job_files:
         print("错误: 未找到岗位数据文件（assets/post_data/ 目录下无 CSV）")
-        print("请先运行爬虫获取岗位数据: python boss_post_interactive.py --ensure-login && python boss_post_interactive.py -m custom -p ... -d -y")
+        # 只在这条错误路径上导入：boss_crawler 会连带加载 DrissionPage，而快速模式
+        # 一个浏览器都不用，不该为一行提示付这个导入代价。
+        from boss_crawler.utils import entry_cmd
+        print("请先运行爬虫获取岗位数据: %s && %s"
+              % (entry_cmd('--ensure-login'),
+                 entry_cmd('-m', 'custom', '-p', '...', '-d', '-y')))
         sys.exit(1)
 
     print(f"\n找到 {len(job_files)} 个岗位数据文件:")

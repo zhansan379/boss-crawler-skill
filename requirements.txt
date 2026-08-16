@@ -1,0 +1,25 @@
+# 运行依赖。安装：pip install -r requirements.txt
+#
+# 分成「必需」和「按需」两段：下面标了「按需」的三项各自只服务一条路径，
+# 缺了不会让整个流程起不来，只会在走到那一步时给出明确的报错和安装命令
+# （见 resume_matcher/parsers.py 的 HAS_PDF / HAS_DOCX、verify_image.py 的 PIL 导入）。
+# 全装最省事，介意体积的可以只装必需项。
+
+# ── 必需 ──
+# 浏览器自动化：爬取岗位、投递、ShowCV 渲染都靠它（Chrome CDP）
+DrissionPage>=4.1.0
+# OpenAI 兼容接口的 HTTP 调用（scripts/llm/client.py）。
+# 本身是 DrissionPage 的间接依赖，这里显式写出来：llm/ 直接 import 它，
+# 不该指望别人的依赖树替自己声明。
+requests>=2.28.0
+# CSV/简历文本的编码探测
+chardet>=5.0.0
+
+# ── 按需 ──
+# PDF 简历解析。不装则 parse_resume.py 只能吃 .docx / .md / .txt
+PyPDF2>=3.0.0
+# Word 简历解析。不装则 .docx / .doc 读不了
+python-docx>=1.0.0
+# 简历长图体检（verify_image.py：尺寸、纯色占比、是否整张空白）。
+# 不装则 apply.py 的图片校验会跳过 —— 空白图被投出去比不投更糟，建议装。
+Pillow>=10.0.0

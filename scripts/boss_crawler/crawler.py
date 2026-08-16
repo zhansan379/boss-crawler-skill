@@ -732,7 +732,7 @@ def run_crawl_cli(args):
     """CLI模式：使用命令行参数直接爬取，无需交互"""
     from .config import sleep_config as sc
     from .data_loader import load_position_data, load_city_data, find_positions_by_name, find_cities_by_name
-    from .utils import _expand_arg, build_filter_query_string, format_filter_display, resolve_filter_values
+    from .utils import _expand_arg, build_filter_query_string, format_filter_display, resolve_filter_values, entry_cmd
 
     time_stats.reset()
 
@@ -836,7 +836,7 @@ def run_crawl_cli(args):
         print("  [LOGIN_NEEDED] 未检测到登录状态")
         print("=" * 50)
         print()
-        print("  请先运行 python boss_post_interactive.py --ensure-login 完成登录。")
+        print("  请先运行 %s 完成登录。" % entry_cmd('--ensure-login'))
         print("  登录完成后，再次运行爬取命令即可。")
         print()
         print("=" * 50)

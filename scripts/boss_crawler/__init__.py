@@ -8,6 +8,7 @@ BOSS直聘岗位爬虫包
 """
 
 from contextlib import contextmanager
+import sys
 
 # ── 配置与常量
 from .config import (
@@ -112,7 +113,7 @@ from .crawler import (
 
 # ── 入口
 from .cli import parse_args
-from .auth import ensure_login
+from .auth import ensure_login, _is_interactive as _login_is_interactive
 from .crawler import run_crawl_process, run_crawl_cli
 from .data_loader import update_json_data
 from .menu import list_all_positions, list_all_cities
@@ -159,7 +160,12 @@ def main():
         return
 
     if args.ensure_login:
-        ensure_login()
+        ok = ensure_login()
+        # 退出码只在命令行路径（人在键盘前）上反映登录结果：没登上就是 1，脚本里
+        # `&&` 串起来才不会带着未登录状态往下跑。skill 路径靠 stdout 里的
+        # [LOGIN_NEEDED] 标记决定下一步，在那儿返回非零只会被读成「脚本坏了」。
+        if not ok and _login_is_interactive():
+            sys.exit(1)
         return
 
     if args.list_positions:

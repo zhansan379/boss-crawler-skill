@@ -201,21 +201,30 @@ def _quote(value):
     return '"%s"' % value
 
 
-def crawl_args(prefs):
-    """把预设翻译成 boss_post_interactive.py 的参数串。
+# crawl_args 里要给值加引号的 flag（值可能含中文和逗号）。
+# -m / -n 的值历来不加引号，保持原样，免得 SKILL.md 里贴出来的命令换个样子。
+_QUOTED_VALUE_FLAGS = ('-p', '-c', '-j', '-s', '-e', '-deg', '--scale')
+
+
+def crawl_argv(prefs):
+    """把预设翻译成 boss_post_interactive.py 的 argv 列表（值不带引号）。
 
     存在的意义：预设有 10 个字段要映射到 -p -c -n -d -deg -e -s -j --scale，
     让 Claude 每轮手拼一次，错一次就是一次白爬。这里是唯一的拼装点。
+
+    两个消费者：crawl_args() 拼成给人看/给 shell 跑的字符串（skill 路径），
+    pipeline.py 直接把列表喂给 subprocess（命令行路径）。列表是本体、字符串
+    由它派生 —— 两边各拼一次的下场是某天只有一边支持了新字段。
     """
     if not prefs:
-        return ''
+        return []
 
     parts = ['-m', prefs.get('mode') or 'custom']
 
     if prefs.get('keywords'):
-        parts += ['-p', _quote(','.join(prefs['keywords']))]
+        parts += ['-p', ','.join(prefs['keywords'])]
     if prefs.get('cities'):
-        parts += ['-c', _quote(','.join(prefs['cities']))]
+        parts += ['-c', ','.join(prefs['cities'])]
     if prefs.get('count'):
         parts += ['-n', str(prefs['count'])]
 
@@ -223,7 +232,7 @@ def crawl_args(prefs):
                       ('experience', '-e'), ('degree', '-deg'),
                       ('scale', '--scale')):
         if prefs.get(key):
-            parts += [flag, _quote(','.join(prefs[key]))]
+            parts += [flag, ','.join(prefs[key])]
 
     # -d 默认开：没有详情的 CSV 匹配质量差得多（JD 是空的）。
     # -y 恒开：Claude 驱动的运行读不到 stdin，交互确认在这一层没有意义 ——
@@ -232,7 +241,22 @@ def crawl_args(prefs):
         parts.append('-d')
     parts.append('-y')
 
-    return ' '.join(parts)
+    return parts
+
+
+def crawl_args(prefs):
+    """crawl_argv 的字符串形态：跟在 _QUOTED_VALUE_FLAGS 后面的值补上引号。"""
+    argv = crawl_argv(prefs)
+    if not argv:
+        return ''
+
+    out = []
+    quote_next = False
+    for part in argv:
+        out.append(_quote(part) if quote_next else part)
+        quote_next = part in _QUOTED_VALUE_FLAGS
+
+    return ' '.join(out)
 
 
 def crawl_command(prefs):

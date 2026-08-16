@@ -209,6 +209,12 @@ forwarded onward only adds leakage. `optimized_resume` therefore starts at the f
 (教育背景 / 专业技能 / …) — no name heading, no contact line. Do not override this in the agent
 prompt.
 
+**Heading levels are fixed by the template's 格式要求 block.** `#` is unused on purpose — that level
+is the name heading in a normal resume, and this document has no name. `##` is a section (`## 专业技能`),
+`###` is one entry inside an experience section (a company, a project, a school) with its date range
+appended after `  ||  `. The first line of `optimized_resume` must be a `##`. Do not "fix" a resume
+that lacks `#` by adding one; the renderer sizes `##` as the top level.
+
 | 7bc answer | Content base (`resume_text` slot) |
 |---|---|
 | `AI调整` | the original resume text (`{run_dir}/resume_text.txt`, or the user's override) — keep its section set and ordering, re-weight the wording toward this JD |

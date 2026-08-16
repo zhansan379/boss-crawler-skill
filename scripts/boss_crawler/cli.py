@@ -6,35 +6,41 @@
 
 import argparse
 
+from .utils import entry_cmd
+
 
 def parse_args():
     """解析命令行参数"""
+    # 示例里的路径按 cwd 算（entry_cmd），不写死。从仓库根目录跑 --help 时，写死的
+    # `python boss_post_interactive.py …` 这七行没有一行粘得动 —— 而 docs/cli.md 恰恰
+    # 是教人从根目录跑的。
+    entry = entry_cmd()
     parser = argparse.ArgumentParser(
         description='BOSS直聘岗位爬取工具 - 支持命令行参数非交互式运行',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例:
   # 列出可用岗位
-  python boss_post_interactive.py --list-positions
+  {e} --list-positions
 
   # 列出可用城市
-  python boss_post_interactive.py --list-cities
+  {e} --list-cities
 
   # 更新数据
-  python boss_post_interactive.py --update-data
+  {e} --update-data
 
   # 按关键词爬取（搜索模式）
-  python boss_post_interactive.py -m custom -p "Python,数据分析" -c "北京,上海" -n 20 -d -y
+  {e} -m custom -p "Python,数据分析" -c "北京,上海" -n 20 -d -y
 
   # 按岗位名称爬取（列表模式）
-  python boss_post_interactive.py -m list -p "Python开发工程师" -c "北京" -n 10
+  {e} -m list -p "Python开发工程师" -c "北京" -n 10
 
   # 带筛选条件的精准搜索
-  python boss_post_interactive.py -m custom -p "Python后端" -c "北京" -n 20 -e "3-5年" -deg "本科" -s "20-50K" -d -y
+  {e} -m custom -p "Python后端" -c "北京" -n 20 -e "3-5年" -deg "本科" -s "20-50K" -d -y
 
   # 交互式模式（不带参数或参数不完整时）
-  python boss_post_interactive.py
-        '''
+  {e}
+        '''.format(e=entry)
     )
 
     # 查询类参数
