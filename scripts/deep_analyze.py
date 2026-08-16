@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""deep_candidates.json → deep_results.json（逐岗并发调 LLM，不需要 skill）。
+"""deep_candidates.json → deep_results.json（逐岗并发调 LLM）。
 
-对应 SKILL.md 的 Stage 4-6 深度模式「阶段 2」。skill 路径为了不让 N 份 JD 全文进
-主上下文，得先 `shard_deep_candidates.py` 切片、再派一个 subagent 一片。直连 API
-时那个理由消失了：并发单位天然就是「一个岗位一次请求」，没有共享上下文要保护。
+流水线的 deep 阶段：`run_matcher.py --mode deep` 预筛出候选后由本脚本逐岗分析。
+并发单位天然就是「一个岗位一次请求」，彼此不共享上下文，所以直接按 concurrency 铺开。
 
-产出格式与 `merge_deep_results` 期望的完全一致（靠 rank 回填），所以阶段 3 一行不改：
+产出格式与 `merge_deep_results` 期望的完全一致（靠 rank 回填），所以合并那步一行不改：
     python scripts/run_matcher.py --mode deep --merge --output-dir <run_dir>
 
 用法：
@@ -36,8 +35,8 @@ from llm import (
 _VALID_CATEGORIES = ('qualified', 'need_optimization', 'cannot_apply')
 
 # match_analysis.st 不产 highlight / risk，但 HTML 报告的深度模式会展示这两栏
-# （merge 里是 deep.get('highlight', '')）。不改模板，改为在调用侧追加一段附言 ——
-# 模板是 skill 路径也在用的共享文件，为 CLI 的需要去改它会牵连另一条路径。
+# （merge 里是 deep.get('highlight', '')）。附言写在调用侧而不是塞进模板：模板描述的是
+# 评分契约（merge 按那些字段回填），这两栏只是报告的展示件，混进去会让契约边界变模糊。
 _ADDENDUM = """
 
 额外要求（本次调用附加）：

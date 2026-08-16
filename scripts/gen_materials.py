@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""为 qualified_jobs.json 里的每个岗位生成招呼语 + 优化简历（顶掉 7d 的一批 subagent）。
+"""为 qualified_jobs.json 里的每个岗位生成招呼语 + 优化简历（并发调 LLM）。
 
-skill 路径在 Stage 7d 给每个岗位派两个 subagent（招呼语一个、简历一个），再用
-`check_artifacts.py` 按产物做 barrier。本脚本直连 API 并发做同一件事，产物文件名
-与那套契约**完全一致**，所以 `check_artifacts.py` / `write_application_md.py` /
-ShowCV 渲染一行不改：
+产物文件名是下游的硬契约，`check_artifacts.py` / `write_application_md.py` /
+ShowCV 渲染都按它对齐：
 
     {run_dir}/generated/greeting_{i}_{公司}.txt    纯文本招呼语
     {run_dir}/generated/resume_{i}_{公司}.json     resume_optimize.st 的整个 JSON 对象
@@ -392,7 +390,7 @@ def gen_resume(job, resume_text, match, cfg, run_dir):
 
     body = data.get('optimized_resume')
     if not isinstance(body, str) or len(body.strip()) < 50:
-        # 下游 7e 直接渲染这个字段：空的话会渲染出一张空白简历图并被投出去
+        # render 阶段直接渲染这个字段：空的话会渲染出一张空白简历图并被投出去
         raise LLMError('optimized_resume 缺失或过短（%s）'
                        % (len(body) if isinstance(body, str) else type(body).__name__))
     if body.strip().startswith('```'):

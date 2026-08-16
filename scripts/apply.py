@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""执行投递（Stage 7h）。**这是整条流水线里唯一不可逆的一步。**
+"""执行投递。**这是整条流水线里唯一不可逆的一步。**
 
 所以它是独立的一条命令，而且默认只演练：不给 --yes 就把「会投给谁、发什么招呼语、
 带哪张图」全打出来然后退出，一个浏览器动作都不做。流水线（pipeline.py）跑到材料生成
@@ -92,7 +92,7 @@ def load_profile(run_dir):
 
 
 def find_greeting(run_dir, index):
-    """招呼语正文与来源。走 write_application_md.resolve_greeting，口径与 7f 一致。"""
+    """招呼语正文与来源。走 write_application_md.resolve_greeting，两边口径一致。"""
     args = SimpleNamespace(greeting=None, greeting_file=None)
     text, source = resolve_greeting(run_dir, index, args)
     return (text or '').strip(), source
@@ -347,7 +347,7 @@ def main():
     ap.add_argument('--max', type=int, help='最多投几个（默认全部选中的）')
     ap.add_argument('--name', help='<姓名>-<应聘岗位> 里的姓名，覆盖 profile.json')
     ap.add_argument('--no-image', action='store_true', help='不发简历附件')
-    ap.add_argument('--image', help='整批共用这一张图（对应 7bc 的「自定义上传」）')
+    ap.add_argument('--image', help='整批共用这一张图（用户自己上传的那张）')
     ap.add_argument('--skip-verify', action='store_true',
                     help='跳过 verify_image.py 体检（不建议：空白图发出去比不发更糟）')
     ap.add_argument('--headless', action='store_true',

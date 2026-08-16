@@ -3,7 +3,7 @@
 """参数预设的回归测试。
 
 覆盖 2026-08-14 加的 scripts/preferences.py。最要紧的一组是 [3] ——
-白名单丢弃未知键，那是「预设不能变成绕过 7g 发送前确认的开关」这条安全边界。
+白名单丢弃未知键，那是「预设不能变成绕过 gate:send 发送前确认的开关」这条安全边界。
 
 用 BOSS_SKILL_ASSETS 指向临时目录，不碰真实的 assets/preferences.json。
 
@@ -126,12 +126,12 @@ def test_missing_fields():
 # ==================== 3. 白名单：安全边界 ====================
 
 def test_unknown_keys_dropped():
-    """预设不能成为绕过 7g 的配置开关。
+    """预设不能成为绕过 gate:send 的配置开关。
 
     preferences.json 是用户手改得到的文件。若 load() 原样透传未知键，
     往里塞一个 auto_apply: true 就等于给「发送前确认」加了个 off 开关。
     """
-    print('\n[3] 未知键被丢弃（7g 不可被预设绕过）')
+    print('\n[3] 未知键被丢弃（gate:send 不可被预设绕过）')
     import preferences
 
     write_raw({
@@ -142,13 +142,13 @@ def test_unknown_keys_dropped():
         'send_without_confirm': True,
         'jobs': ['https://www.zhipin.com/job_detail/x.html'],
         'greeting': '你好我想投这个岗位',
-        'skip_gate_7g': True,
+        'skip_gate_send': True,
         'random_junk': 123,
     })
     prefs = preferences.load()
 
     for key in ('auto_apply', 'send_without_confirm', 'jobs',
-                'greeting', 'skip_gate_7g', 'random_junk'):
+                'greeting', 'skip_gate_send', 'random_junk'):
         check('丢弃 %s' % key, key not in prefs, '仍在: %r' % prefs.get(key))
 
     check('白名单内的键保留', prefs.get('cities') == ['太原'], prefs.get('cities'))

@@ -2,12 +2,14 @@
 
 ## Mode Selection
 
-**Do not ask here.** The mode and Top-N arrive already answered — either from the merged Stage 3.5
-question (city + keywords + mode + Top-N in one `AskUserQuestion` call) or from a saved preset's
-`match_mode` / `top_n`. Asking again at Stage 4 is the round-trip that Stage 3.5 exists to avoid.
+**Do not ask here.** The mode and Top-N arrive already answered — either from the `infer`
+confirmation (city + keywords + mode + Top-N in one `AskUserQuestion` call) or from a saved preset's
+`match_mode` / `top_n`, both of which end up in `{run_dir}/crawl_params.json`. `run_matcher.py` and
+`pipeline.py` read them from there; asking again at match time is the round-trip that the `infer`
+gate exists to avoid.
 
-The table below is what you use to pick the *recommended* option when you compose that Stage 3.5
-question — not a prompt to raise a new one:
+The table below is what you use to pick the *recommended* option when you compose that question —
+not a prompt to raise a new one:
 
 | Scenario | Recommended mode | Reason |
 |----------|-----------------|--------|
@@ -16,6 +18,20 @@ question — not a prompt to raise a new one:
 | User says "fast" | Quick | Respect user preference |
 | User says "detailed" | Deep | Respect user preference |
 | Unclear | Deep, Top 10 | The balanced default; mark it 推荐 and let the one question settle it |
+
+---
+
+## Driving It
+
+One command covers both modes and, in deep mode, all three phases — it reads `match_mode` and
+`top_n` out of `crawl_params.json`:
+
+```bash
+python scripts/pipeline.py --run-dir {run_dir} --from match
+```
+
+The per-phase commands below are what that expands to. Use them when a single phase failed and you
+want to re-run just that one.
 
 ---
 
@@ -35,22 +51,8 @@ HTML report shows `🚀 快速模式` badge. Matching reasons are rule-based ("�
 
 ## Deep Mode
 
-Three phases. For jobs where you want semantic matching and per-job personalized optimization advice.
-
-### Phase 0: Top-N Is Already Known
-
-N came from Stage 3.5's merged question or from the preset's `top_n` — **do not ask again here.**
-The choices offered back at 3.5, for reference:
-
-> Deep mode sorts jobs by rule score, then sends the top N to Claude for per-job LLM analysis. Choose pre-filter count:
-> - Top 5 — fastest, lowest token cost
-> - Top 10 — balanced (recommended default)
-> - Top 15 — broader coverage
-> - Top 20 — maximum coverage, highest token cost
-> - Custom — enter any number
-
-If N is somehow missing (no preset and no 3.5 answer — e.g. the user jumped straight to
-「深度匹配」 on an existing report), use 10 and say so in one line rather than opening a gate for it.
+Three phases: a rule pre-filter, one LLM request per candidate, then a merge. For jobs where you
+want semantic matching and per-job personalized optimization advice.
 
 ### Phase 1: Python Pre-Filter
 
@@ -60,41 +62,32 @@ python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top
 
 Saves `deep_candidates.json` to `{run_dir}/`. Contains top N candidates (from Tier1+Tier2) with full profile and rule scores.
 
-### Phase 2: Parallel Deep Analysis (sharded)
+N comes from the `infer` confirmation or the preset's `top_n`. If it is somehow missing (no preset
+and no answer — e.g. the user jumped straight to 「深度匹配」 on an existing report), use 10 and say
+so in one line rather than opening a gate for it.
 
-**Do not analyze the candidates one-by-one in the main context.** Top-15 means 15 full JD texts
-plus 15 analysis outputs land in your own context; the 2026-08-13 run hit `preTokens=167,609` and
-paid 167 s for a compaction because of exactly this. It is also serial — 15 sequential
-read-think-write round trips.
-
-Shard, then fan out:
+### Phase 2: Per-Job LLM Analysis
 
 ```bash
-python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
+python scripts/deep_analyze.py {run_dir}
 ```
 
-This writes `{run_dir}/deep_shards/shard_NN.md`, one per group of 4 candidates. Each shard file is
-**self-contained** — grading rules, resume summary, and that group's JDs are all inside it, so the
-subagent reads *one* file and needs neither `deep_candidates.json`, nor `profile.json`, nor
-`prompts/match_analysis.st`. The resume `raw_text` is deliberately excluded (it would be duplicated
-into every shard for no benefit).
+Reads `deep_candidates.json`, sends **one request per candidate** concurrently (`--workers`, default
+`concurrency` from the LLM config), writes `{run_dir}/deep_results.json`. Requests share no context,
+so the concurrency unit is naturally one job.
 
-The script prints one ready-to-dispatch prompt per shard. Dispatch them **in parallel**, one agent
-per shard. Each agent writes `deep_shards/result_NN.json` and replies with a single `done <path> <n>`
-line — it must not echo the JSON back, or the main context pays for it twice, which is the whole
-cost this design removes.
+Long output — one line per job. Run it as a background task and grep the tail rather than piping
+every line through your context.
 
-Then settle the barrier on artifacts, not notifications:
+Useful flags: `--limit 3` (try three first), `--resume` (skip ranks already in `deep_results.json`),
+`--dry-run` (print what would be sent, spend nothing), `--jd-limit` (JD truncation, default 2500
+chars), `--model` / `--base-url` / `--api-key`.
 
-```bash
-python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360
-```
+**Exit code 3 means partial failure** — `deep_results.json` was written but some jobs are missing.
+`--resume` tops up only the gaps; a rank that keeps failing is dropped from the batch, not retried
+forever. Exit 1 means the input was unreadable or every job failed.
 
-(Bash's default timeout is 120 s — pass `timeout: 380000` when using `--wait 360`.) This checker
-additionally parses each `result_NN.json`; a half-written file counts as *not ready* rather than as
-a failure, so polling handles agents that are mid-write.
-
-Each result entry must carry `rank` — the merge step maps results back to candidates by `rank`, not
+Each result entry carries `rank` — the merge step maps results back to candidates by `rank`, not
 by `job_id`:
 
 ```json
@@ -118,8 +111,10 @@ by `job_id`:
 ```
 
 `category` must be one of the three English enums (`qualified` / `need_optimization` /
-`cannot_apply`). The merge step also accepts the legacy `overall_match` + `classification` (Chinese
-label) fields for backward compatibility with older `deep_results.json` files.
+`cannot_apply`). `highlight` / `risk` are not in `match_analysis.st` — `deep_analyze.py` appends a
+short addendum asking for them, because the report's deep-mode cards show those two columns. The
+merge step also accepts the legacy `overall_match` + `classification` (Chinese label) fields for
+backward compatibility with older `deep_results.json` files.
 
 ### Phase 3: Merge & Report
 
@@ -127,23 +122,19 @@ label) fields for backward compatibility with older `deep_results.json` files.
 python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
 ```
 
-Merge first collects `deep_shards/result_*.json` into `{run_dir}/deep_results.json` (dedup by
-`rank`, first occurrence wins; a corrupt shard is skipped with a warning instead of failing the
-batch), then does blended scoring (rule 40% + Claude 60%) → reclassify → HTML report.
-
-If no `deep_shards/` directory exists it falls back to reading a hand-written
-`deep_results.json`, so the old single-file flow still works:
+Reads `{run_dir}/deep_results.json`, then does blended scoring (rule 40% + LLM 60%) → reclassify →
+HTML report. The file it expects looks like:
 
 ```json
 {
   "version": "1.0",
-  "analyzed_by": "claude-code",
+  "analyzed_by": "openai-compatible:deepseek-chat",
   "analyzed_at": "2026-08-10 14:30:00",
   "results": [/* per-job analysis array */]
 }
 ```
 
-HTML report shows `🧠 深度模式` badge. Deep-analyzed job cards show highlight/risk tags. "View optimization suggestions" button opens a modal with Claude-generated advice, missing skills, and risk assessment.
+HTML report shows `🧠 深度模式` badge. Deep-analyzed job cards show highlight/risk tags. "View optimization suggestions" button opens a modal with the model's advice, missing skills, and risk assessment.
 
 ---
 
@@ -176,7 +167,7 @@ reported as "cannot apply".
 
 ### Edge cases
 
-- **Salary 面议 / unparseable** — not disqualifying, but capped at `need_optimization`; unverified salary must not trigger Stage 7 auto-apply. Reason notes 薪资面议待确认.
+- **Salary 面议 / unparseable** — not disqualifying, but capped at `need_optimization`; unverified salary must not trigger auto-apply. Reason notes 薪资面议待确认.
 - **Resume experience years unknown** — the ≥3-year gate cannot fire, and `qualified` is unreachable ("fully met" is unverifiable).
 - **Resume degree missing** — assumed 本科 (`DEFAULT_RESUME_DEGREE_LEVEL`), preserving prior behaviour.
 
@@ -196,7 +187,7 @@ dormant one cannot demote a strong match. Activity affects exactly two things:
 | Consumer | Role of activity |
 |----------|------------------|
 | Report tier lists (`scoring.py`) | Tiebreak only: sorted by `(match_score, activity)` — match score stays the primary key, because the report is for a human reading top-down |
-| Stage 7 apply order (`auto_apply.py`) | **Primary** key: sorted by `(activity, match_score, company)` — a reply from an active HR beats a marginally better match that nobody reads |
+| `apply.py` send order (`auto_apply.py`) | **Primary** key: sorted by `(activity, match_score, company)` — a reply from an active HR beats a marginally better match that nobody reads |
 
 `hr_activity_rank` returns `None` when nothing was collected (no `-d`). `hr_activity_sort_key`
 folds `None` to `-1` so uncollected jobs sort after every collected one; when *no* job has data,

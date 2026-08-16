@@ -2,7 +2,8 @@
 
 ## JSON Output Schema
 
-Claude reads `scripts/prompts/resume_parse.st` and outputs this structure:
+`parse_resume.py` fills `scripts/prompts/resume_parse.st` and writes the model's output as
+`{run_dir}/profile.json`:
 
 ```json
 {
@@ -86,12 +87,14 @@ with open(profile_path, 'w', encoding='utf-8') as f:
 
 ---
 
-## Stage 3.5b: Cross-Validation Procedure
+## Cross-Validation Procedure
 
-Always run this — it is one command and usually ends in one line. It is not a blocking gate, but the
-omissions it catches cascade into wrong match classifications downstream, so don't skip it.
+`parse_resume.py` runs this automatically and writes `{run_dir}/profile_validation.json`; the parse
+stage's exit code 1 comes from it. It is one command and usually ends in one line. It is not a
+blocking gate, but the omissions it catches cascade into wrong match classifications downstream, so
+don't skip past its output.
 
-### Step 1: Run Automated Check
+### Step 1: The Automated Check
 
 ```bash
 python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
@@ -99,7 +102,8 @@ python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.j
 
 The script scans the raw resume with a known-tech dictionary (`KNOWN_TECH_TERMS`) and diffs against
 `profile.json` skills + project tech stacks. **Exit code 1 means a skill is missing, and nothing
-else.**
+else.** That dictionary lookup is the one signal here that is independent of the model which produced
+the JSON, which is why it — and not a re-read — is the default check.
 
 Everything printed under `hints` — unmatched project names, unmatched company names, skill categories
 with fewer than two entries — comes from loose regex plus exact set-difference:
@@ -113,20 +117,29 @@ with fewer than two entries — comes from loose regex plus exact set-difference
 Read the hints as places to look. Do not treat them as findings, and do not fix profile.json just to
 silence one.
 
-### Step 2: Claude Scan for What the Dictionary Can't See
+### Step 2: A Manual Scan — Only When It Is Warranted
 
-The script only knows skills, and only the ones in its dictionary. Claude covers the rest:
+The script only knows skills, and only the ones in its dictionary. A full read covers the rest, but
+it costs the resume text plus `profile.json` in context, so do it **only** when one of these holds:
 
-1. **Skills beyond the dictionary**: read the resume, verify each technical term appears in
-   `profile.skills.*` — including terms `KNOWN_TECH_TERMS` has never heard of
-2. **Project completeness**: verify every project appears in `profile.projects` with complete
-   `tech_stack` and all original `highlights`
-3. **Experience completeness**: verify every work/internship entry appears in
-   `profile.experience.companies` with `highlights` split per original bullet
-4. **Awards & publications**: verify all awards, publications, and social links are extracted
-5. **Skills description**: verify `skills.summary` preserves the original skills paragraph
-6. **Soft evidence**: verify `profile.projects` is non-empty and `profile.keywords` covers core
-   competencies
+- exit code 1, or a hint that looks like a real omission rather than a wording difference
+- the user asks for a thorough check
+- a downstream match result is obviously wrong in a way that points at the profile
+
+Then read `{run_dir}/resume_text.txt` (never the original PDF/Word file) and check:
+
+1. **Skills beyond the dictionary**: every technical term appears in `profile.skills.*` — including
+   terms `KNOWN_TECH_TERMS` has never heard of
+2. **Project completeness**: every project appears in `profile.projects` with complete `tech_stack`
+   and all original `highlights`
+3. **Experience completeness**: every work/internship entry appears in `profile.experience.companies`
+   with `highlights` split per original bullet
+4. **Awards & publications**: all awards, publications, and social links are extracted
+5. **Skills description**: `skills.summary` preserves the original skills paragraph
+6. **Soft evidence**: `profile.projects` is non-empty and `profile.keywords` covers core competencies
+
+A clean parse needs none of this. Re-reading a resume to confirm a validator that already passed is
+context spent for no new information.
 
 ### Step 3: Report Findings
 
@@ -160,25 +173,31 @@ Show what you changed and why it was a call, not a copy.
 
 ---
 
-## Stage 3.5: Resume → Crawl Parameter Inference (Path C)
+## The `infer` Stage: Resume → Crawl Parameters
 
-Map resume fields to crawl CLI arguments:
+`infer_params.py` fills `scripts/prompts/crawl_params.st` and writes `{run_dir}/crawl_params.json`.
+The crawl, match, deep and merge stages all read that file — a missing or wrong value here does not
+error, it silently narrows or widens everything downstream. The mapping the prompt encodes:
 
-| Resume field | → CLI param | Logic |
+| Resume field | → `crawl_params.json` key | Logic |
 |-------------|------------|-------|
-| `basic_info.expected_position` | `-p` | **Primary signal**: candidate's stated target position |
-| `skills.programming` + `skills.frameworks` | `-p` | Combine language + framework as search keywords (e.g., Python+Django → `"Python,Python后端"`) |
-| `experience.companies[0].position` | `-p` (supplement) | Most recent job title as supplementary keyword |
-| `education.major` | `-p` (auxiliary) | CS → dev roles; Data Science → data analyst roles |
-| `basic_info.expected_city` | `-c` | **Direct use**: candidate's stated target city |
-| `skills.other` (industry terms) | `-p` (refinement) | Finance, healthcare, education → append as industry qualifiers |
-| `salary_expectation` | `-s` | Map to nearest bracket: 10-20K → `10-20K`, 20-30K → `20-50K`. Choose slightly lower bracket for broader coverage |
-| `experience.total_years` | `-e` | 1-3yr → `1-3年`; consider including one level down (e.g., 5yr → `3-5年,5-10年`) |
-| `education.degree` | `-deg` | Bachelor's → `本科`; Master's → `本科,硕士` (downward compatible) |
-| Resume mentions "实习"/"在校生" | `-j` | Set to `实习` |
+| `basic_info.expected_position` | `keywords` | **Primary signal**: candidate's stated target position |
+| `skills.programming` + `skills.frameworks` | `keywords` | Combine language + framework as search keywords (e.g., Python+Django → `"Python,Python后端"`) |
+| `experience.companies[0].position` | `keywords` (supplement) | Most recent job title as supplementary keyword |
+| `education.major` | `keywords` (auxiliary) | CS → dev roles; Data Science → data analyst roles |
+| `basic_info.expected_city` | `cities` | **Direct use**: candidate's stated target city |
+| `skills.other` (industry terms) | `keywords` (refinement) | Finance, healthcare, education → append as industry qualifiers |
+| `salary_expectation` | `salary` | Map to nearest bracket: 10-20K → `10-20K`, 20-30K → `20-50K`. Choose slightly lower bracket for broader coverage |
+| `experience.total_years` | `experience` | 1-3yr → `1-3年`; consider including one level down (e.g., 5yr → `3-5年,5-10年`) |
+| `education.degree` | `degree` | Bachelor's → `本科`; Master's → `本科,硕士` (downward compatible) |
+| `education.graduation_year` vs today | `job_type` + `experience` | Still enrolled → `实习` + `在校生`; graduated → `全职`. Stated internship intent overrides the date arithmetic. Never leave `job_type` null — that mixes 实习 and 全职 into one scored pool |
 | `awards` | (annotation only) | Mark as bonus points in match report, don't affect crawl params |
-| Company size | `--scale` | Do NOT auto-infer; let user decide |
-| (keyword count) × `-c` | `-p` | Budget by market size — see below |
+| Company size | (nothing) | Not inferable from a resume; the prompt is told not to output `scale` |
+| (keyword count) × `cities` | `keywords` | Budget by market size — see below |
+
+`match_mode`, `top_n` and `min_count` also come out of this stage: `match_mode` decides whether the
+match stage pulls `deep`, `top_n` caps how many candidates the deep pass sends to the LLM, and
+`min_count` is the crawl stage's "enough jobs" threshold.
 
 **Keyword count is budgeted by the city's market size, not by how many you can think of.**
 Crawl time is linear in keyword count, and in a small market extra keywords buy nothing but
@@ -197,4 +216,10 @@ pool. `Python` + `后端开发` + `数据分析` are three. The crawler now dete
 prints a 跨关键词重复 count in the summary), but a synonym still costs one wasted page load per
 keyword — pick well up front.
 
-After inferring, **always present parameters to user and confirm with `AskUserQuestion` before crawling** — one call, with the full inferred set as the first option marked recommended, so accepting costs a single click. Users may adjust keywords, add cities, or modify filters. This gate stays even when the inference looks unambiguous: the crawl runs through the user's own logged-in browser, wrong parameters waste a long crawl, and nothing about it can be undone afterwards.
+After inferring, **always confirm with `AskUserQuestion` before crawling** — batched into two calls
+plus the `min_count` follow-up, with the inferred set as the recommended first option so accepting
+costs a single click. Then pass every confirmed value as a `pipeline.py --from infer` flag: fully
+specified parameters mean the stage makes no model call at all. This gate stays even when the
+inference looks unambiguous — the crawl runs through the user's own logged-in browser, wrong
+parameters waste a long crawl, and nothing about it can be undone afterwards. See SKILL.md's `infer`
+section for the exact flags and the accepted filter labels.

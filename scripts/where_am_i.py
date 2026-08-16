@@ -1,22 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""从 run_dir 的磁盘产物反推「现在跑到第几阶段、下一步该干什么」。
+"""从 run_dir 的磁盘产物反推「现在跑到第几阶段、下一条命令是什么」。
 
 为什么需要它：上下文被压缩后，流程状态是最先丢的东西之一，而重建它的默认做法
-是重读 references/auto-apply.md——那是 25k 字符。2026-08-13 的实测里这份文档
-被读了 5 遍（3 次 Read + 2 次 sed），累计约 46k 字符，其中两次纯粹是因为压缩把
-前面读到的内容丢掉了。
+是重读 SKILL.md / docs/cli.md ——那是几万字符。本脚本用约 1k 字符回答同一个问题。
+它**不依赖任何状态文件**，纯粹从产物反推，所以不会因为忘记更新状态而说谎。
 
-本脚本用约 1k 字符回答同一个问题。它**不依赖任何状态文件**，纯粹从产物反推，
-所以不会因为忘记更新状态而说谎，也不需要流程去维护它。
-
-压缩后的标准动作：
-    python scripts/where_am_i.py <run_dir>
-只有当它指向的那一步需要细节时，才去翻 auto-apply.md 的对应小节。
+阶段名与 `pipeline.py` 的八阶段完全一致（parse / infer / crawl / match / deep /
+merge / materials / render），所以它给出的下一步永远能直接粘去执行。两个例外是
+流水线之外的收尾步骤：`write_application_md.py` 和 `apply.py` —— 后者是唯一不可
+撤销的一步，本脚本只会把命令摆出来，绝不建议加 `--yes`。
 
 用法：
     python scripts/where_am_i.py <run_dir>
-    python scripts/where_am_i.py               # 自动取 assets/ 下最新的运行目录
+    python scripts/where_am_i.py               # 自动取 LATEST.txt 指的运行目录
 
 退出码恒为 0——这是查询工具，不是 gate。
 """
@@ -27,10 +24,24 @@ import json
 import glob
 import argparse
 
-SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+SKILL_ROOT = os.path.dirname(_HERE)
+
+# 需要 api_key 的阶段。下一步落在这些阶段上时，提醒先跑一次 llm_check。
+_LLM_STAGES = ('parse', 'infer', 'match', 'deep', 'materials')
 
 
 def _latest_run():
+    """LATEST.txt 指的目录；读不到就退回 assets/ 下最新改动的时间戳目录。"""
+    try:
+        from resume_matcher.config import get_latest_run_dir
+        latest = get_latest_run_dir()
+        if latest and os.path.isdir(latest):
+            return latest
+    except Exception:                              # noqa: BLE001
+        pass
     runs = [p for p in glob.glob(os.path.join(SKILL_ROOT, 'assets', '*'))
             if os.path.isdir(p) and os.path.basename(p)[:2].isdigit()]
     return max(runs, key=os.path.getmtime) if runs else None
@@ -51,168 +62,180 @@ def _load(path):
     return data
 
 
-def _preset():
-    """已保存的爬取预设，没有或读不出来时返回 {}。
+def _match_mode(run_dir):
+    """这一轮是 quick 还是 deep —— 决定 deep/merge 两步算不算「缺」。
 
-    本脚本退出码恒为 0，所以这里吞掉一切异常——预设读不出来只该让下一步退回
-    「交互式采集」，不该让状态查询本身失败。
+    只信 crawl_params.json 里 infer 写下的那个值。读不出来时看产物：有
+    deep_candidates.json 就是 deep，否则按 pipeline 的默认当 quick。
     """
+    params = _load(os.path.join(run_dir, 'crawl_params.json'))
+    if isinstance(params, dict):
+        mode = params.get('match_mode')
+        if mode in ('quick', 'deep'):
+            return mode
+    if os.path.exists(os.path.join(run_dir, 'deep_candidates.json')):
+        return 'deep'
+    return 'quick'
+
+
+def _llm_ready():
+    """api_key 配没配好。返回 (ok, 说明)；查询工具不该因为配置问题崩掉。"""
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import preferences
-        return preferences.load()
-    except Exception:
-        return {}
+        from llm import resolve
+        cfg = resolve()
+        if not cfg.api_key:
+            return False, '还没配 api_key（assets/llm_config.json 或 LLM_API_KEY）'
+        return True, ''
+    except Exception as exc:                       # noqa: BLE001
+        return False, 'LLM 配置读不出来：%s' % exc
+
+
+def _pipe(run_dir, stage):
+    return 'python scripts/pipeline.py --run-dir "%s" --from %s' % (run_dir, stage)
 
 
 def survey(run_dir):
     """返回 (已完成阶段列表, 下一步 (标题, 命令列表), 备注列表)。"""
     has = lambda *parts: os.path.exists(os.path.join(run_dir, *parts))
     done, notes = [], []
+    mode = _match_mode(run_dir)
 
-    # ── Stage 1: 采集 ──
-    csvs = glob.glob(os.path.join(SKILL_ROOT, 'assets', 'post_data', '**', '*.csv'),
-                     recursive=True)
-    if csvs:
-        done.append('Stage 1 采集：%d 个 CSV' % len(csvs))
-    else:
-        prefs = _preset()
-        if prefs:
-            # 有预设就不必再问城市/关键词/模式——直接给出可执行的那条命令。
-            return done, ('Stage 1 采集岗位（已有预设，无需提问）', [
-                'python scripts/boss_post_interactive.py --ensure-login',
-                'python scripts/preferences.py crawl-args   # 打印命令后直接执行',
-            ]), ['assets/post_data/ 下没有 CSV',
-                 '预设：%s / %s' % (','.join(prefs.get('cities') or ['?']),
-                                    ','.join(prefs.get('keywords') or ['?']))]
-        return done, ('Stage 1 采集岗位', [
-            'python scripts/boss_post_interactive.py --ensure-login',
-            'python scripts/boss_post_interactive.py',
-        ]), ['assets/post_data/ 下没有 CSV', '无预设 → 走 Stage 3.5 的合并提问']
+    def nxt(stage, title, extra_cmds=(), extra_notes=()):
+        cmds = [_pipe(run_dir, stage)] + list(extra_cmds)
+        ns = list(extra_notes)
+        if stage in _LLM_STAGES:
+            ok, why = _llm_ready()
+            if not ok:
+                ns.append('%s —— 先跑 python scripts/llm_check.py --no-call' % why)
+        return done, ('%s（pipeline 阶段 %s）' % (title, stage), cmds), ns
 
-    # ── Stage 2-3: 解析简历 ──
+    # ── parse: 简历 → profile.json ──
     if has('profile.json') and has('resume_text.txt'):
-        done.append('Stage 2-3 解析：profile.json')
+        done.append('parse：profile.json + resume_text.txt')
+        if not has('profile_validation.json'):
+            # parse_resume.py 自己会写这个文件，缺了说明那一步是旧版/半途中断的产物
+            notes.append('没有 profile_validation.json（正常由 parse_resume.py 一起写）：'
+                         'python scripts/validate_profile.py "%s/resume_text.txt" '
+                         '"%s/profile.json"' % (run_dir, run_dir))
     else:
-        return done, ('Stage 2-3 读简历并解析出 profile.json', [
-            '按 references/resume-parsing.md 写 resume_text.txt + profile.json',
-        ]), ['缺 profile.json 或 resume_text.txt']
+        return nxt('parse', '解析简历',
+                   extra_notes=['缺 profile.json 或 resume_text.txt',
+                                'parse 阶段要给简历文件：pipeline.py 简历.pdf'])
 
-    # ── Stage 3.5b: 交叉校验 ──
-    if has('profile_validation.json'):
-        done.append('Stage 3.5b 校验：profile_validation.json')
+    # ── infer: profile.json → crawl_params.json ──
+    if has('crawl_params.json'):
+        done.append('infer：crawl_params.json（match_mode=%s）' % mode)
     else:
-        return done, ('Stage 3.5b 交叉校验 profile', [
-            'python scripts/validate_profile.py "%s/resume_text.txt" "%s/profile.json"'
-            % (run_dir, run_dir),
-        ]), ['缺 profile_validation.json——跑一下，退出码 0 就一行带过']
+        return nxt('infer', '推断爬取参数',
+                   extra_notes=['缺 crawl_params.json —— crawl 和 match 都要读它',
+                                '用户已确认的条件用 --city/--salary/--match-mode 等直接传进去'])
 
-    # ── Stage 4-6: 匹配与报告 ──
-    if has('matching_report.html'):
-        done.append('Stage 4-6 匹配：matching_report.html')
-    elif has('deep_candidates.json') and not has('deep_results.json'):
-        # 深度模式阶段 2 拆成了「切片 → 并行 agent → 收拢」，按分片状态细分下一步
-        shard_dir = os.path.join(run_dir, 'deep_shards')
-        shards, results = [], []
-        if os.path.isdir(shard_dir):
-            names = os.listdir(shard_dir)
-            shards = [n for n in names if n.startswith('shard_') and n.endswith('.md')]
-            results = [n for n in names if n.startswith('result_') and n.endswith('.json')]
-
-        if not shards:
-            return done, ('Stage 4-6 深度模式阶段 2：先切片，再并行派发 subagent', [
-                'python scripts/shard_deep_candidates.py %s' % run_dir,
-            ]), ['deep_candidates.json 在，但还没切片（deep_shards/ 没有 shard_*.md）',
-                 '不要在主上下文里逐个分析——JD 全文会把上下文顶到触发压缩']
-
-        if len(results) < len(shards):
-            return done, ('Stage 4-6 深度模式阶段 2：派发缺失的分片并等产物齐全', [
-                'python scripts/check_artifacts.py %s --kinds deep_shards --wait 360'
-                % run_dir,
-                '（缺哪片就只派哪片：Read deep_shards/shard_NN.md 并按其中要求执行）',
-            ]), ['%d 片里已回收 %d 份结果' % (len(shards), len(results)),
-                 'Bash 默认 120s 超时，--wait 360 要把 timeout 提到 380000ms']
-
-        return done, ('Stage 4-6 深度模式阶段 3：合并分片结果并出报告', [
-            'python scripts/run_matcher.py --mode deep --merge --run-id %s'
-            % os.path.basename(run_dir),
-        ]), ['%d 片结果齐全，merge 会自动收拢成 deep_results.json' % len(shards)]
+    # ── crawl: → assets/post_data/**.csv ──
+    if has('crawl_summary.json'):
+        summary = _load(os.path.join(run_dir, 'crawl_summary.json'))
+        written = summary.get('written', '?') if isinstance(summary, dict) else '?'
+        done.append('crawl：crawl_summary.json（本轮新增 %s 条）' % written)
     else:
-        return done, ('Stage 4-6 跑匹配', [
-            'python scripts/run_matcher.py --mode deep --profile "%s/profile.json" --top 15'
-            % run_dir,
-        ]), ['缺 matching_report.html']
+        csvs = glob.glob(os.path.join(SKILL_ROOT, 'assets', 'post_data', '**', '*.csv'),
+                         recursive=True)
+        return nxt('crawl', '采集岗位',
+                   extra_notes=[
+                       '缺 crawl_summary.json —— 这一轮没爬到东西（岗位池现有 %d 个 CSV）'
+                       % len(csvs),
+                       '最常见的原因是没登录：'
+                       'python scripts/boss_post_interactive.py --ensure-login',
+                       '爬取动辄几十分钟：放后台跑，别在前台等'])
 
-    # ── Stage 7bc: 用户确认岗位 + 素材方式（一次问齐）──
+    # ── match / deep / merge: 三步一组 ──
+    if has('qualified_jobs.json') and has('matching_report.html'):
+        done.append('match%s：matching_report.html + qualified_jobs.json'
+                    % (' → deep → merge' if mode == 'deep' else ''))
+    elif mode == 'deep' and has('deep_candidates.json') and not has('deep_results.json'):
+        cands = _load(os.path.join(run_dir, 'deep_candidates.json'))
+        n = len(cands) if isinstance(cands, list) else '?'
+        return nxt('deep', '逐个候选调模型做深度分析',
+                   extra_notes=['deep_candidates.json 在（%s 个候选），缺 deep_results.json' % n,
+                                '按岗位各一次请求，会花钱；--from deep 会连着把 merge 跑完'])
+    elif mode == 'deep' and has('deep_results.json'):
+        return nxt('merge', '把深度结果与规则评分合并、出报告',
+                   extra_notes=['deep_results.json 在，缺 matching_report.html '
+                                '或 qualified_jobs.json'])
+    else:
+        return nxt('match', '匹配评分',
+                   extra_notes=['缺 matching_report.html / qualified_jobs.json',
+                                'match_mode=%s（deep 会连着跑 deep → merge）' % mode])
+
+    # ── gate:jobs — 投递池要人过目 ──
     jobs = _load(os.path.join(run_dir, 'qualified_jobs.json'))
     if not jobs:
-        return done, ('Stage 7a-7bc 给用户看榜单、一轮问齐', [
-            '打开 %s/matching_report.html' % run_dir,
-            '7bc 单次 AskUserQuestion：投递哪些岗位 + 招呼语方式 + 图片方式（auto-apply.md 的 7bc）',
-        ]), ['缺 qualified_jobs.json（正常应已由 run_matcher.py --merge 自动生成；若确实缺失，' +
-             '用 read_thin.py --kind deep 读 deep_results.json 并据此写一个，或重跑 --merge）']
+        return done, ('qualified_jobs.json 是空的 —— 没有岗位进投递池', [
+            '打开 %s   # 看评分明细' % os.path.join(run_dir, 'matching_report.html'),
+        ]), ['放宽条件重跑 match，或确认这一轮确实没有合适岗位']
     n = len(jobs)
-    done.append('Stage 7bc 确认：%d 个岗位' % n)
+    done.append('投递池：%d 个岗位' % n)
 
-    # ── Stage 7d: 逐岗位生成素材 ──
+    # ── materials: 招呼语 + 优化简历 ──
     gen = os.path.join(run_dir, 'generated')
     greets, resumes = _count(gen, 'greeting_*'), _count(gen, 'resume_*')
     if greets < n or resumes < n:
-        return done, ('Stage 7d 生成素材 + 按产物判定 barrier', [
-            '每个岗位派 greeting/resume agent，产物写 %s/generated/' % run_dir,
-            'python scripts/check_artifacts.py "%s" --wait 360' % run_dir,
-        ]), ['generated/ 有 %d 个招呼语、%d 份简历，期望各 %d 个' % (greets, resumes, n),
-             '产物不齐**不等于** agent 已死——先 --wait 等够再决定重派']
-    done.append('Stage 7d 素材：%d 招呼语 + %d 简历' % (greets, resumes))
+        return nxt('materials', '生成招呼语 + 优化简历',
+                   extra_cmds=['python scripts/gen_materials.py "%s" --only <序号>   '
+                               '# 只补缺的那几个' % run_dir],
+                   extra_notes=['generated/ 有 %d 个招呼语、%d 份简历，期望各 %d 个'
+                                % (greets, resumes, n),
+                                '每个岗位两次请求（招呼语 + 简历改写）—— 先确认投递池再跑'])
+    done.append('materials：%d 招呼语 + %d 简历' % (greets, resumes))
 
-    # ── Stage 7e: 渲染图片 ──
-    pngs = _count(os.path.join(run_dir, 'showcv_exports'), '*')
+    # ── render: 简历长图 ──
     apps = os.path.join(run_dir, 'applications')
     job_dirs = [d for d in glob.glob(os.path.join(apps, '*')) if os.path.isdir(d)]
-    if not pngs and not job_dirs:
-        return done, ('Stage 7e 批量渲染简历图（串行，别并发）', [
-            'python scripts/showcv/serve.py   # 后台，读 SHOWCV_READY',
-            'python scripts/showcv/launch.py <url>   # 核对打印出来的 profile',
-            'python scripts/showcv/import_md.py --url <url> "%s/showcv_staging"/*.md' % run_dir,
-            'python scripts/showcv/export_images.py --url <url> --mode flat --out "%s/showcv_exports" ...'
-            % run_dir,
-        ]), ['showcv_exports/ 和 applications/ 都是空的']
-    if pngs:
-        done.append('Stage 7e 渲染：showcv_exports/ 有 %d 项' % pngs)
+    pngs = len(glob.glob(os.path.join(apps, '*', '*.png')))
+    if pngs < n:
+        return nxt('render', '渲染简历长图',
+                   extra_notes=['applications/ 下有 %d 张 PNG，期望 %d 张' % (pngs, n),
+                                '必须串行（共用一个浏览器 + 一份 localStorage），'
+                                '所以没有 --workers',
+                                '不需要长图就跳过这一步：pipeline 加 --no-images'])
+    done.append('render：%d 张简历长图' % pngs)
 
-    # ── Stage 7f: 投递材料落到各岗位目录 ──
-    ready = [d for d in job_dirs if os.path.exists(os.path.join(d, '岗位信息+招呼语.md'))]
+    # ── 收尾一：各岗位的 岗位信息+招呼语.md（不在流水线里）──
+    ready = [d for d in job_dirs
+             if os.path.exists(os.path.join(d, '岗位信息+招呼语.md'))]
     if len(ready) < n:
-        return done, ('Stage 7f 写各岗位的 岗位信息+招呼语.md', [
+        return done, ('写各岗位的 岗位信息+招呼语.md（流水线之外）', [
             'python scripts/write_application_md.py "%s" --all' % run_dir,
-            'python scripts/verify_image.py "%s" --all   # 别用 Read 看图' % apps,
         ]), ['%d/%d 个岗位目录有 岗位信息+招呼语.md' % (len(ready), n)]
-    done.append('Stage 7f 材料：%d/%d 个岗位目录齐全' % (len(ready), n))
+    done.append('材料：%d/%d 个岗位目录齐全' % (len(ready), n))
 
-    # ── Stage 7g/7h: 二次确认与投递 ──
+    # ── 收尾二：gate:send → 投递（唯一不可撤销的一步）──
     log = _load(os.path.join(run_dir, 'apply_log.json'))
     if not log:
-        return done, ('Stage 7g 让用户确认，然后 7h 投递', [
-            'python scripts/verify_image.py "%s" --all   # 投出去之前先查图' % apps,
-            '7g 一次 AskUserQuestion 覆盖全部岗位',
-            '7h 投递；发送后必须回读校验，别信点击成功',
-        ]), ['缺 apply_log.json']
-    done.append('Stage 7h 投递：apply_log.json 有 %d 条'
+        return done, ('确认后投递（唯一不可撤销的一步）', [
+            'python scripts/verify_image.py "%s" --all   # 投出去之前先查图，别用 Read 看' % apps,
+            'python scripts/apply.py "%s"                # 空跑：只打印名单，不碰浏览器' % run_dir,
+        ]), ['缺 apply_log.json',
+             '真投递要用户明确同意后才加 --yes —— 消息一发对方立刻收到，撤不回来']
+    done.append('投递：apply_log.json 有 %d 条'
                 % (len(log) if isinstance(log, list) else 1))
-    return done, ('全流程已走完', ['核对 apply_log.json，向用户汇报结果']), []
+    return done, ('全流程已走完', [
+        'python scripts/stage_timer.py report "%s"   # 各阶段耗时' % run_dir,
+    ]), ['核对 apply_log.json，向用户汇报结果']
 
 
 def main():
     for _stream in (sys.stdout, sys.stderr):      # Windows 控制台是 GBK
         _stream.reconfigure(encoding='utf-8', errors='replace')
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument('run_dir', nargs='?', help='运行目录；省略则取 assets/ 下最新的')
+    ap = argparse.ArgumentParser(
+        description='从产物反推流水线跑到哪一步了，并打印下一条命令')
+    ap.add_argument('run_dir', nargs='?',
+                    help='运行目录；省略则取 LATEST.txt 指的那个')
     args = ap.parse_args()
 
     run_dir = args.run_dir or _latest_run()
     if not run_dir or not os.path.isdir(run_dir):
         print('找不到运行目录。显式传一个：python scripts/where_am_i.py <run_dir>')
+        print('全新一轮从解析简历开始：python scripts/pipeline.py 简历.pdf')
         return 0
 
     done, (title, commands), notes = survey(run_dir)
@@ -230,7 +253,7 @@ def main():
     for cmd in commands:
         print('  $ %s' % cmd)
 
-    print('\n细节看 references/auto-apply.md 的对应小节——只读那一节，别整篇读。')
+    print('\n阶段细节看 docs/cli.md 的对应小节——只读那一节，别整篇读。')
     return 0
 
 

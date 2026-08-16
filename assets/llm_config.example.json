@@ -1,0 +1,24 @@
+{
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "",
+  "model": "deepseek-chat",
+
+  "timeout": 120,
+  "max_retries": 3,
+  "concurrency": 4,
+  "temperature": 0.3,
+  "json_mode": true,
+
+  "stages": {
+    "parse": {},
+    "infer": {},
+    "deep": {
+      "model": "deepseek-reasoner",
+      "concurrency": 6
+    },
+    "greeting": {
+      "temperature": 0.75
+    },
+    "resume": {}
+  }
+}

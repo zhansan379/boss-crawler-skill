@@ -7,62 +7,85 @@ description: Crawls BOSS Zhipin job listings via DrissionPage, parses resumes, m
 
 > **⚠️ 语言强制要求（最高优先级）**：本 skill 面向中文用户。所有对用户的输出——包括提问（AskUserQuestion 的 question/header/option 文案）、说明、进度、报告、确认、错误提示——**一律使用简体中文**。术语、命令、脚本名、文件路径、代码片段可保留英文；除此之外的用户可见文本必须为中文。与用户的任何对话都不允许用英文正文。
 
-Integrates job crawling (DrissionPage + Chrome CDP), resume parsing (Claude), job matching (rule-based pre-filter + LLM deep analysis), HTML reporting, auto-apply, and an embedded Markdown resume editor into one end-to-end workflow.
+One pipeline, eight stages, one driver. Every stage is a command — you run it, read the last few
+lines, and decide whether to continue. **All model inference happens inside those commands**, against
+the user's own OpenAI-compatible endpoint; you never fill a prompt template yourself and never
+dispatch a subagent to do inference.
 
-All scripts live under `scripts/` relative to this skill directory.
+```
+parse → infer → crawl → match → deep → merge → materials → render        [ apply ]
+```
+
+`scripts/pipeline.py` is the driver. The full flag table, per-stage scripts, exit-code conventions
+and troubleshooting live in **[docs/cli.md](docs/cli.md)** — read the one section you need, not the
+file. All scripts live under `scripts/` relative to this skill directory.
+
+**Drive one stage at a time.** `pipeline.py --from <stage>` runs exactly that stage (`match` also
+pulls `deep`+`merge`, since stopping at `match` leaves a half product nothing downstream can read),
+then stops and prints the next command. **Never use `--all`**: the gates below sit between stages,
+and `--all` runs straight through them, spending the user's tokens on a job list they have not seen.
+
+## Precondition: LLM configuration
+
+Every inference stage needs an API key. Check once, before anything else, and never later than the
+first `parse`:
+
+```bash
+python scripts/llm_check.py --no-call        # exit 0 = usable, 1 = missing/invalid config
+```
+
+`--no-call` costs nothing. Exit 1 → show the user the three ways to configure it (the script prints
+them) and stop; do not start a crawl that will die at `match`. Add `--stage deep` to see what a
+single stage resolves to, or drop `--no-call` to also send one minimal request. **Never print, log,
+or echo the `api_key`** — the scripts mask it, so pass paths and stage names around, not the key.
 
 ## Path Selection
 
 **Always ask the user to choose a path at the start of every invocation** — one `AskUserQuestion`
-with **exactly 4 options** (the tool hard-caps at 4; a 5th choice is reached via the auto-added
-「其他」). Do not auto-select from a saved preset or from whatever data happens to be on disk; a
-preset supplies parameters *after* a path is chosen, it is not a license to skip this question. A
-returning user who wants the preset picks E; someone who picks A/C goes through Stage 3.5 fresh (the
-preset pre-fills those questions as one-click defaults). Five entry paths grouped into four options
-(picking **A/B** opens a one-question follow-up to tell the two apart):
+with **exactly 4 options**. Do not auto-select from a saved preset or from whatever happens to be on
+disk; a preset supplies parameters *after* a path is chosen.
 
-| Option label | Path(s) | When | Flow |
-|------|------|------|------|
-| **C: 简历驱动** ✨ | C | Have resume, want precision | Parse resume → Infer params → Crawl → Match → Report → Apply |
-| **A/B: 爬取或匹配** | A, B | Have resume; no CSVs yet (A) or already have CSVs (B) | Crawl → Parse resume → Match… (A) ／ Parse resume → Match… (B) |
-| **E: 预设重放** | E | Re-run with the saved preset, no re-declaring | `show` → `missing` (ask & merge absent fields) → Crawl → Parse resume → Match → Report → Apply |
-| **D: 仅编辑简历** | D | No resume file yet, wants to write or edit one | Launch resume editor → **stop there** |
+| Option label | When | Flow |
+|------|------|------|
+| **A: 简历驱动** ✨ | Have a resume, want precision | parse → infer → crawl → match… → apply |
+| **B: 已有岗位数据** | Have a resume and CSVs already in `assets/post_data/` | parse → infer → *(skip crawl)* → match… → apply |
+| **C: 预设重放** | Re-run with the saved preset, no re-declaring | preset → parse → infer *(preset values)* → crawl → match… |
+| **D: 仅编辑简历** | No resume file yet, wants to write or edit one | Launch resume editor → **stop there** |
 
-**AskUserQuestion option cap (applies to every question in this skill, not just path selection):**
-each question may carry at most 4 options. When a logical choice has more candidates — e.g. salary
-brackets, keyword pick, or a path list — pick the 4 most relevant with a sensible recommended default
-first, and let the auto-added 「其他」 field carry every other value. Never emit a 5th option; the tool
-rejects the call. Split a question whose *options* would exceed 4 into a follow-up (the A/B case above)
-rather than failing the whole call.
+**Every path starts at `parse`.** `infer` reads `profile.json`, and `crawl` reads the
+`crawl_params.json` that `infer` writes — so "crawl first, parse later" is not a supported order.
+Path B differs from A by one thing: skip the `crawl` stage (`--from match` after `infer`).
 
-**No preset pre-selection.** Do not read `assets/preferences.json` to decide the path; ask the
-question first. A preset reached late (path E) is a *replay* of confirmed parameters, not a bypass of
-the path question.
+**AskUserQuestion option cap (every question in this skill):** at most 4 options per question. When a
+choice has more candidates — salary brackets, keyword picks — take the 4 most relevant with a
+recommended default first and let the auto-added 「其他」 carry the rest. Never emit a 5th option; the
+tool rejects the call. Split an over-long question into a follow-up rather than failing the call.
 
-**Path A/B follow-up.** If the user picks **A/B: 爬取或匹配**, ask one small question: 已有岗位 CSV
-→ path B (skip crawl); 无数据 / 想爬新 → path A. Then proceed on the resolved path.
+**Path A is recommended**: the resume tells you what to search — skills, city, salary range — so
+crawled jobs align with the candidate's background instead of with guessed keywords.
 
-**Path C is recommended** for matching: the resume tells you what to search — skills, expected city, salary range. Crawled jobs are naturally aligned with the candidate's background, yielding higher match rates than guessing keywords.
+**Path D terminates at launch.** It opens the editor and reports the URL, nothing else. It commonly
+serves as a precursor: the user writes a resume, then re-enters at A/B/C. The editor's
+stored Markdown can feed `parse` directly (see
+[references/resume-editor.md](references/resume-editor.md)) — but only when the user asks.
 
-**Path D terminates at launch.** It opens the editor and reports the URL — nothing else. Don't chain it into matching on your own. It commonly serves as a precursor: the user writes a resume in the editor, exports a PDF, then re-enters at path A/B/C. If they'd rather skip the PDF round-trip, the editor's stored Markdown can feed Stage 3 directly — see [references/resume-editor.md](references/resume-editor.md) — but only do that when the user asks.
+**Path C is the preset path.** `preferences.py show` prints the saved params, `preferences.py missing`
+names any askable field the preset lacks (薪资/规模/最低岗位数 and siblings). Ask about **exactly
+those**, merge them back with `preferences.py save`, then pass the whole set to `infer` as flags. If
+`show` exits 1 there is no preset — fall back to path A's fresh confirmation instead of erroring.
 
-**Path E is the preset path.** Pick it when you want to reuse the saved params instead of re-declaring
-them. It runs `preferences.py show`, then `preferences.py missing` — any askable field absent from the
-preset (薪资/规模/最低岗位数 and their siblings) is asked and merged back before crawling. If `show`
-finds no preset, fall back to path A's fresh-param flow rather than erroring.
-
-> **Confirmation rule**: for paths A/B/C/E, Stage 7 must show the recommended job list with match reasons BEFORE applying, and must pass **two** user gates: 7bc (which jobs) and 7g (approve the generated materials). Never apply without both.
+> **Two gates, both mandatory.** `gate:jobs` (which jobs, and how materials are made) and
+> `gate:send` (approve what actually landed on disk). Never apply without both.
 >
-> **Presets never reach these gates.** `assets/preferences.json` covers crawl and matching parameters
-> only — it has no field for which jobs, what greeting, or whether to send, and `load()` drops any key
-> outside its whitelist. Merging questions saves typing; it never removes 7g, which is the only thing
-> standing in front of an irreversible action.
+> **Presets never reach these gates.** `assets/preferences.json` covers crawl and matching
+> parameters only — it has no field for which jobs, what greeting, or whether to send, and `load()`
+> drops any key outside its whitelist.
 
 ## Run Directory
 
-Every skill invocation creates a timestamped run directory under `assets/` (e.g., `assets/2026-08-10_14-30-00/`). All outputs go there. Within one conversation, reuse the same directory via `--output-dir`.
-
-Path D is the exception — it produces no run outputs, so it needs no run directory.
+`parse` creates a timestamped run directory under `assets/` (e.g. `assets/2026-08-16_14-30-00/`) and
+points `assets/LATEST.txt` at it. Every later stage finds it automatically; pass `--run-dir` to be
+explicit. Path D produces no run outputs and needs no run directory.
 
 ---
 
@@ -72,53 +95,40 @@ Copy this checklist and check off items as you complete them:
 
 ```
 Progress:
-- [ ] Path selection: ask one AskUserQuestion, 4 options (C / A+B / E / D); A+B → one follow-up
-- [ ] Stage 0: Launch resume editor (path D — terminal step)
-- [ ] Stage 1: Check preset (`preferences.py show` + `missing`) → crawl jobs (paths A, C, E)
-- [ ] Stage 2-3: Read resume file → parse → profile.json
-- [ ] Stage 3.5b: Cross-validate profile (run the script, usually one line)
-- [ ] Stage 3.5: Infer crawl params (paths A/C, not E; E reuses the preset) — TWO questions: (1) city+keywords+mode+TopN, (2) 经验+阶段+薪资+规模, then + (3) 最低岗位数量
-- [ ] Stage 1b check: read crawl_summary.json → if written < min_count, stop & ask (换关键词/放宽/接受)
-- [ ] Stage 4-6: Match analysis (mode/TopN already known) → report written and opened
-- [ ] Stage 7: 7bc one question (jobs+greeting+image) → parallel generation → 7g gate → apply
+- [ ] llm_check.py --no-call        (precondition — exit 1 stops the run)
+- [ ] Path selection: one AskUserQuestion, 4 options (A / B / C / D)
+- [ ] Stage 0: launch resume editor (path D — terminal step)
+- [ ] parse:     resume file → profile.json
+- [ ] infer:     confirm params (2 batched questions + min_count) → crawl_params.json
+- [ ] crawl:     background run, then check the floor (paths A, C)
+- [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json
+- [ ] gate:jobs  one AskUserQuestion: which jobs + greeting method + image method
+- [ ] materials: greetings + optimized resumes
+- [ ] render:    resume long-images (skip with --no-images)
+- [ ] write_application_md.py --all, then verify_image.py
+- [ ] gate:send  one AskUserQuestion → apply.py --yes
 ```
 
-**Five stops, not six.** The 2026-08-14 run stopped to ask 6 times and spent 12 minutes (30%) on
-interaction round-trips. The stops that remain: the path-selection question (always asked, even with
-a preset), the resume file path, the Stage 3.5 confirmation (two batched `AskUserQuestion` calls + a
-small `min_count` follow-up — skipped when path E reuses the preset), the Stage 1b `min_count` floor
-check (only when written < the floor), 7bc, and 7g. **7g is never removed** — it is the only thing in
-front of an irreversible action.
+**Four stops.** Path selection, the `infer` confirmation (two batched `AskUserQuestion` calls plus a
+small `min_count` follow-up — skipped when path C reuses a complete preset), `gate:jobs`, and
+`gate:send`. Plus one conditional stop: the crawl floor, only when the pool came in thin.
 
-**Lost your place (e.g. after a context compaction)? Do not re-read the reference docs to rebuild
-state.** Ask the filesystem instead:
+**Lost your place (e.g. after a context compaction)? Do not re-read docs to rebuild state.** Ask the
+filesystem:
 
 ```bash
 python scripts/where_am_i.py           # or pass an explicit <run_dir>
 ```
 
-It infers the current stage from the run directory's artifacts and prints the next commands in
-~500 characters. `references/auto-apply.md` is 25k characters; in the 2026-08-13 run it was read
-five times, twice purely because compaction had discarded the earlier read. Consult a reference doc
-only for the *one* section `where_am_i.py` points you at, and read that section, not the whole file.
+It infers the stage from artifacts on disk and prints the next command in ~1k characters. Consult a
+reference doc only for the *one* section it points you at.
 
-**Three habits that keep a run cheap.** The 2026-08-13 run took 46 minutes to deliver a single
-application; 65% of that was model inference across 97 round trips. The 2026-08-14 run hit context
-compaction mid-way because the main agent read full `qualified_jobs.json` (52 lines with JDs and
-company profiles), `shard_01.md` (190 lines of full JDs), and `resume_1_SmallRig.json` (34 lines of
-optimized resume). All three rules below exist to keep bulk text out of *your* context, because
-that is what triggers compaction:
+**Three habits that keep a run cheap.**
 
-1. **Fan bulk analysis out to subagents; keep only the verdicts.** Deep-mode Phase 2 is sharded for
-   this reason (`scripts/shard_deep_candidates.py`) — N full JDs never enter the main context. When
-   you dispatch agents, require a file write and a one-line reply; never let an agent echo its
-   payload back.
-2. **Never `Read` a rendered resume image.** Use `scripts/verify_image.py`. One 0.5 MB PNG cost
+1. **Never `Read` a rendered resume image.** Use `scripts/verify_image.py`. One 0.5 MB PNG cost
    638,960 input tokens — 79% of that session's fresh input, in a single tool call.
-3. **Never `Read` full data files — use `read_thin.py` instead.** One `qualified_jobs.json` with
-   full JDs and company descriptions is ~50 lines of context. One `shard_*.md` is ~190 lines. One
-   `profile.json` is ~30 lines. The main agent only needs the "thin" fields: link, company, position,
-   score, verdicts. For everything else, use `python scripts/read_thin.py`:
+2. **Never `Read` full data files — use `read_thin.py`.** `qualified_jobs.json` carries full JDs and
+   company descriptions; you only need link/company/position/score/verdicts:
 
    ```bash
    python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → table fields
@@ -126,21 +136,22 @@ that is what triggers compaction:
    python scripts/read_thin.py {run_dir}/deep_results.json --kind deep       # → verdicts only
    ```
 
-   **Shard files (`shard_*.md`) are for sub-agents only.** The main agent never reads them — it
-   dispatches sub-agents, waits for the barrier, and proceeds to `--merge`. The sub-agents' output
-   (`deep_results.json`) is your source of truth; trust it without re-reading the shards.
+3. **Run the long stages in the background and grep the output.** `crawl` takes tens of minutes and
+   `deep`/`materials` print one line per job — piping all of it through your context is what triggers
+   compaction. Start them with `run_in_background`, then read only what matters:
 
-Drop a timing mark at each stage boundary so the next run can be profiled from a file rather than
-from a session transcript:
+   ```bash
+   grep -E "✅|❌|⚠|阶段|失败|写入" <background task output file> | tail -20
+   ```
 
-```bash
-python scripts/stage_timer.py mark <run_dir> stage_7d_dispatch
-python scripts/stage_timer.py report <run_dir>      # duration ranking when done
-```
+Timings land in `{run_dir}/run_timings.jsonl` automatically — every stage instruments itself, so
+there is nothing to mark by hand. `python scripts/stage_timer.py report <run_dir>` ranks them.
 
 ### Stage 0: Launch Resume Editor (path D)
 
-Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No `pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for design rationale, limitations, and the `storage.py` data-moving tool.
+Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No
+`pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for
+design rationale, limitations, and the `storage.py` data-moving tool.
 
 **Step 1 — start the static server** (background task):
 
@@ -155,9 +166,10 @@ until grep -q "SHOWCV_READY" "<background task output file>"; do sleep 0.3; done
 grep "SHOWCV_READY" "<background task output file>"
 ```
 
-First line is always `SHOWCV_READY http://127.0.0.1:<port>`, default 3090.
-
-**If that background process exits immediately but still printed `SHOWCV_READY`**: the service was already running and this run reused it. That's normal — use the address and continue. Do NOT restart it or pick another port; the port is what scopes the user's saved resumes.
+First line is always `SHOWCV_READY http://127.0.0.1:<port>`, default 3090. **If that background
+process exits immediately but still printed `SHOWCV_READY`**: the service was already running and
+this run reused it. Use the address and continue — do NOT restart it or pick another port; the port
+is what scopes the user's saved resumes.
 
 **Step 2 — open the browser** (use the address from step 1, don't assume 3090):
 
@@ -165,367 +177,271 @@ First line is always `SHOWCV_READY http://127.0.0.1:<port>`, default 3090.
 python scripts/showcv/launch.py http://127.0.0.1:3090
 ```
 
-Prints `url=` / `title=` / `profile=` on success, with `ShowCV` in the title. **If the title lacks `ShowCV` the script exits 1** — that means the build is incomplete or the server isn't up. Don't report success.
+Prints `url=` / `title=` / `profile=` on success, with `ShowCV` in the title. **If the title lacks
+`ShowCV` the script exits 1** — the build is incomplete or the server isn't up. Don't report success.
+Optional flags: `--headless`, `--close`, `--browser <exe>`.
 
-Optional flags: `--headless`, `--close` (verify then close immediately, for smoke tests), `--browser <exe>`.
-
-**Step 3 — report to the user**: the URL, that the browser is open, and **how to stop it** — `TaskStop` on the step-1 background task; they close the browser window themselves.
+**Step 3 — report to the user**: the URL, that the browser is open, and **how to stop it** —
+`TaskStop` on the step-1 background task; they close the browser window themselves.
 
 Then stop. Path D ends here.
 
-### Stage 0.5: Batch-Import Markdown (standalone, on request only)
+### Stages 0.5 / 0.6 / 0.7: ShowCV standalone tools (on request only)
 
-Bulk-loads `.md` files into the editor's resume list. **Deliberately not wired into any path and
-not in the Progress checklist** — run it only when the user asks to import Markdown files. It
-assumes Stage 0 already ran (server up, browser open) and fails rather than starting them itself.
+**Deliberately not wired into any path and not in the Progress checklist.** All three assume Stage 0
+already ran (server up, browser open) and fail rather than starting it themselves. Read the URL from
+Stage 0's `SHOWCV_READY` line — `--url` has no default on purpose.
 
 ```bash
+# 0.5 batch-import Markdown into the editor's resume list
 python scripts/showcv/import_md.py --url http://127.0.0.1:3090 <files-or-dirs> [-r] [--dry-run]
-```
 
-Read the URL from Stage 0's `SHOWCV_READY` line — `--url` has no default on purpose. Batching at
-the frontend's 50-file limit, duplicate-name handling, and the `localStorage` verification are
-handled by the script; see [references/resume-editor.md](references/resume-editor.md) for its
-constraints and failure modes.
-
-### Stage 0.6: Export Resumes as Images (standalone, on request only)
-
-Drives the editor's `/export` direct link, which the export button cannot do: it takes repeated
-`id` params or `all=1`, so one call covers a batch. **Not wired into any path and not in the
-Progress checklist** — same standing as Stage 0.5, and it likewise assumes Stage 0 already ran.
-
-```bash
-python scripts/showcv/export_images.py --url http://127.0.0.1:3090 [--name NAME | --id ID | --all]
+# 0.6 export resumes as images (repeatable --id, or --all; one call covers a batch)
+python scripts/showcv/export_images.py --url http://127.0.0.1:3090 [--name N | --id I | --all] \
     [--mode paginated|flat] [--scale 1|2|3] [--out DIR] [--dry-run]
-```
 
-With no selector it exports the current resume, matching the page's own fallback. Names are
-resolved to ids locally, so a typo fails before anything is exported. Output is one PNG per A4
-page (`paginated`) or one long image (`flat`); anything more than a single image arrives as
-`showcv-images-<date>.zip`. The script confirms the files actually reached disk rather than
-trusting the page's "已下载" text.
-
-### Stage 0.7: Delete Resumes (standalone, on request only)
-
-Drives the `/delete` direct link. **Not wired into any path and not in the Progress checklist.**
-Destructive: `localStorage` is the only copy of these resumes.
-
-```bash
-# always look first
+# 0.7 delete resumes — destructive, localStorage is the only copy
 python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --dry-run
-# then commit
 python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --yes
 ```
 
-Without `--yes` it only prints the plan. With `--yes` it takes a full backup first (restorable via
-`storage.py --force load`, and the command is printed), then goes through the site's own
-confirmation page and aborts without clicking if the names it lists differ from what was resolved
-locally. Unlike `/export`, a missing `id` is never taken to mean "the current resume" — see
-[references/resume-editor.md](references/resume-editor.md).
+`export_images.py` resolves names to ids locally, so a typo fails before anything is exported, and it
+confirms files reached disk rather than trusting the page's "已下载" text. `delete_resumes.py` without
+`--yes` only prints the plan; with `--yes` it backs up first (restore command printed), goes through
+the site's own confirmation page, and aborts if the names there differ from what it resolved. Unlike
+`/export`, a missing `id` is never taken to mean "the current resume".
 
-### Stage 1: Crawl Jobs (paths A, C)
+### parse — resume file → profile.json
 
-Two-phase CLI approach. See [references/crawl-commands.md](references/crawl-commands.md) for the full parameter table and more examples.
-
-**Phase 0 — Check for a saved preset.** This is where path E consumes the preset: the user already
-chose E at entry, so here the saved params are reused instead of re-asked. (For paths A/C this phase
-is skipped as a gate — the preset merely pre-fills Stage 3.5's batched questions as one-click
-defaults, and the user still confirms them.)
+Ask for the resume file path, then one command:
 
 ```bash
-python scripts/preferences.py show      # exit 0 = preset found, exit 1 = none
+python scripts/pipeline.py "简历.pdf"
 ```
 
-Exit 0 → a preset exists — but first check whether it is missing any askable field:
+PDF / Word / md / markdown / txt. It writes `resume_text.txt`, `profile.json` and
+`profile_validation.json` into a fresh run directory. **Don't read the resume to "check" a clean
+parse** — the validator already did, and the text costs context for no new information. Read
+`resume_text.txt` only when the validator exits 1, a hint looks like a real omission, or the user asks
+for a thorough check ([references/resume-parsing.md](references/resume-parsing.md)).
+
+`profile_validation.json` is that validator's output. Exit code 1 from the parse stage means a known
+tech term appears in the resume but not in the profile — that is a dictionary lookup
+(`KNOWN_TECH_TERMS`), the one signal here independent of the model that produced the JSON. Anything
+it prints under `hints` (unmatched project/company names, thin skill categories) comes from loose
+regex: read hints, don't obey them, and don't let one become a gate. To re-run it alone:
 
 ```bash
-python scripts/preferences.py missing   # prints keys absent from the preset; exit 1 = some missing
+python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
 ```
 
-- **`missing` exits 1** (prints keys) → ask the user about **exactly those fields** and merge the
-  answers back with `preferences.py save` before crawling. `show` only answers "is there a preset";
-  it cannot see that a preset exists yet lacks 薪资/规模/最低岗位数. Those are confirm-worthy values,
-  so a preset missing them must not silently run unfiltered — `missing` is the signal that surfaces
-  them. (Required core — cities/keywords/mode/count — is not in this set; if those are gone the
-  preset is effectively absent and `crawl-args` refuses to emit a command.)
-- **`missing` exits 0** (complete) → do not ask. State the parameters and their age in one line,
-  then run the command the script printed:
+Use `read_thin.py --kind profile` if you need to confirm a specific field. See
+[references/resume-parsing.md](references/resume-parsing.md) for the schema.
 
+### infer — profile.json → crawl_params.json
+
+`crawl_params.json` is **mandatory**, not an optimization: `crawl` builds its argv from it, and
+`match` reads `match_mode`/`top_n` out of it. Skipping this stage means the crawl cannot start and the
+match silently falls back to quick mode.
+
+**Budget keywords by city, not by imagination.** Crawl time is linear in keyword count: 5 keywords in
+太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
+Spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
+
+Confirm in **two** `AskUserQuestion` calls plus one small follow-up (4 questions max per call):
+
+1. **爬取与匹配核心** — city, keywords (multi-select), match mode (quick/deep), deep's Top-N.
+2. **列表筛选** — experience, job type, salary floor, company scale. First option in each is the
+   candidate-appropriate default, so accepting is one click; leave one empty to skip that filter.
+3. **最低岗位数量 (`min_count`)** — the floor below which a crawl counts as thin. Default ~10, 0
+   disables the check. Separate because it is a sufficiency threshold, not a list filter.
+
+Then pass every confirmed value as a flag. Fully-specified parameters mean the stage makes **no model
+call at all** — it only calls the model for the fields you leave out:
+
+```bash
+python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发,Python" \
+    --match-mode deep --top-n 10 --count 20 --degree 本科 \
+    --experience 应届生 --job-type 实习,全职 --salary 5-10K --min-count 10
 ```
-用上次的参数（74 天前存的）：太原 / AI应用开发,Python / deep / Top10 / 应届生·本科，开始爬取。
+
+Accepted filter values are the Chinese labels in `boss_crawler/config.py` (`EXPERIENCE_MAP` /
+`JOB_TYPE_MAP` / `SALARY_MAP` / `SCALE_MAP`). There is **no `校招` job type** (only 全职/实习/兼职);
+unknown values are warned about and skipped, and `不限` is skipped too — prefer omitting the flag.
+`--scale` is never inferred, only given.
+
+Then save the answers so the next run can replay them (path C):
+
+```bash
+python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
+    --match-mode deep --top 10 --count 20 --degree 本科 \
+    --experience 应届生 --job-type 实习,全职 --salary 5-10K --min-count 10
 ```
 
-Presets never expire — the age is reported so the user can interrupt, not so you can gate on it.
-Exit 1 from `show` → no preset, take the two confirmation questions in Stage 3.5 (core + filters)
-plus the `min_count` follow-up, then save the answer.
+**Keep this gate even when the inference looks unambiguous.** The crawl is an outward-facing action
+driven through the user's own logged-in browser: wrong parameters cost a long crawl plus a batch of
+useless data, and there is nothing to undo. What gets collapsed here is rounds of typing, not the
+confirmation.
 
-This is the single biggest saving for a returning user: the 2026-08-14 run stopped to ask 6 times,
-and Stage 1 plus the two gates burned 12 minutes (30% of the run) mostly on interaction round-trips.
+### crawl — → assets/post_data/**.csv (paths A, C)
 
-**Phase 1a — Ensure login:**
+Login first. This one is interactive by nature, so run it in the foreground:
 
 ```bash
 python scripts/boss_post_interactive.py --ensure-login
 ```
 
-- Opens Chrome, checks login status via XPath (single detection, no polling)
-- `[LOGIN_OK]` → browser closes, proceed to Phase 1b
-- `[LOGIN_NEEDED]` → browser stays open, user logs in manually, tells Claude "已登录", Claude re-runs
+`[LOGIN_OK]` → browser closes, continue. `[LOGIN_NEEDED]` → browser stays open, the user logs in and
+tells you 已登录, then re-run. Login state persists in `assets/chrome_user_data/`.
 
-**Phase 1b — Execute crawl:**
-
-```bash
-python scripts/boss_post_interactive.py -m custom -p "Python" -c "北京" -n 20 -d -y \
-    --run-dir "{run_dir}"
-```
-
-Key flags: `-m custom` (keyword search, recommended), `-d` (include detail pages — critical for matching quality), `-y` (skip confirmation prompt). Login state persists via `assets/chrome_user_data/`.
-
-**Always pass `--run-dir`** — it writes a real `crawl` span (with `status=error` if the round dies
-partway) instead of leaving this stage to be inferred from the gap between two marks. Omitting it
-silently degrades to no timing, and this stage is the most expensive one in the whole run.
-
-**After the crawl, check the `min_count` floor** (if a `min_count` preset was set): read
-`{run_dir}/crawl_summary.json` (the crawler writes `written` / `total` / `skipped` / `run_dups`
-there because the main agent can't read the background task's stdout). If `written < min_count`,
-**stop and ask the user** — 换关键词 / 放宽筛选 / 接受现状（继续） — instead of silently proceeding
-on a thin pool. A small-city / few-keyword crawl can legitimately end early with "no new data" even
-below the floor; that's the case this check exists to surface, not to override. `min_count` of 0 or
-unset skips the check.
-
-### Stage 2-3: Read & Parse Resume
-
-Reading the file and structuring it are one pass, not two stages. Ask for the resume file path, then:
-
-```python
-from resume_matcher import parse_resume_file, create_run_dir
-
-resume_text = parse_resume_file(file_path)   # PDF / Word / md / markdown / txt
-run_dir = create_run_dir()
-# write resume_text.txt into run_dir
-```
-
-The resume text now enters your context once (~2-3 KB). That's unavoidable — you need it to write
-the file. But the heavy Claude inference on the full text must NOT happen in the main context.
-**Fan it out to a sub-agent:**
-
-> **Dispatch a sub-agent** (type: general-purpose, no schema needed):
->
-> 1. Read `{run_dir}/resume_text.txt` and `scripts/prompts/resume_parse.st`
-> 2. Fill the template with the resume text, generate `profile.json`
-> 3. Write `profile.json` to `{run_dir}/profile.json`
-> 4. Reply: `done {run_dir}/profile.json — {skills_count} skills, {experience_count} experiences`
->
-> The sub-agent handles the full resume text in its own context. You receive only the one-line
-> summary.
-
-See [references/resume-parsing.md](references/resume-parsing.md) for the complete JSON schema and
-extraction rules.
-
-### Stage 3.5b: Cross-Validate Profile
-
-Always run it; it is cheap and almost always ends in one line. See
-[references/resume-parsing.md](references/resume-parsing.md) for the full procedure.
-
-1. Run `python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json`
-2. **If exit 0 and no hints worth reviewing**: done. Report in one line and move on.
-3. **If exit 1 (missing skill) or serious hints**: **dispatch a sub-agent** to cross-validate.
-   The sub-agent reads `resume_text.txt` + `profile.json`, checks for skills/experiences/projects
-   the parse missed or misrepresented, fixes `profile.json` if needed, and replies with a one-line
-   summary of changes. Only escalate to `AskUserQuestion` when the sub-agent flags a *judgement*
-   call (a skill the resume implies but doesn't name, a project it merged or split).
-
-**Do not replace step 1 with self-review.** `validate_profile.py`'s skill check is a dictionary
-lookup (`KNOWN_TECH_TERMS`), so it is the one signal here that is *independent of the model that
-produced the JSON*. The failure it catches is "the parse dropped a skill" — and the model that
-dropped it is the least likely to notice. Step 2 complements the script, it doesn't substitute for it.
-
-**Exit code 1 means a skill is missing — that alone.** Anything the script prints under `hints`
-(unmatched project names, unmatched company names, thin skill categories) comes from loose regex and
-exact set-difference, so a wording difference between resume and profile is enough to trigger it.
-Read hints, don't obey them, and don't let one turn into a gate.
-
-**The cross-validation sub-agent keeps the full resume text out of the main context.** The main
-agent never reads `resume_text.txt` or `profile.json` in full. Use `read_thin.py --kind profile`
-if you need to confirm a specific field.
-
-### Stage 3.5: Infer Crawl Params (path C only)
-
-Claude maps resume fields to crawl parameters. See [references/resume-parsing.md](references/resume-parsing.md) for the inference mapping table.
-
-**Budget keywords by city, not by imagination.** Crawl time is linear in keyword count: 5 keywords
-in 太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
-And spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
-
-Confirm in **two** `AskUserQuestion` calls plus one small follow-up. One call is capped at 4
-questions, so the eight params split as:
-
-1. **爬取与匹配核心** — city, keywords (multi-select), matching mode (quick/deep), and deep's Top-N.
-   All four are known before the crawl starts and none constrains the others, so one call.
-2. **列表筛选** — experience (应届/不限), job type (实习/全职), salary floor, and company scale.
-   Also four questions in one call. First option in each is the candidate-appropriate default, so
-   accepting is one click; leave a filter empty to skip it (crawl unfiltered on that axis).
-
-Then a **third, single-question** `AskUserQuestion` for **最低岗位数量 (`min_count`)** — the floor
-below which a crawl is "thin" and the run should stop to ask, rather than silently proceeding on a
-handful of jobs. Default ~10, or 0 to disable the check. It is a separate question because it is a
-sufficiency threshold, not a list filter, and it seed the crawl-confidence gate in Stage 1 (below).
-
-Splitting is deliberate: eight questions will not fit one `AskUserQuestion`, and the four filters
-are independent of the four core params — none constrains the others, so batching each set into one
-call still saves the round-trips. The filters are optional and all-first-option-accept is a fast path.
-
-Then save it, so the next run skips this entirely:
+Then crawl — **background task, tens of minutes**, argv built from `crawl_params.json`:
 
 ```bash
-python scripts/preferences.py save --city 太原 --keywords "AI应用开发,Python" \
-      --match-mode deep --top 10 --count 20 --degree 本科 \
-      --experience "应届生" --job-type 实习,全职 --salary "5-10K" --min-count 10
+python scripts/pipeline.py --from crawl
 ```
 
-`--min-count` is the lowest acceptable job count (`min_count`): after the crawl, read
-`{run_dir}/crawl_summary.json` and if `written` is below `min_count`, stop and ask the user
-(换关键词 / 放宽筛选 / 接受现状) rather than proceeding on a thin pool. 0 or omitted = no check.
-It is stored in the preset but **not** passed to the crawler — the crawler CLI has no such flag; the
-main agent judges the floor after reading the summary file.
+The floor check runs afterwards on its own: the threshold comes from `min_count` in
+`crawl_params.json`, and `--min-jobs N` only overrides it. A missing `crawl_summary.json` means
+**nothing was crawled** —
+the crawler exits 0 when it detects a logged-out session, so exit code alone cannot tell you. When
+the floor trips, **stop and ask the user** — 换关键词 / 放宽筛选 / 接受现状（继续，`--min-jobs 0`）—
+rather than proceeding on a thin pool. A small-city crawl can legitimately end early; that is the
+case this check exists to surface, not to override.
 
-The four filter flags (`--experience` / `--job-type` / `--salary` / `--scale`) are optional — omit any
-you want left unfiltered. Accepted values are the Chinese labels in `boss_crawler/config.py`
-(`EXPERIENCE_MAP` / `JOB_TYPE_MAP` / `SALARY_MAP` / `SCALE_MAP`), e.g. `应届生`, `实习`, `5-10K`.
-They map straight onto the crawler's `-e -j -s --scale` flags. Note there is **no `校招` job-type code**
-(`JOB_TYPE_MAP` is 全职/实习/兼职) — an unknown value is warned about and skipped by
-`resolve_filter_values`, so don't put one in. `不限` is likewise skipped (means "no filter on that axis"),
-so prefer omitting the flag to passing `不限`.
+Row count is an upper bound on jobs and it counts **the whole `assets/post_data/` pool**, not just
+this run: one job matching three keywords is written three times and deduped at load. See
+[references/crawl-commands.md](references/crawl-commands.md) for the full parameter table.
 
-**Skip this whole stage when `preferences.py show` exited 0.** The saved parameters were confirmed by
-the user in an earlier run — re-confirming them is the round-trip this preset exists to remove.
-Announce what you're using (with its age) and crawl.
+### match → deep → merge — scoring and the report
 
-**When there is no preset, keep the gate even if the inference looks unambiguous.** The crawl is an
-outward-facing action driven through the user's own logged-in browser: wrong parameters cost a long
-crawl plus a batch of useless data, and there is nothing to undo afterwards. The ambiguity is rarely
-just "the resume lists two cities" — expected salary, seniority, and which keyword to search (`Python`
-vs `后端开发`) are all judgement calls. What gets collapsed here is rounds of typing, not the
-confirmation itself.
-
-### Stage 4-6: Match Analysis & Report
-
-`run_matcher.py` does all three in one process — loads the CSVs, scores and classifies, then writes
-`matching_report.html` and `scored_jobs.json` itself.
-
-**Do not call `generate_html_report()` yourself.** It already runs inside the script, and after a CLI
-run you don't hold the `classification` object it needs anyway.
-
-**Do not ask for the mode or Top-N here.** Both arrived with Stage 3.5's confirmation or the saved
-preset (`match_mode`, `top_n`). Asking again is the duplicate round-trip this consolidation removed.
-Only ask if neither source has them. See [references/matching.md](references/matching.md) for mode
-details, scoring dimensions, and classification logic.
-
-**Quick mode** — single command, rule-based 6-dimension scoring (0-115 pts), zero token cost:
-```bash
-python scripts/run_matcher.py --mode quick --profile {run_dir}/profile.json --output-dir {run_dir}
-```
-
-**Deep mode** — three phases, rule pre-filter + per-job LLM semantic analysis:
+One command covers all three; `deep`/`merge` no-op in quick mode:
 
 ```bash
-# Phase 1: Python pre-filter (N came from Stage 3.5 or the preset — don't re-ask)
-python scripts/run_matcher.py --mode deep --profile {run_dir}/profile.json --top <N> --output-dir {run_dir}
-
-# Phase 2: shard, then dispatch one subagent per shard. The script prints the dispatch prompts.
-# NEVER read shard_*.md files in the main context — they contain full JDs (~190 lines each).
-# The sub-agents read them in their own contexts; you only wait for the barrier.
-python scripts/shard_deep_candidates.py {run_dir} --per-shard 4
-python scripts/check_artifacts.py {run_dir} --kinds deep_shards --wait 360   # timeout: 380000
-
-# Phase 3: collect shards, merge rule scores (40%) + Claude scores (60%), reclassify, regenerate report
-python scripts/run_matcher.py --mode deep --merge --output-dir {run_dir}
+python scripts/pipeline.py --from match          # deep mode: background task, one request per job
 ```
 
-Then open the report: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or `start {run_dir}/matching_report.html` (Bash).
+- **quick** — rule-based 6-dimension scoring (0-115 pts), seconds, zero token cost.
+- **deep** — rule pre-filter to Top-N, then one model request per candidate, then a merge that blends
+  rule score (40%) with model score (60%), reclassifies, and regenerates the report.
 
-**`qualified_jobs.json` is auto-generated by `--merge`** (the Stage 7 default apply pool = 符合 +
-需优化, in raw crawled fields). Do not hand-write it — it already exists after Phase 3. Only if the
-7bc answer trims the set, overwrite it with the confirmed subset.
+Both write `matching_report.html` and `qualified_jobs.json` (the apply pool = 符合 + 需优化, in raw
+crawled fields). **Never hand-write `qualified_jobs.json`.** Don't call `generate_html_report()`
+yourself either — the script already did, and after a CLI run you don't hold the object it needs.
 
-**For Stage 7a, use `read_thin.py` to get the job table — never `Read` the full `qualified_jobs.json`:**
+Open the report for the user: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or
+`start {run_dir}/matching_report.html` (Bash). See [references/matching.md](references/matching.md)
+for scoring dimensions and classification logic.
 
-```bash
-python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs
-```
+### gate:jobs — one question, three axes
 
-This gives you the link, company, position, salary, score, match reasons, and missing items — everything
-you need to display the table and run the 7bc gate. The full JDs and company descriptions stay on disk.
+Show the table first (`read_thin.py --kind jobs` — never `Read` the file), then **one**
+`AskUserQuestion` covering three mutually independent choices:
 
-### Stage 7: Confirm & Apply
-
-Two user gates — 7bc picks the jobs and the material preferences, 7g approves what was generated —
-with a parallel per-job generation phase in between. See
-[references/auto-apply.md](references/auto-apply.md) for the flowchart, subagent contracts, the ShowCV
-rendering pipeline, and the directory layout.
-
-| Sub-step | Action |
+| Axis | Options |
 |---|---|
-| **7a** | Display recommended jobs table with match scores and reasons |
-| **7bc** | `AskUserQuestion` — **gate 1**, all three independent questions in **one** call: 投递范围 (which jobs), 招呼语生成方式 (自定义 / 默认 / AI生成), 是否发送图片 (自定义上传 / AI调整 / 不发送) |
-| **7d** | Launch subagents **in parallel, one pair per confirmed job — every `Agent` call in ONE message, or they run serially**. Neither subagent touches a browser. Greeting agents get `scripts/prompts/greeting.st` (via `prompts.get_greeting_prompt()`) — don't re-state its rules in the dispatch prompt |
-| **7e** | Render adjusted resumes to flat images — **serial, one batch covering all jobs** (ShowCV) |
-| **7f** | Write `{run_dir}/applications/{company}-{position}/` per job via `python scripts/write_application_md.py "{run_dir}" --all` (all 25 crawled fields + greeting — never hand-write it), then notify the user to review |
-| **7g** | `AskUserQuestion` — **gate 2**: 全部投递 / 返回修改 / 取消投递 |
-| **7h** | On 全部投递, execute `auto_apply_jobs()` with the confirmed greetings and attachments |
+| 投递范围 | which jobs (job selection doesn't change the other two) |
+| 招呼语生成方式 | 自定义 / 默认模板 / AI生成 |
+| 是否发送图片 | 自定义上传 / AI调整（渲染长图） / 不发送 |
 
-**7bc is one call, not three.** Which jobs, greeting method, and image method are mutually
-independent — the job selection does not change the greeting options and vice versa. They used to be
-two stops (7b then 7c); merging them removes a round-trip from the stage that cost 12 minutes of the
-2026-08-14 run. The follow-ups that *depend* on an answer stay where they are: validating a
-`自定义上传` path, and the `AI调整` base-resume override.
+Map the answers onto flags rather than post-editing files:
 
-**7d → 7e → 7f is one uninterrupted batch.** Once 7bc's answers are in, generate, render, and
-archive without stopping to ask anything — the two gates are 7bc and 7g, and a question in between
-turns material preparation into an interrogation. Report once at the end of 7f.
+| Answer | How it is executed |
+|---|---|
+| 投递范围 = a subset | `--only 1,3,5-7` on `materials` **and** `render` (1-based index into `qualified_jobs.json`) — don't rewrite the file |
+| 招呼语 **自定义** | write the text to `{run_dir}/generated/greeting_{i}_custom.txt` for each chosen `i`, then run materials with `--greeting-mode skip`… or leave the mode at `ai`: an existing non-empty artifact is skipped, never overwritten |
+| 招呼语 **默认模板** | `--greeting-mode default` (rule template, no model call) |
+| 招呼语 **AI生成** | `--greeting-mode ai` (default) |
+| 图片 **自定义上传** | validate the path, then `apply.py --image <path>` at send time; `--resume-mode skip` if no optimized resume is wanted at all |
+| 图片 **AI调整** | default: `materials` writes the resume JSON, `render` turns it into the long image |
+| 图片 **不发送** | `pipeline.py --no-images`, and `apply.py --no-image` at send time |
 
 **The first 15 characters of a greeting are the only part most HR ever see.** BOSS's message-list
-preview truncates there, so an opening of `您好，我是…` spends the whole window on nothing. The rules
-and the per-scenario formulas live in `scripts/prompts/greeting.st` (one copy, don't paraphrase);
-`auto_apply.has_wasted_preview(text)` is the one-line check to run on each greeting before 7f,
-including a `自定义` text the user typed — if it fails, say so and offer to re-front-load it, but
-**don't rewrite a user-supplied greeting silently.**
+preview truncates there, so `您好，我是…` spends the whole window on nothing. The rules and
+per-scenario formulas live in `scripts/prompts/greeting.st` — one copy, don't paraphrase. Run
+`auto_apply.has_wasted_preview(text)` on each greeting before sending, **including a 自定义 text the
+user typed**: if it fails, say so and offer to re-front-load it, but **never silently rewrite a
+user-supplied greeting.**
 
-**7g is not mergeable and not presetable.** It is the last thing before an irreversible outward-facing
-action, and it must see the materials that actually landed on disk — so it cannot move earlier, and no
-saved preference may stand in for it.
+### materials — greetings + optimized resumes
 
-**A job whose material fails is dropped from the batch, not retried forever.** If a resume agent
-produces no artifact, mark that job failed, exclude it from the 7e render batch and from 7h, and list
-it for the user at 7g. Judge this by **whether the artifact is on disk** — never by whether a
-completion notification arrived. Missing notifications are common here (6 agents dispatched, 3
-notifications received), and a slow agent looks identical to a dead one from the inside.
+```bash
+python scripts/pipeline.py --from materials --only 1,3,5     # background task
+```
 
-**Which subagents actually launch** in 7d — the non-AI options resolve inline and need no agent:
+Two model requests per job (greeting + resume rewrite), so this is the stage that spends money on the
+list the user just approved — which is exactly why `gate:jobs` comes first. Products are
+`generated/greeting_{i}_{company}.txt` and `generated/resume_{i}_{company}.json`, where `{i}` is the
+1-based index in `qualified_jobs.json`. **The index is the alignment key for everything downstream**,
+so a failed job leaves a gap rather than shifting the others.
 
-| 7bc answer | 7d subagent | 7h attachment |
-|---|---|---|
-| 招呼语 **自定义** | none — one user-supplied text reused for every job | — |
-| 招呼语 **默认** | none — `generate_greeting()` per job | — |
-| 招呼语 **AI生成** | one greeting agent per job | — |
-| 图片 **自定义上传** | none — validate the path, copy into the job dir | the user's image |
-| 图片 **AI调整** | one resume agent per job, base = the original resume | the rendered flat PNG |
-| 图片 **不发送** | one resume agent per job, base = generic resume structure | none (the PNG is archived only) |
+Partial success exits 3, not 1. Check and top up only what is missing — existing non-empty artifacts
+are skipped, never overwritten (`--force` to overwrite):
 
-**7e is a barrier**: every resume agent must finish first, because a single
-import → export → delete batch covers all jobs. Never run two ShowCV commands concurrently — they
-share one browser on debug port 9333, and that port may be an *adopted* browser holding the user's
-real resumes (see [references/resume-editor.md](references/resume-editor.md)).
+```bash
+python scripts/check_artifacts.py {run_dir}
+python scripts/gen_materials.py {run_dir} --only 4        # just the one that failed
+```
 
+**A job whose material fails is dropped from the batch, not retried forever.** Exclude it from
+`render` and from the apply list, and tell the user at `gate:send`.
+
+### render — resume long-images
+
+```bash
+python scripts/pipeline.py --from render --only 1,3,5
+```
+
+**Serial by design — there is no `--workers`.** All resumes share one browser, one origin and one
+`localStorage`; concurrency only makes them trample each other. The script refuses to run when debug
+port 9333 is held by a browser whose `--user-data-dir` isn't `assets/showcv_profile` — that port may
+be an *adopted* browser holding the user's real resumes (see
+[references/resume-editor.md](references/resume-editor.md)). Never pass `--adopt-browser` on the
+user's behalf.
+
+Skip the stage entirely with `--no-images` when the user chose 不发送.
+
+### Materials on disk, then a look
+
+```bash
+python scripts/write_application_md.py "{run_dir}" --all
+python scripts/verify_image.py "{run_dir}/applications" --all
+```
+
+The first writes `applications/{company}-{position}/岗位信息+招呼语.md` per job — all crawled fields
+plus the greeting. Never hand-write it. The second is how you check the images: it returns a dozen
+lines of numbers instead of a 639k-token screenshot. If the user wants to see one, give them the
+path and let them open it.
+
+### gate:send — approve, then apply
+
+One `AskUserQuestion`: 全部投递 / 返回修改 / 取消投递. Then, and only then:
+
+```bash
+python scripts/apply.py "{run_dir}"                # dry run: prints the list, touches no browser
+python scripts/apply.py "{run_dir}" --yes          # sends
+```
+
+**`--yes` is the only irreversible step in this skill** — a sent message arrives instantly and cannot
+be recalled. Always dry-run first and show that list. `gate:send` is **not mergeable and not
+presetable**: it must see the materials that actually landed on disk, so it cannot move earlier, and
+no saved preference may stand in for it. `pipeline.py` never runs `apply.py`, not even with `--all`.
+
+Useful flags: `--only 1,3,5`, `--company 百度,棱镜数聚`, `--max N`, `--image <path>`, `--no-image`,
+`--name 张三`. Results land in `{run_dir}/apply_log.json`. Three checks refuse to send rather than
+warn — missing greeting, missing/blank attachment image, unreadable run directory. See
+[references/auto-apply.md](references/auto-apply.md) for the directory layout and the
+send-then-verify readback.
 
 ## Package Reference
 
-See [references/scripts.md](references/scripts.md) for module tables, key functions, and import examples for both `boss_crawler/` and `resume_matcher/` packages, and [references/resume-editor.md](references/resume-editor.md) for `showcv/`.
+See [references/scripts.md](references/scripts.md) for module tables and key functions of
+`boss_crawler/` and `resume_matcher/`, [references/resume-editor.md](references/resume-editor.md) for
+`showcv/`, and [docs/cli.md](docs/cli.md) for every command's flags and exit codes.
 
 ## Key Principles
 
-1. **Claude IS the LLM**: all AI analysis (resume parsing, job matching, optimization) uses Claude's own capabilities — no external LLM API
-2. **Rule-first, then LLM**: Python rule-based scoring pre-filters; Claude deep-analyzes only top candidates
-3. **Never fabricate**: resume optimization must not invent experience or skills
-4. **Safe applying**: 3-5s between applications, max 10-20 per session, pause on captcha
-5. **Always visualize**: generate and open HTML report for every run
+1. **Rule-first, then LLM**: Python rule scoring pre-filters; the model deep-analyzes only top candidates
+2. **Never fabricate**: resume optimization must not invent experience or skills
+3. **Safe applying**: 3-5s between applications, max 10-20 per session, pause on captcha
+4. **Always visualize**: generate and open the HTML report for every run
+5. **Artifacts on disk are the truth**: judge a stage by its files and exit code, never by a notification

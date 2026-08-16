@@ -22,10 +22,10 @@ Run them as scripts, not modules — they import `_browser` by relying on the sc
 directory being on `sys.path`, so `python scripts/showcv/launch.py ...` works but
 `python -m scripts.showcv.launch` does not.
 
-## Bridging the Editor into Stage 3
+## Bridging the Editor into the `parse` Stage
 
 The editor stores each resume's body as **raw Markdown** in `localStorage`. That means a resume
-written in the editor can feed Stage 3 parsing directly — no PDF/Word parsing needed.
+written in the editor can feed the `parse` stage directly — no PDF/Word extraction needed.
 
 ```bash
 python scripts/showcv/storage.py dump --url http://127.0.0.1:3090 --out {run_dir}/showcv-resume.json
@@ -58,9 +58,10 @@ To use it:
    had 8 entries with near-identical names (`张三`, `张三 - 副本`, `张三 - 副本 (3)` …). Locate the
    active one via `state.currentResumeId`, then confirm with `AskUserQuestion` showing each
    `name` + `updatedAt`. The field is `currentResumeId` — **not** `activeResumeId`.
-2. Write that entry's `content` to `{run_dir}/resume_text.txt` — it *is* `resume_text`.
-3. Continue at Stage 3 (parse → profile.json) as normal, including the Stage 3.5b cross-validation
-   run.
+2. Write that entry's `content` to a `.md` file — it *is* the resume text, so no extraction is
+   needed. Don't write it as `{run_dir}/resume_text.txt`: `parse` writes that filename itself.
+3. Feed that file to `parse` as normal — `python scripts/pipeline.py 简历.md` — and continue from
+   `infer`. The cross-validation runs inside the stage.
 
 `currentResumeId` can be `null` (no resume ever selected). Ask the user in that case rather than
 guessing.

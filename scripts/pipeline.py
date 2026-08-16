@@ -376,8 +376,8 @@ def run_stage(name, cmd, run_dir, timed=False):
 def check_materials(run_dir, greeting_mode, resume_mode):
     """materials 之后的一次性快照核查。返回 (ok, 缺失列表)。
 
-    gen_materials.py 是同步跑完的（不像 7d 那批后台 agent），所以这里不必 --wait ——
-    它返回了就代表不会再有新产物落盘。
+    gen_materials.py 是同步跑完的：它返回了就代表不会再有新产物落盘，所以这里只做
+    一次性快照，不轮询、不等待。
     """
     import check_artifacts
 

@@ -18,8 +18,8 @@ Stage 1 一次不用问，这是回访路径上最大的一笔省时。
 安全边界（重要，别删）：
 预设里永远没有「投递范围」「招呼语」「是否发送图片」这三类字段，save 的 CLI
 也不提供对应 flag。preferences.json 是用户能手改的文件，所以 load() 丢弃白名单
-外的一切键 —— 否则往文件里塞一个 "auto_apply": true 就成了绕过 7g 发送前确认的
-配置开关。7g 不读任何配置文件，这一条由 test_preferences.py 锁住。
+外的一切键 —— 否则往文件里塞一个 "auto_apply": true 就成了绕过发送前确认（gate:send）的
+配置开关。gate:send 不读任何配置文件，这一条由 test_preferences.py 锁住。
 
 用法：
   python scripts/preferences.py show          # 有预设 → 打印 + 退出 0；没有 → 退出 1
@@ -70,7 +70,7 @@ LABELS = {
 }
 
 # 「预设存在、但缺了这些可选字段时，主代理应当问用户」的字段集。
-# Stage 3.5 正常会问这些；预设存在时若缺失，说明上一轮没填 —— 不能当「不筛选」静默放行，
+# infer 阶段的确认环节正常会问这些；预设存在时若缺失，说明上一轮没填 —— 不能当「不筛选」静默放行，
 # 薪资/规模/最低岗位数尤其如此。必填核心（cities/keywords/mode/count）不在此列：它们缺了
 # 不是「补问」而是「等于没有可用预设」，由 show 的退出码和 crawl-args 各自兜底。
 ASKABLE_IF_MISSING = ('match_mode', 'top_n', 'degree', 'experience',
@@ -235,8 +235,8 @@ def crawl_argv(prefs):
             parts += [flag, ','.join(prefs[key])]
 
     # -d 默认开：没有详情的 CSV 匹配质量差得多（JD 是空的）。
-    # -y 恒开：Claude 驱动的运行读不到 stdin，交互确认在这一层没有意义 ——
-    # 真正的确认关在 7g，那一道不受预设影响。
+    # -y 恒开：主代理驱动的运行读不到 stdin，交互确认在这一层没有意义 ——
+    # 真正的确认关在 gate:send，那一道不受预设影响。
     if prefs.get('detail', True):
         parts.append('-d')
     parts.append('-y')

@@ -1,15 +1,16 @@
 # 命令行用法
 
-这套脚本有两条并行的使用路径，共用同一批文件与同一个产物目录：
+这套脚本有两条并行的使用路径，共用同一批文件、同一个模型接口与同一个产物目录：
 
 | | Skill 路径 | **命令行路径（本文）** |
 |---|---|---|
 | 入口 | Claude Code 里 `/boss-crawler` | `python scripts/pipeline.py 简历.pdf --all` |
-| LLM 由谁调 | Claude Code 自身的模型 | 你自己配的 OpenAI 兼容接口 |
-| 交互 | Claude 边问边跑 | 参数一次给全，或用 `--dry-run` 先看 |
+| LLM | 你自己配的 OpenAI 兼容接口 | 同一个（配置方式见第 2 节） |
+| 交互 | 逐阶段跑，投递范围与发送前各有一道确认 | 参数一次给全，或用 `--dry-run` 先看 |
+| 收窄投递范围 | 问你，然后翻译成 `--only` | 你自己写 `--only` / `--company` |
 | 适合 | 想让 Claude 帮你判断和决策 | 定时任务、批量重跑、不想开 Claude Code |
 
-两条路径**产物格式完全一致**，可以混着用：Skill 跑到一半，接着用命令行续跑同一个运行目录，反过来也行。`SKILL.md` 与 `references/` 是 Skill 路径的资料，命令行路径不读它们，也没有改动过它们。
+两条路径**产物格式完全一致**，可以混着用：Skill 跑到一半，接着用命令行续跑同一个运行目录，反过来也行。区别只在谁来做决定 —— Skill 路径把每个阶段的参数问你确认，命令行路径要求你一次写全。`SKILL.md` 与 `references/` 是 Skill 路径的资料，命令行路径不读它们。
 
 > ⚠️ **投递不在流水线上。** `pipeline.py --all` 跑完停在「材料已生成」，只把投递命令打印出来。投递要单独执行 `apply.py` 并显式带 `--yes` —— 那是整条链上唯一不可撤销的一步（消息一发对方立刻收到）。
 
@@ -35,6 +36,8 @@ Python 3.8+。爬取与投递需要本机装有 Chrome。
 cp assets/llm_config.example.json assets/llm_config.json
 # 编辑它，填 base_url / api_key / model
 ```
+
+（Windows PowerShell：`Copy-Item assets/llm_config.example.json assets/llm_config.json`）
 
 `assets/` 已在 `.gitignore` 里，api_key 不会进仓库。示例文件里列了 DeepSeek、通义、月之暗面、智谱、火山方舟、本地 ollama / vLLM 的 `base_url` 写法。
 
@@ -157,7 +160,7 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 
 `--company` 里任何一个名字没匹配上（打错字、这一轮没爬到这家），整条命令直接失败，**已命中的公司也不会投** —— 消息发出去撤不回，宁可让用户重敲一次。可选值就是演练开头那张公司清单。
 
-投递前会自动跑 `verify_image.py` 体检每张简历图（尺寸、内容占比、是否整张空白）—— 空白图发出去比不发更糟。想改投递池就直接编辑 `qualified_jobs.json`（删掉不想投的行），后续步骤都以它为准，且**不会被覆盖回全量**。
+投递前会自动跑 `verify_image.py` 体检每张简历图（尺寸、内容占比、是否整张空白）—— 空白图发出去比不发更糟。想收窄投递池就用 `--only` / `--company`，**别去编辑 `qualified_jobs.json`**：文件里的 1-based 序号是招呼语、简历、简历图三者的对齐键，删一行就整片错位（见第 6 节）。
 
 ## 5. 单独跑某一步
 
@@ -174,9 +177,12 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 | 合并出报告 | `run_matcher.py --mode deep --merge -o <run_dir>` | 上面两个 | `qualified_jobs.json`、HTML 报告 |
 | 生成材料 | `gen_materials.py <run_dir>` | `qualified_jobs.json` + profile | `generated/greeting_*.txt`、`generated/resume_*.json` |
 | 渲染简历图 | `render_images.py <run_dir>` | `generated/resume_*.json` | `applications/<公司>-<岗位>/<姓名>-<岗位>.png` |
+| 可读投递材料 | `write_application_md.py <run_dir> --all` | `qualified_jobs.json` + 原始 CSV + 招呼语 | `applications/<公司>-<岗位>/岗位信息+招呼语.md` |
 | 投递 | `apply.py <run_dir> --yes` | 以上全部 | `apply_log.json` |
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
+
+「可读投递材料」那一行不在 `pipeline.py` 的阶段链上（`applications/` 下的 `.md` 和 `.png` 由 `render_images.py` 各写一份自己的）。想要那份把 20 个爬取字段和招呼语汇总在一起、能直接手动照着投的文件，就单独跑它 —— `gen_materials.py` 跑完也会把这条命令印出来。
 
 ### parse_resume.py — 简历 → profile.json
 
@@ -272,21 +278,22 @@ assets/2026-08-15_10-00-00/
 ├── scored_jobs.json        规则评分分档（tier1..tier4）
 ├── deep_candidates.json    深度模式：预筛选出的候选 + profile
 ├── deep_results.json       深度模式：逐岗位的模型分析
-├── qualified_jobs.json     ★ 投递候选池（想收窄就直接编辑它）
+├── qualified_jobs.json     ★ 投递候选池（自动生成，**别手工编辑** —— 序号是下游的对齐键）
 ├── matching_report.html    可视化报告
 ├── generated/
 │   ├── greeting_1_甲公司.txt      招呼语（序号 = 在 qualified_jobs.json 里的位置）
 │   └── resume_1_甲公司.json       优化后的简历
 ├── applications/
 │   └── 甲公司-AI应用开发工程师/
-│       ├── 张三-AI应用开发工程师.md    可读的投递材料（招呼语 + 简历 + 岗位信息）
-│       └── 张三-AI应用开发工程师.png   投递用简历长图（HR 看到的就是这个文件名）
+│       ├── 张三-AI应用开发工程师.md    优化后的简历（Markdown，render_images.py 顺手写的）
+│       ├── 张三-AI应用开发工程师.png   投递用简历长图（HR 看到的就是这个文件名）
+│       └── 岗位信息+招呼语.md          岗位全字段 + 招呼语（write_application_md.py 单独生成）
 ├── apply_log.json          投递记录
 ├── run_timings.jsonl       各阶段耗时
 └── llm_usage.jsonl         每次模型调用的 token 与重试
 ```
 
-`generated/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名或调整 `qualified_jobs.json` 的顺序而不重新生成材料**。
+`generated/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名，也别删改 `qualified_jobs.json` 的行或顺序**。要少投几个用 `--only`，那是为此存在的参数。
 
 查看状态与花费：
 
@@ -348,4 +355,5 @@ for f in scripts/test_*.py; do python "$f" || echo "FAIL $f"; done
 - `test_infer_hint.py` — 缺城市/关键词时印出的修复命令真的能直接粘（跨进程契约：`pipeline` 塞环境变量、`infer_params` 读它决定印哪种形态）
 - `test_infer_prompt.py` — `crawl_params.st` 的占位符和 Python 传的关键字一一对上（对不上时 `str.format` 抛 KeyError，而这要跑到 infer 阶段才炸），今天的日期确实进了提示词，枚举确实来自 `FILTER_LABELS`
 - `test_ensure_login.py` — 同一条 `--ensure-login` 要服务两种调用者：命令行下必须等回车复检，skill 路径（stdin 是管道）下**一次都不许调 `input()`**，否则会话会挂死等一个永不到来的回车。判据是 `isatty()`
+- `test_where_am_i.py` — 从产物反推阶段的判据（文件存在**且非空**）、印出的续跑命令真的能粘，以及输出长度不会撑爆上下文
 - `test_apply_gate.py` — 不带 `--yes` 时投递函数零调用

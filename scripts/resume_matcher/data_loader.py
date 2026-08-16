@@ -49,8 +49,8 @@ def load_job_data(csv_paths: List[str]) -> List[Dict[str, Any]]:
             print(f"  加载失败 {csv_path}: {e}")
 
     # 爬取侧已经做了整轮去重，但已落盘的旧 CSV、以及多轮运行之间的文件仍会重叠，
-    # 所以加载侧保留这一道。不去重的代价是同一岗位被打分、被排进候选、被派给
-    # 深度分析 subagent 好几遍。
+    # 所以加载侧保留这一道。不去重的代价是同一岗位被打分、被排进候选、被送去
+    # 深度分析好几遍（每遍都是真金白银的 API 调用）。
     deduped: Dict[str, Dict[str, Any]] = {}
     no_link = []
     for row in all_jobs:

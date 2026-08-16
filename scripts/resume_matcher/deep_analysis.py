@@ -135,7 +135,7 @@ def save_deep_candidates(
                 'position_score': job.get('position_score', 0),
                 'ai_bonus': job.get('ai_bonus', 0),
             },
-            # 规则侧的投递分类，作为 Claude 未覆盖该候选时的兜底
+            # 规则侧的投递分类，作为模型未覆盖该候选时的兜底
             'rule_application_category': job.get('application_category', CATEGORY_NEED_OPTIMIZATION),
             'rule_application_category_reason': job.get('application_category_reason', ''),
         })
@@ -148,10 +148,9 @@ def save_deep_candidates(
         'total': len(candidates),
         'prepared_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'instruction': (
-            '不要在主上下文里逐个分析这些 candidates —— N 份 JD 全文进主上下文会触发压缩。'
-            '改为 `python scripts/shard_deep_candidates.py <run_dir>` 切成自包含分片，'
-            '每片派一个 subagent，结果写 deep_shards/result_NN.json，'
-            f'再 `--merge` 收拢成 {output_dir}/deep_results.json。'
+            '这份文件是 deep_analyze.py 的输入：它按 concurrency 并发把每个 candidate '
+            '送 LLM 逐岗分析，结果写 deep_results.json，'
+            f'再 `run_matcher.py --mode deep --merge` 合回 {output_dir}/matching_report.html。'
         ),
     }
 
@@ -160,107 +159,18 @@ def save_deep_candidates(
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     print(f"\n深度分析候选已保存: {output_path}")
-    print(f"共 {len(candidates)} 个候选岗位待 Claude 深度分析")
+    print(f"共 {len(candidates)} 个候选岗位待 LLM 深度分析")
     print(f"规则评分范围: {candidates[-1]['rule_score']} ~ {candidates[0]['rule_score']}")
-    print(f"\n下一步: python scripts/shard_deep_candidates.py {output_dir}")
-    print(f"        → 并行派发 subagent → check_artifacts.py --kinds deep_shards")
-    print(f"然后运行: python run_matcher.py --mode deep --merge --run-id {os.path.basename(output_dir)}")
+    print(f"\n下一步: python scripts/deep_analyze.py {output_dir}")
+    print(f"然后运行: python scripts/run_matcher.py --mode deep --merge "
+          f"--run-id {os.path.basename(output_dir)}")
 
     return output_path
 
 
 # ==================== Deep Results Merge ====================
 
-SHARD_DIR = 'deep_shards'
-
-
-def collect_shard_results(output_dir: str) -> Optional[str]:
-    """
-    把 deep_shards/result_*.json 收拢成一份 deep_results.json。
-
-    并行分片方案的汇流点（见 scripts/shard_deep_candidates.py 的动机说明）：
-    每个 subagent 只写自己那片的 result_NN.json，本函数按 rank 去重后合成
-    merge_deep_results 期望的单文件格式。这样 merge 那侧完全不用改。
-
-    没有分片目录 / 没有 result 文件时返回 None，调用方回落到「Claude 直接写了
-    deep_results.json」的旧路径 —— 两种流程并存，不强制迁移。
-
-    Returns:
-        写出的 deep_results.json 路径，没有分片则 None
-    """
-    shard_dir = os.path.join(output_dir, SHARD_DIR)
-    if not os.path.isdir(shard_dir):
-        return None
-
-    shard_files = sorted(
-        name for name in os.listdir(shard_dir)
-        if name.startswith('result_') and name.endswith('.json')
-    )
-    if not shard_files:
-        return None
-
-    merged: Dict[Any, Dict[str, Any]] = {}
-    conflicts = []
-    broken = []
-
-    for name in shard_files:
-        path = os.path.join(shard_dir, name)
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (ValueError, OSError) as exc:
-            # 单片坏掉不该让整批失败：记下来，其余照常合并
-            broken.append((name, str(exc)))
-            continue
-
-        # 容忍两种写法：{"results": [...]} 和裸数组
-        results = data.get('results', []) if isinstance(data, dict) else data
-        if not isinstance(results, list):
-            broken.append((name, 'results 不是数组'))
-            continue
-
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-            rank = item.get('rank')
-            if rank is None:
-                # 没有 rank 就无法回填到候选（merge 靠 rank 匹配），只能丢弃
-                broken.append((name, '有一条结果缺 rank，已丢弃'))
-                continue
-            if rank in merged:
-                conflicts.append(rank)
-                continue          # 先到先得，不让后来的覆盖
-            merged[rank] = item
-
-    if not merged:
-        print(f"警告: {shard_dir} 下的分片结果都无法使用")
-        for name, why in broken:
-            print(f"  ❌ {name}: {why}")
-        return None
-
-    results_list = [merged[k] for k in sorted(merged, key=lambda r: (r is None, r))]
-    output = {
-        'version': '1.0',
-        'analyzed_by': 'claude-code-parallel-shards',
-        'analyzed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'shard_files': shard_files,
-        'results': results_list,
-    }
-
-    output_path = os.path.join(output_dir, 'deep_results.json')
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    print(f"\n分片结果已收拢: {len(shard_files)} 片 → {len(results_list)} 条 → {output_path}")
-    if conflicts:
-        print(f"  ⚠ rank 重复（保留先出现的）: {sorted(set(conflicts))}")
-    for name, why in broken:
-        print(f"  ⚠ {name}: {why}")
-
-    return output_path
-
-
-# 深度分析权重：claude 评分占 60%，规则评分占 40%
+# 深度分析权重：LLM 评分占 60%，规则评分占 40%
 DEEP_WEIGHT = 0.6
 QUICK_WEIGHT = 0.4
 
@@ -337,7 +247,7 @@ def merge_deep_results(
     need_optimization = []
     cannot_apply = []
     # 原始岗位 dict（candidate['job']）随分类同步收集，供写出 qualified_jobs.json。
-    # qualified_jobs.json 是 Stage 7 的默认投递候选池，用原始爬取字段（link/公司/职位/…），
+    # qualified_jobs.json 是投递阶段的默认候选池，用原始爬取字段（link/公司/职位/…），
     # 与 write_application_md.py 按 link 回查 CSV 的约定一致；不再由主代理手写。
     qualified_raw = []
     need_optimization_raw = []
@@ -457,10 +367,11 @@ def merge_deep_results(
     print(f"  不可投递: {len(cannot_apply)}")
     print(f"  HTML 报告: {html_path}")
 
-    # ── 写出 qualified_jobs.json（Stage 7 默认投递候选池）──
-    # 含「符合+需优化」两类，按置信度（符合在前）排序；7bc 询问投递范围后，
-    # 主代理如需收窄，直接覆盖此文件即可。字段为原始爬取 dict，供
-    # write_application_md.py 按 link 回查 CSV。
+    # ── 写出 qualified_jobs.json（投递阶段的默认候选池）──
+    # 含「符合+需优化」两类，按置信度（符合在前）排序。要收窄投递范围**不要改这个文件**：
+    # 文件里的 1-based 序号是下游所有产物（greeting_{i}_*、resume_{i}_*）的对齐键，
+    # 改了就错位 —— 用 gen_materials.py / render_images.py / apply.py 的 --only 序号。
+    # 字段为原始爬取 dict，供 write_application_md.py 按 link 回查 CSV。
     qualified_path = os.path.join(output_dir, 'qualified_jobs.json')
     with open(qualified_path, 'w', encoding='utf-8') as f:
         json.dump(qualified_raw + need_optimization_raw, f, ensure_ascii=False, indent=2)

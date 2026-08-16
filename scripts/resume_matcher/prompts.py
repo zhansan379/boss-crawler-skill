@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 提示词模板加载
-从 prompts/ 目录加载 .st 模板文件，供 Claude Code 使用
+从 prompts/ 目录加载 .st 模板文件
 """
 
 from typing import Dict, Any
@@ -23,29 +23,13 @@ def load_prompt(template_name: str) -> str:
 
 
 def get_resume_parse_prompt(resume_text: str) -> str:
-    """获取简历解析提示词（供 Claude 使用）"""
+    """获取简历解析提示词"""
     template = load_prompt("resume_parse")
     return template.format(resume_text=resume_text)
 
 
-def get_job_analysis_prompt(job: Dict[str, Any]) -> str:
-    """获取岗位分析提示词（供 Claude 使用）"""
-    template = load_prompt("job_analysis")
-    job_detail = job.get('岗位要求和职责', '')[:500]
-    return template.format(
-        company=job.get('公司', ''),
-        position=job.get('职位', ''),
-        salary=job.get('薪资', ''),
-        experience=job.get('经验', ''),
-        education=job.get('学历', ''),
-        skills=job.get('技能标签', ''),
-        scale=job.get('规模', ''),
-        job_detail=job_detail
-    )
-
-
 def get_match_analysis_prompt(resume_info: str, job_requirements: str) -> str:
-    """获取匹配分析提示词（供 Claude 使用）"""
+    """获取匹配分析提示词"""
     template = load_prompt("match_analysis")
     return template.format(
         resume_info=resume_info,
@@ -61,7 +45,7 @@ def get_greeting_prompt(
     availability: str = '',
     scene_hint: str = '',
 ) -> str:
-    """获取招呼语提示词（供 7d 的招呼语子智能体使用）
+    """获取招呼语提示词（gen_materials.py 的 greeting 阶段在用）
 
     规则本体在 prompts/greeting.st，不要在调用处复述 —— 这套口径（前 15 字预览框、
     校招不许提出勤、到岗信息不许编）曾经散在 references/auto-apply.md 的一张表里，
@@ -91,10 +75,10 @@ def get_crawl_params_prompt(
     resume: str, kw_budget: int, salary: str, experience: str,
     degree: str, job_type: str, today: str
 ) -> str:
-    """获取爬取参数推断提示词（只有命令行路径的 infer_params.py 在用）
+    """获取爬取参数推断提示词（infer_params.py 在用）
 
-    这是 prompts/ 里唯一一个 **skill 路径不使用** 的模板：skill 路径在这一步是三轮
-    AskUserQuestion，参数由用户自己给。改它不会影响 skill 的行为。
+    只在用户没给全筛选条件时才真的发出去：SKILL.md 里参数优先由 AskUserQuestion
+    确认，确认过的值以 --salary/--experience 等形式传进来，模型只补没确认的那几个。
 
     四个枚举字符串必须由调用方从爬虫的 FILTER_LABELS 传进来，不要写死在模板里 ——
     爬虫拿到不认识的筛选值不报错，只会安静地少筛一批，那种失败看起来跟成功一样。
@@ -119,7 +103,7 @@ def get_optimize_prompt(
     salary: str, requirements: str, match_score: int,
     missing_items: str, optimization_points: str
 ) -> str:
-    """获取简历优化提示词（供 Claude 使用）"""
+    """获取简历优化提示词"""
     template = load_prompt("resume_optimize")
     return template.format(
         resume_text=resume_text,

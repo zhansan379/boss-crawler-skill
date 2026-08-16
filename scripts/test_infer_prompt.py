@@ -32,7 +32,7 @@ for _stream in (sys.stdout, sys.stderr):
 import infer_params as I
 from resume_matcher.prompts import (
     load_prompt, get_crawl_params_prompt,
-    get_resume_parse_prompt, get_job_analysis_prompt,
+    get_resume_parse_prompt,
     get_match_analysis_prompt, get_greeting_prompt, get_optimize_prompt,
 )
 
@@ -193,8 +193,8 @@ def main():
         I.resolve, I.chat_json = old_resolve, old_chat
         shutil.rmtree(run_dir, ignore_errors=True)
 
-    print('\n=== 8. skill 路径的 5 个共享模板没被动到 ===')
-    for name in ('resume_parse', 'job_analysis', 'match_analysis',
+    print('\n=== 8. 另外 4 个模板没被动到 ===')
+    for name in ('resume_parse', 'match_analysis',
                  'greeting', 'resume_optimize'):
         try:
             check('%s.st 还在且能加载' % name, bool(load_prompt(name)))
@@ -202,7 +202,6 @@ def main():
             check('%s.st 还在且能加载' % name, False, str(exc))
     job = {'公司': 'A', '职位': 'B', '岗位要求和职责': 'C'}
     for label, fn in (('resume_parse', lambda: get_resume_parse_prompt('x')),
-                      ('job_analysis', lambda: get_job_analysis_prompt(job)),
                       ('match_analysis', lambda: get_match_analysis_prompt('a', 'b')),
                       ('greeting', lambda: get_greeting_prompt(job, name='张三')),
                       ('resume_optimize', lambda: get_optimize_prompt(

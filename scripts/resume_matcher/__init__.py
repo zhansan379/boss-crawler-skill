@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-简历分析与岗位匹配系统（Claude Code 驱动版）
+简历分析与岗位匹配系统
 
-已移除 infra_ai 依赖，LLM 分析由 Claude Code 自身完成。
-保留：数据结构、文件解析、CSV加载、规则匹配、6维度评分、HTML报告、自动投递。
+LLM 调用统一走 scripts/llm/（OpenAI 兼容端点），本包只管：
+数据结构、文件解析、CSV 加载、规则匹配、6 维度评分、HTML 报告、自动投递。
 """
 
 # ── 数据类
@@ -25,7 +25,6 @@ from .parsers import parse_resume_file, parse_pdf, parse_docx, parse_plain_text
 from .prompts import (
     load_prompt,
     get_resume_parse_prompt,
-    get_job_analysis_prompt,
     get_match_analysis_prompt,
     get_optimize_prompt,
 )
@@ -82,7 +81,7 @@ __all__ = [
     # Parsers
     "parse_resume_file", "parse_pdf", "parse_docx", "parse_plain_text",
     # Prompts
-    "load_prompt", "get_resume_parse_prompt", "get_job_analysis_prompt",
+    "load_prompt", "get_resume_parse_prompt",
     "get_match_analysis_prompt", "get_optimize_prompt",
     # Data loader
     "load_job_data", "list_available_job_files",

@@ -5,7 +5,7 @@ BOSS直聘岗位匹配系统 — 统一 CLI 入口
 
 支持两种模式:
   - 快速模式 (quick): 纯规则 6 维度评分，秒级完成，零 token 消耗
-  - 深度模式 (deep):  先规则预筛选，保存 Top N 候选供 Claude Code LLM 深度分析
+  - 深度模式 (deep):  先规则预筛选，Top N 候选交 deep_analyze.py 送 LLM 逐岗分析
 
 用法:
   # 快速模式（输出到 ./resume_output/<timestamp>/）
@@ -14,10 +14,10 @@ BOSS直聘岗位匹配系统 — 统一 CLI 入口
   # 深度模式 — 阶段 1: 准备候选
   python run_matcher.py --mode deep --profile ./resume_output/<timestamp>/profile.json --top 15
 
-  # 深度模式 — 阶段 2: 切片并行分析（见 shard_deep_candidates.py）
-  python shard_deep_candidates.py ./resume_output/<timestamp>
+  # 深度模式 — 阶段 2: 调 LLM 逐岗分析
+  python deep_analyze.py ./resume_output/<timestamp>
 
-  # 深度模式 — 阶段 3: 合并分析结果（自动定位最近运行目录、自动收拢分片）
+  # 深度模式 — 阶段 3: 合并分析结果（自动定位最近运行目录）
   python run_matcher.py --mode deep --merge
 
   # 深度模式 — 阶段 3: 指定运行目录
@@ -52,7 +52,7 @@ def load_profile(profile_path: str) -> ResumeProfile:
     """从 JSON 文件加载简历 profile"""
     if not os.path.exists(profile_path):
         print(f"错误: profile 文件不存在: {profile_path}")
-        print("请先通过 Claude Code 解析简历（SKILL.md Phase 3），保存为 JSON 文件")
+        print("请先解析简历: python scripts/parse_resume.py <简历文件>")
         sys.exit(1)
 
     with open(profile_path, 'r', encoding='utf-8') as f:
@@ -186,18 +186,17 @@ def run_deep_prepare(profile: ResumeProfile, output_dir: str, top_n: int) -> Non
     )
 
     print(f"\n{'=' * 60}")
-    print("  ⏳ 阶段 2: 并行深度分析")
+    print("  ⏳ 阶段 2: 深度分析（调 LLM）")
     print(f"{'=' * 60}")
     print(f"\n候选文件: {candidate_path}")
-    print(f"\n不要在主上下文里逐个分析 —— {top_n} 份 JD 全文会把上下文顶到触发压缩。")
-    print("改为切片后并行派发 subagent：")
-    print(f"\n  python scripts/shard_deep_candidates.py {output_dir}")
-    print("\n该脚本会打印每片的派发提示词，以及后续的等待和合并命令。")
+    print(f"\n  python scripts/deep_analyze.py {output_dir}")
+    print(f"  python scripts/run_matcher.py --mode deep --merge --run-id {os.path.basename(output_dir)}")
+    print(f"\n或一条命令跑完这两步: python scripts/pipeline.py --run-dir {output_dir} --from deep")
 
 
 def run_deep_merge(output_dir: str) -> None:
     """深度模式阶段 3：合并分析结果 + 生成报告"""
-    from resume_matcher.deep_analysis import merge_deep_results, collect_shard_results
+    from resume_matcher.deep_analysis import merge_deep_results
 
     print("\n" + "=" * 60)
     print("  🧠 深度模式 — 阶段 3: 合并分析结果")
@@ -211,16 +210,9 @@ def run_deep_merge(output_dir: str) -> None:
         print("请先运行: python run_matcher.py --mode deep")
         sys.exit(1)
 
-    # 并行分片流程：先把 deep_shards/result_*.json 收拢成 deep_results.json。
-    # 没有分片目录时返回 None，回落到「Claude 自己写了 deep_results.json」的旧路径。
-    collected = collect_shard_results(output_dir)
-
     if not os.path.exists(results_file):
         print(f"错误: 深度分析结果文件不存在 {results_file}")
-        if collected is None:
-            print("  没有找到 deep_shards/result_*.json，也没有 deep_results.json。")
-            print("  并行分片流程: python scripts/shard_deep_candidates.py " + output_dir)
-            print("  然后派发 subagent，再用 check_artifacts.py --kinds deep_shards 等产物齐全。")
+        print(f"  先跑深度分析: python scripts/deep_analyze.py {output_dir}")
         sys.exit(1)
 
     classification = merge_deep_results(
@@ -267,11 +259,11 @@ def main():
         '--mode', '-m',
         choices=['quick', 'deep'],
         default='quick',
-        help='匹配模式: quick=纯规则快速评分, deep=Claude LLM 深度分析 (默认: quick)',
+        help='匹配模式: quick=纯规则快速评分, deep=规则预筛 + LLM 深度分析 (默认: quick)',
     )
     parser.add_argument(
         '--profile', '-p',
-        help='简历 profile JSON 文件路径（由 Claude Code 在 SKILL.md Phase 3 保存）',
+        help='简历 profile JSON 文件路径（由 parse_resume.py 产出）',
     )
     parser.add_argument(
         '--top', '-n',
@@ -282,8 +274,7 @@ def main():
     parser.add_argument(
         '--merge',
         action='store_true',
-        help='深度模式阶段 3: 合并分析结果（自动收拢 deep_shards/result_*.json，'
-             '没有分片则回落到已有的 deep_results.json）',
+        help='深度模式阶段 3: 把 deep_results.json 与规则评分合并、重算分类与报告',
     )
     parser.add_argument(
         '--output-dir', '-o',

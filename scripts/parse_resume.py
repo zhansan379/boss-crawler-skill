@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""简历文件 → resume_text.txt + profile.json（走 OpenAI 兼容接口，不需要 skill）。
+"""简历文件 → resume_text.txt + profile.json（走 OpenAI 兼容接口）。
 
-对应 SKILL.md 的 Stage 2-3 + 3.5b：原来这两步靠派 subagent 做，这里换成一次
-`chat_json`，于是能单独用命令行跑。
+流水线的 parse 阶段：抽文本 + 一次 `chat_json` 结构化，再跑一遍字段校验
+（profile_validation.json）。
 
 用法：
     python scripts/parse_resume.py 简历.pdf

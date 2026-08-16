@@ -1,5 +1,9 @@
 # Crawl Commands Reference
 
+The `crawl` stage normally runs through `pipeline.py --from crawl`, which builds this argv from
+`crawl_params.json` and appends `--run-dir`. Reach for `boss_post_interactive.py` directly when you
+need a one-off crawl outside a run, or to debug what the pipeline assembled.
+
 ## Two-Phase Login Flow
 
 ### Phase 1a: Ensure Login
@@ -12,7 +16,8 @@ python scripts/boss_post_interactive.py --ensure-login
 - Single XPath detection (no polling, no stdin interaction):
   - **Logged in**: `//a[@href='https://www.zhipin.com/web/geek/recommend']//img` exists → prints `[LOGIN_OK]`, closes browser
   - **Not logged in**: `//a[@class='btn btn-outline header-login-btn']` exists → prints `[LOGIN_NEEDED]`, keeps browser open, script exits
-- If not logged in: user manually logs in, tells Claude "已登录", Claude re-runs `--ensure-login`
+- If not logged in: the user logs in manually and says 已登录 — then re-run `--ensure-login` to
+  confirm rather than assuming it worked
 - Login state (cookies) persists to `./chrome_user_data/`
 
 ### Phase 1b: Execute Crawl
@@ -30,7 +35,7 @@ Login confirmed → run crawl. Script reuses persistent Chrome profile, login st
 | `-n, --count` | Max per city per keyword | `20` (omit for unlimited) |
 | `-d, --detail` | Crawl detail pages | Include for matching quality |
 | `--no-sleep` | Disable request delay | Not recommended (anti-crawl protection) |
-| `-y, --yes` | Skip confirmation prompt | Use in automated (Claude-driven) runs |
+| `-y, --yes` | Skip the stdin confirmation prompt | Always set in unattended runs — there is no terminal to answer it |
 | `-j, --jobType` | Job type filter | `全职,实习,兼职` |
 | `-s, --salary` | Salary range filter | `3K以下,3-5K,5-10K,10-20K,20-50K,50K以上` |
 | `-e, --experience` | Experience filter | `应届生,1年以内,1-3年,3-5年,5-10年,10年以上,在校生,经验不限` |
@@ -69,16 +74,19 @@ python scripts/boss_post_interactive.py -u
 
 The single biggest time saver for a returning user. The 2026-08-14 run spent 12 of its 46 minutes
 (30%) on interaction round-trips, most of it re-answering the same city / keyword / degree / mode
-questions from the previous run. A preset makes Stage 1 ask nothing.
+questions from the previous run. A preset makes the `infer` confirmation ask nothing.
 
 ```bash
-# Stage 1 Phase 0 — always run this first. Exit 0 = preset exists, 1 = none.
+# Path C's first step. Exit 0 = preset exists, 1 = none.
 python scripts/preferences.py show
 
-# Emit the ready-to-run crawl command from the saved preset
+# Which fields the preset is missing (exit 1 when there are any) — ask only about those
+python scripts/preferences.py missing
+
+# Emit a standalone crawl command from the saved preset (manual escape hatch)
 python scripts/preferences.py crawl-args
 
-# Save after the user answers Stage 3.5's merged question
+# Save after the user confirms the infer parameters
 python scripts/preferences.py save --keywords "AI应用开发,大模型应用开发" --city "太原" \
     --count 20 --degree "本科" --match-mode deep --top 10
 
@@ -89,11 +97,17 @@ python scripts/preferences.py clear
 | Subcommand | Exit code | Use |
 |---|---|---|
 | `show` | `1` when no preset | Branch on the exit code, not on parsing the text |
+| `missing` | `1` when fields are missing | The fill-the-gaps question list for path C |
 | `crawl-args` | `1` when no preset | Prints one `boss_post_interactive.py …` line — run it as-is |
 | `save` | `0` | Overwrites; there is only ever one preset. Short forms mirror the crawler's own flags (`-c -p -m -n -deg -e -s -j`). Detail crawling is on by default — pass `--no-detail` to turn it off |
 | `clear` | `0` | Idempotent — no error when the file is already gone |
 
 Stored at `assets/preferences.json`, keyed by `SCHEMA_VERSION`, stamped with `saved_at`.
+
+`crawl_argv()` is the **single** place the 10 preset fields get mapped onto `-p -c -n -d -deg -e -s
+-j --scale`. `crawl-args` renders it as a shell string; `pipeline.py`'s crawl stage feeds the same
+list to `subprocess` from `crawl_params.json`. Two assembly points would mean one of them silently
+missing a new field.
 
 **Presets never expire.** `show` reports the age (`已保存 23 天`) and stops there. An expiry rule
 would be a gate that fires on a calendar rather than on anything the user did — and re-confirming an
@@ -103,21 +117,21 @@ the user can notice a stale preset themselves and say so.
 **The key whitelist is a security boundary, not typo protection.** `preferences.json` is a plain
 file a user (or anything with write access to the repo) can edit. `load()` drops every key outside
 `ALLOWED_KEYS` and every value of the wrong type, which is what keeps a hand-added
-`{"auto_apply": true}` or `{"skip_gate_7g": true}` from becoming an off switch for 7g. The preset
-schema has **no** field for which jobs to apply to, what greeting to send, or whether to send —
-those live only in 7bc and 7g, in-session, every run. `scripts/test_preferences.py` group [3]
-locks this; if you add a key, that test is the thing that must still pass.
+`{"auto_apply": true}` or `{"skip_gate_send": true}` from becoming an off switch for `gate:send`. The
+preset schema has **no** field for which jobs to apply to, what greeting to send, or whether to send —
+those live only in `gate:jobs` and `gate:send`, in-session, every run. `scripts/test_preferences.py`
+group [3] locks this; if you add a key, that test is the thing that must still pass.
 
 **`-y` is always set in `crawl-args`, and that is not a bypass.** `-y` only suppresses
-`boss_post_interactive.py`'s own stdin prompt, which a Claude-driven run cannot answer anyway (there
-is no terminal attached). Crawling is a read operation. The confirmation that matters is 7g, and no
-preset field reaches it.
+`boss_post_interactive.py`'s own stdin prompt, which an unattended run cannot answer anyway (there
+is no terminal attached). Crawling is a read operation. The confirmation that matters is `gate:send`,
+and no preset field reaches it.
 
 ## Important Notes
 
-- `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly. It is also the only source of the three HR-activity columns (`HR活跃度` / `HR在线` / `HR职位`): they come from `zpData.bossInfo` on the detail API, so a crawl without `-d` leaves them empty, the report shows 活跃度未采集, and Stage 7's apply ordering falls back to pure `match_score`
+- `-d` (detail pages) is critical — without it, job descriptions are missing and matching accuracy drops significantly. It is also the only source of the three HR-activity columns (`HR活跃度` / `HR在线` / `HR职位`): they come from `zpData.bossInfo` on the detail API, so a crawl without `-d` leaves them empty, the report shows 活跃度未采集, and `apply.py`'s send ordering falls back to pure `match_score`
 - HR activity is a **crawl-time snapshot**, never re-fetched. `HR在线` in particular is stale by the time you apply — treat `HR活跃度` as the durable signal. An empty value means "not collected", which is *not* the same as "offline"
 - The CSV header is migrated in place: opening an older 17-column file rewrites it to the current 20-column schema (missing cells filled with `''`) and prints a `[迁移]` line. Existing rows are preserved but keep empty HR columns — re-crawl to populate them
 - Default request delay is on (anti-crawl); use `--no-sleep` only if you understand the risk
 - Persistent Chrome profile at `./chrome_user_data/` means login once, crawl many times
-- CSV output lands in `./post_data/` directory
+- CSV output lands in `assets/post_data/` — `custom/{关键词}_{城市}.csv` for keyword mode, one directory per category for list mode. The pool is cumulative across runs, which is why a row count there is not this run's yield

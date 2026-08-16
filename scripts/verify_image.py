@@ -3,7 +3,7 @@
 """校验渲染出来的简历图片，**替代直接 Read 图片**。
 
 为什么必须有它：`Read` 一张生成的简历 PNG 是本 skill 能干出的最贵的一件事。
-2026-08-13 实测（session 3b45c941，7f 目检环节）：
+2026-08-13 实测（session 3b45c941，投递材料目检环节）：
 
     Read applications/<job>/<姓名>-<岗位>.png
       → 509 KB JPEG → 单次请求 638,960 input tokens

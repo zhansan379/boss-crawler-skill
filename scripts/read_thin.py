@@ -134,7 +134,7 @@ def thin_profile(data: dict) -> dict:
 
 
 def thin_deep(data: dict) -> list:
-    """Extract thin fields from deep_results — verdicts only, no shard content."""
+    """Extract thin fields from deep_results — verdicts only, no full JD text."""
     results = data.get('results', [])
     thin_fields = [
         'rank', 'score', 'category', 'reason',
@@ -165,7 +165,7 @@ def main():
         print('Kinds:')
         print('  jobs     — qualified_jobs.json: strip full JDs and company info')
         print('  profile  — profile.json: strip full experience/project text and PII')
-        print('  deep     — deep_results.json: verdicts only, no shard content')
+        print('  deep     — deep_results.json: verdicts only, no full JD text')
         sys.exit(1)
 
     file_path = None
