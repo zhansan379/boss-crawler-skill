@@ -5,6 +5,7 @@
 """
 
 import os
+import random
 import time
 
 from DrissionPage import ChromiumOptions
@@ -151,20 +152,29 @@ co.set_argument('--disable-blink-features=AutomationControlled')
 
 
 class SleepConfig:
-    """Sleep时间配置管理"""
+    """Sleep时间配置管理
+
+    风控对抗的核心是**随机抖动**：固定间隔（哪怕隔得久）是机器指纹，BOSS 直聘大约
+    200 个详情就触发风控。这里的真实等待 = base + uniform(0, jitter)，节奏不可预测
+    才像人。详情页串行爬，base 不能太低——0.5s 是当初 API 直调时代的残留，现在走
+    浏览器必须让出来。
+    """
     def __init__(self):
         self.enabled = True  # 是否开启sleep等待
-        self.page_interval = 2  # 列表页之间的等待时间（秒）
-        self.detail_interval = 0.5  # 详情页之间的等待时间（秒，API直调无需长等待）
+        self.page_interval = 3  # 列表页之间的基础等待（秒）
+        self.detail_interval = 3  # 详情页之间的基础等待（秒）——走浏览器，0.5s 会触发风控
         self.scroll_wait = 2  # 滚动后的等待时间（秒）
         self.login_wait = 2  # 登录检测后的等待时间（秒）
         self.retry_wait = 2  # 重试等待时间（秒）
         self.api_wait = 5  # API响应等待时间（秒）
+        self.jitter = 2.0  # 随机抖动上限（秒）：真实等待 = base + uniform(0, jitter)
+        self.detail_batch = 30  # 每 N 个详情请求后进入一次分批冷却
+        self.batch_cooldown = 30  # 分批冷却时长（秒）
 
     def sleep(self, sleep_type='page'):
         """
-        根据配置执行sleep
-        sleep_type: 'page', 'detail', 'scroll', 'login', 'retry', 'api'
+        根据配置执行sleep（带随机抖动）
+        sleep_type: 'page', 'detail', 'scroll', 'login', 'retry', 'api', 'batch'
         """
         if not self.enabled:
             return
@@ -175,11 +185,12 @@ class SleepConfig:
             'scroll': self.scroll_wait,
             'login': self.login_wait,
             'retry': self.retry_wait,
-            'api': self.api_wait
+            'api': self.api_wait,
+            'batch': self.batch_cooldown,
         }
 
-        interval = intervals.get(sleep_type, 2)
-        time.sleep(interval)
+        base = intervals.get(sleep_type, 2)
+        time.sleep(base + random.uniform(0, self.jitter))
 
     def set_enabled(self, enabled):
         """设置是否开启sleep"""

@@ -520,7 +520,12 @@ def crawl_job_details(dp, file_path, existing_links):
             except Exception as save_err:
                 print(f"  [警告] 增量保存失败: {save_err}")
 
-        sleep_config.sleep('detail')  # 请求间隔（API直调模式下减至0.5s）
+        # 分批冷却：每 detail_batch 个详情请求暂停一次（模拟人类阅读节奏、给风控降温）。
+        # 用序号 i 而非成功数，因为失败的请求也占风控额度。
+        if i % sleep_config.detail_batch == 0 and i > 0:
+            print(f"  [冷却] 已请求 {i}/{len(links_to_update)}，暂停 {sleep_config.batch_cooldown}s ...")
+            sleep_config.sleep('batch')
+        sleep_config.sleep('detail')  # 请求间隔（带随机抖动，见 SleepConfig）
 
     # 最终保存
     try:
