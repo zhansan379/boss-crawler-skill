@@ -234,6 +234,25 @@ def build_generic_resume_text(profile):
             for highlight in (company.get('highlights') or []):
                 lines.append('- %s' % highlight)
 
+    awards = profile.get('awards') or []
+    publications = profile.get('publications') or []
+    if awards or publications:
+        lines.append('\n## 荣誉奖项')
+        for award in awards:
+            if isinstance(award, dict):
+                award = '、'.join(str(v) for v in
+                                  (award.get('name'), award.get('level'),
+                                   award.get('year')) if v)
+            if award:
+                lines.append('- %s' % award)
+        for pub in publications:
+            if isinstance(pub, dict):
+                pub = '、'.join(str(v) for v in
+                                (pub.get('title'), pub.get('venue'),
+                                 pub.get('year')) if v)
+            if pub:
+                lines.append('- %s' % pub)
+
     return '\n'.join(lines)
 
 
