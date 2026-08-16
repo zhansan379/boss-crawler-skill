@@ -83,7 +83,9 @@ def run_capture(argv):
 
 
 def stages_ran():
-    return [name for name, _ in RAN]
+    # 只数真阶段。write_application_md 是 render 的前置子步骤，不是 STAGES 一员，
+    # 不该让它把「阶段顺序」的断言搞出个子项。
+    return [name for name, _ in RAN if name in pipeline.STAGES]
 
 
 def cmd_of(name):
@@ -443,6 +445,35 @@ def main():
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         os.remove(resume)
+
+    print('\n=== 16. write_application_md 在 materials 之后自动落盘 ===')
+    run_dir = build_run_dir(
+        params={'keywords': ['Python'], 'cities': ['杭州'], 'match_mode': 'quick'},
+        qualified=[{'公司': 'XX科技', '职位': 'Java开发', 'link': 'https://x/1'}],
+        materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
+    try:
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--from', 'materials'])
+        check('退出码 0', code == 0, '实际 %s' % code)
+        names = [n for n, _ in RAN]
+        check('write_application_md 在 materials 之后跑',
+              'write_application_md' in names and 'materials' in names
+              and names.index('write_application_md') > names.index('materials'),
+              str(names))
+        check('write_application_md 用 --all（所有 qualified 岗位都写）',
+              '--all' in cmd_of('write_application_md'),
+              pipeline.show(cmd_of('write_application_md')))
+
+        # --no-images 把终点压到 verify（render 从计划里移除），write_application_md 仍要落盘
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--from', 'materials', '--to', 'render',
+                    '--no-images'])
+        names = [n for n, _ in RAN]
+        check('--no-images 下 render 不在计划里', 'render' not in names, str(names))
+        check('--no-images 下 write_application_md 照跑',
+              code == 0 and 'write_application_md' in names, '%s / %s' % (code, names))
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
 
     print('\n' + '=' * 60)
     if failures:

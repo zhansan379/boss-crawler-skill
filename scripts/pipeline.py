@@ -608,7 +608,7 @@ def main(argv=None):
             if name in _DEEP_ONLY:
                 print('\n○ %s：快速模式没有这一步，跳过' % name)
             elif name == 'render':
-                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过')
+                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（岗位信息+招呼语.md 已由 materials 落盘）')
             elif name == 'verify':
                 print('\n○ verify：--skip-verify 已跳过材料核查'
                       '（发送前请自己逐份看一遍是否有简历里没有的技术词）')
@@ -625,6 +625,10 @@ def main(argv=None):
 
         if args.dry_run:
             print('\n▶ %s\n  %s' % (name, show(cmd)))
+            if name == 'materials':
+                # write_application_md 是 materials 之后自动落盘的子步骤，dry-run 也要露出来
+                print('\n▶ write_application_md\n  %s'
+                      % show([sys.executable, script('write_application_md.py'), run_dir, '--all']))
             continue
 
         code = run_stage(name, cmd, run_dir, timed=(name == 'crawl'))
@@ -674,6 +678,16 @@ def main(argv=None):
                 return 1
 
         elif name == 'materials':
+            # ── materials 之后自动落盘 岗位信息+招呼语.md。原先这是 render 之后一道
+            #    手工步骤（SKILL.md 里的「材料落盘」），现在并入 materials —— 材料生成
+            #    后自动写出来，不依赖长图渲染，所以 --no-images / --resume-mode skip
+            #    （render 被跳过）时也照跑。`--all` 与旧行为一致：所有 qualified 岗位都写。
+            land = [sys.executable, script('write_application_md.py'), run_dir, '--all']
+            code = run_stage('write_application_md', land, run_dir)
+            if code != 0:
+                print('❌ write_application_md.py 失败（退出码 %d），流水线停在这里。' % code)
+                return 1
+
             ok, missing = check_materials(run_dir, args.greeting_mode, args.resume_mode,
                                           only=args.only)
             if ok:

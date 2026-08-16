@@ -202,7 +202,7 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
 
-「可读投递材料」那一行不在 `pipeline.py` 的阶段链上（`applications/` 下的 `.md` 和 `.png` 由 `render_images.py` 各写一份自己的）。想要那份把 25 个爬取字段和招呼语汇总在一起、能直接手动照着投的文件，就单独跑它 —— `gen_materials.py` 跑完也会把这条命令印出来。
+「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--all`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
 
 ### parse_resume.py — 简历 → profile.json
 
@@ -307,7 +307,8 @@ assets/2026-08-15_10-00-00/
 │   └── 甲公司-AI应用开发工程师/
 │       ├── 张三-AI应用开发工程师.md    优化后的简历（Markdown，render_images.py 顺手写的）
 │       ├── 张三-AI应用开发工程师.png   投递用简历长图（HR 看到的就是这个文件名）
-│       └── 岗位信息+招呼语.md          岗位全字段 + 招呼语（write_application_md.py 单独生成）
+│       ├── 岗位信息+招呼语.md          岗位全字段 + 招呼语（materials 后自动写）
+│       └── 优化建议.md                 简历优化建议（render_images.py 顺手写的）
 ├── apply_log.json          投递记录
 ├── run_timings.jsonl       各阶段耗时
 └── llm_usage.jsonl         每次模型调用的 token 与重试

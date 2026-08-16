@@ -114,17 +114,82 @@ def find_resume_artifact(run_dir, index):
     return hits[0] if hits else None
 
 
-def read_markdown(path):
-    """从 resume_{i}_*.json 取 optimized_resume。"""
+def _load_resume_data(path):
+    """读 resume_{i}_*.json 并校验是个对象。返回整个 dict。"""
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError('%s 不是 JSON 对象' % os.path.basename(path))
+    return data
+
+
+def read_markdown(path):
+    """从 resume_{i}_*.json 取 optimized_resume。"""
+    data = _load_resume_data(path)
     text = str(data.get('optimized_resume') or '').strip()
     if len(text) < MIN_RESUME_CHARS:
         raise ValueError('optimized_resume 只有 %d 字（<%d），渲染出来会是一张空白图'
                          % (len(text), MIN_RESUME_CHARS))
     return text
+
+
+def _section_items(value, key):
+    """把 [{section, content}] 或 [{section, suggestion}] 摊平成 (section, body) 列表。
+
+    部分 prompt 返回的条目可能没有 section 字段，那就用序号兜底而不是丢掉。
+    """
+    out = []
+    for i, item in enumerate(value or [], 1):
+        if not isinstance(item, dict):
+            continue
+        body = str((item.get('content') or item.get('suggestion') or '').strip())
+        if not body:
+            continue
+        section = str(item.get('section') or '').strip() or '第 %d 条' % i
+        out.append((section, body))
+    return out
+
+
+def render_suggestions(data):
+    """把 optimization_suggestions + key_changes 渲染成 `优化建议.md` 的正文。
+
+    这两块是给人看的改进建议，正好就是简历 md 里故意不出现的东西
+    （verify_no_fabrication 只查 optimized_resume，不查这里）。
+    """
+    s = (data or {}).get('optimization_suggestions') or {}
+    parts = ['# 简历优化建议', '']
+
+    must = _section_items(s.get('must_add'), 'content')
+    if must:
+        parts += ['## 必加内容', '']
+        for section, body in must:
+            parts += ['### %s' % section, '', body, '']
+
+    adjust = _section_items(s.get('should_adjust'), 'suggestion')
+    if adjust:
+        parts += ['## 应调整', '']
+        for section, body in adjust:
+            parts += ['### %s' % section, '', body, '']
+
+    keywords = [str(k).strip() for k in (s.get('keywords_to_emphasize') or []) if str(k).strip()]
+    if keywords:
+        parts += ['## 需强调的关键词', '']
+        parts += ['- %s' % k for k in keywords]
+        parts.append('')
+
+    formats = [str(f).strip() for f in (s.get('format_suggestions') or []) if str(f).strip()]
+    if formats:
+        parts += ['## 格式建议', '']
+        parts += ['- %s' % f for f in formats]
+        parts.append('')
+
+    changes = [str(c).strip() for c in (data or {}).get('key_changes') or [] if str(c).strip()]
+    if changes:
+        parts += ['## 关键改动', '']
+        parts += ['- %s' % c for c in changes]
+        parts.append('')
+
+    return '\n'.join(parts).rstrip() + '\n'
 
 
 def job_dir_name(job):
@@ -170,7 +235,11 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
             failures.append((index, '没有 generated/resume_%d_*.json（先跑 gen_materials.py）' % index))
             continue
         try:
-            markdown = read_markdown(artifact)
+            data = _load_resume_data(artifact)
+            markdown = str(data.get('optimized_resume') or '').strip()
+            if len(markdown) < MIN_RESUME_CHARS:
+                raise ValueError('optimized_resume 只有 %d 字（<%d），渲染出来会是一张空白图'
+                                 % (len(markdown), MIN_RESUME_CHARS))
         except (ValueError, OSError) as exc:
             failures.append((index, str(exc)))
             continue
@@ -183,6 +252,12 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
         md_path = os.path.join(job_dir, base + '.md')
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(markdown if markdown.endswith('\n') else markdown + '\n')
+
+        # 优化建议：同一份 JSON 里的 optimization_suggestions + key_changes。
+        # 独立成 `优化建议.md`，与简历 md 放一起，方便对照着改。
+        sug_path = os.path.join(job_dir, '优化建议.md')
+        with open(sug_path, 'w', encoding='utf-8') as f:
+            f.write(render_suggestions(data))
 
         # 暂存名带时间戳，见模块 docstring 第 2 条
         staged_name = '%s__%s' % (dir_name, stamp)

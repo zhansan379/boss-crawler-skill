@@ -594,9 +594,17 @@ def main():
         print('（跳过 check_artifacts 复核：%s）' % exc)
 
     print('\n下一步：')
-    if args.resume_mode != 'skip':
-        print('  python scripts/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)
-    print('  python scripts/write_application_md.py "%s" --all' % run_dir)
+    if os.environ.get('BOSS_PIPELINE_STAGE'):
+        # 由 pipeline 启动：render 阶段会自动落盘 岗位信息+招呼语.md，不用单独跑。
+        print('  python scripts/pipeline.py --run-dir "%s" --from verify --all'
+              % run_dir)
+    else:
+        # 直接跑（不经 pipeline）：render_images.py 不写 岗位信息+招呼语.md，
+        # 那份要么走 pipeline.py --from materials 让 materials 自动写，要么单独跑它。
+        if args.resume_mode != 'skip':
+            print('  python scripts/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)
+        print('  python scripts/write_application_md.py "%s" --all   # 或改走 pipeline 让 materials 自动写'
+              % run_dir)
     print('  python scripts/apply.py "%s" --yes                # 真投递（不加 --yes 只预演）'
           % run_dir)
 
