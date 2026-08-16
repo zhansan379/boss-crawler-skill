@@ -195,16 +195,16 @@ python scripts/apply.py "assets/…" --yes --no-image               # 不发简�
 | 深度预筛 | `run_matcher.py --mode deep --profile … --top 15 -o <run_dir>` | CSV + profile | `deep_candidates.json` |
 | 深度分析 | `deep_analyze.py <run_dir>` | `deep_candidates.json` | `deep_results.json` |
 | 合并出报告 | `run_matcher.py --mode deep --merge -o <run_dir>` | 上面两个 | `qualified_jobs.json`、HTML 报告 |
-| 生成材料 | `gen_materials.py <run_dir>` | `qualified_jobs.json` + profile | `generated/greeting_*.txt`、`generated/resume_*.json` |
-| 渲染简历图 | `render_images.py <run_dir>` | `generated/resume_*.json` | `applications/<公司>-<岗位>/<姓名>-<岗位>.png` |
-| 可读投递材料 | `write_application_md.py <run_dir> --all` | `qualified_jobs.json` + 原始 CSV + 招呼语 | `applications/<公司>-<岗位>/岗位信息+招呼语.md` |
+| 生成材料 | `gen_materials.py <run_dir>` | `qualified_jobs.json` + profile | `materials/greeting_*.txt`、`materials/resume_*.json` |
+| 渲染简历图 | `render_images.py <run_dir>` | `materials/resume_*.json` | `deliver/<公司>-<岗位>/<姓名>-<岗位>.png` |
+| 可读投递材料 | `write_application_md.py <run_dir> --all` | `qualified_jobs.json` + 原始 CSV + 招呼语 | `deliver/<公司>-<岗位>/投递.md` |
 | 投递 | `apply.py <run_dir> --yes` | 以上全部 | `apply_log.json` |
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
 
 「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--all`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
 
-同理还有两道自动子步骤：**`render` 之后自动跑 `verify_image.py <run_dir>/applications --all`** 图检（图刚渲出来就把几十行数字打给模型看，替代 Read 一张 640k token 的 PNG）；**计划里含任何 LLM 阶段时，`parse` 之前自动跑 `llm_check.py --no-call` 预检配置**（缺了早停，不把最贵的爬取/匹配跑死在配置上）。
+同理还有两道自动子步骤：**`render` 之后自动跑 `verify_image.py <run_dir>/deliver --all`** 图检（图刚渲出来就把几十行数字打给模型看，替代 Read 一张 640k token 的 PNG）；**计划里含任何 LLM 阶段时，`parse` 之前自动跑 `llm_check.py --no-call` 预检配置**（缺了早停，不把最贵的爬取/匹配跑死在配置上）。
 
 ### parse_resume.py — 简历 → profile.json
 
@@ -294,29 +294,33 @@ python scripts/render_images.py <run_dir> --headless
 
 ```
 assets/2026-08-15_10-00-00/
-├── profile.json            简历结构化结果
-├── crawl_params.json       爬取参数（关键词/城市/筛选项/匹配模式）
-├── crawl_summary.json      这一轮真的爬到了东西的证据
-├── scored_jobs.json        规则评分分档（tier1..tier4）
-├── deep_candidates.json    深度模式：预筛选出的候选 + profile
-├── deep_results.json       深度模式：逐岗位的模型分析
-├── qualified_jobs.json     ★ 投递候选池（自动生成，**别手工编辑** —— 序号是下游的对齐键）
-├── matching_report.html    可视化报告
-├── generated/
+├── state/                    机器状态（续跑/回溯用，人不直接看）
+│   ├── profile.json          简历结构化结果
+│   ├── crawl_params.json     爬取参数（关键词/城市/筛选项/匹配模式）
+│   ├── crawl_summary.json    这一轮真的爬到了东西的证据
+│   ├── scored_jobs.json      规则评分分档（tier1..tier4）
+│   ├── qualified_jobs.json   ★ 投递候选池（自动生成，**别手工编辑** —— 序号是下游的对齐键）
+│   └── apply_log.json        投递记录
+├── materials/                LLM 源（花钱的，再渲染靠它）
 │   ├── greeting_1_甲公司.txt      招呼语（序号 = 在 qualified_jobs.json 里的位置）
 │   └── resume_1_甲公司.json       优化后的简历
-├── applications/
+├── deliver/                  最终交付（人看的）
+│   ├── matching_report.html      可视化报告
 │   └── 甲公司-AI应用开发工程师/
-│       ├── 张三-AI应用开发工程师.md    优化后的简历（Markdown，render_images.py 顺手写的）
 │       ├── 张三-AI应用开发工程师.png   投递用简历长图（HR 看到的就是这个文件名）
-│       ├── 岗位信息+招呼语.md          岗位全字段 + 招呼语（materials 后自动写）
-│       └── 优化建议.md                 简历优化建议（render_images.py 顺手写的）
-├── apply_log.json          投递记录
-├── run_timings.jsonl       各阶段耗时
-└── llm_usage.jsonl         每次模型调用的 token 与重试
+│       └── 投递.md                  岗位全字段 + 招呼语（materials 后自动写）
+└── intermediate/             跑完即无用：可整体删除（clean_run.py）
+    ├── deep_candidates.json  深度模式：预筛选出的候选 + profile
+    ├── deep_results.json     深度模式：逐岗位的模型分析
+    ├── run_timings.jsonl     各阶段耗时
+    ├── llm_usage.jsonl       每次模型调用的 token 与重试
+    ├── staging/              ShowCV 渲染的中间稿（原 showcv_staging/）
+    └── exports/              ShowCV 编辑器导出（原 showcv_exports/）
 ```
 
-`generated/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名，也别删改 `qualified_jobs.json` 的行或顺序**。要少投几个用 `--only`，那是为此存在的参数。
+`materials/` 里文件名的 `{序号}` 是岗位在 `qualified_jobs.json` 里的 1-based 位置，下游全靠它把招呼语、简历、岗位三者对上 —— **别手工重命名，也别删改 `qualified_jobs.json` 的行或顺序**。要少投几个用 `--only`，那是为此存在的参数。
+
+`.md` 简历和 `优化建议.md` 已并入 `materials/resume_*.json`，不再向岗位目录派生 —— 要看那份优化后简历就用 `read_thin.py` 读 JSON，避免同一份内容在多地漂移。清理一轮跑完的 `intermediate/` 用 `python scripts/clean_run.py <run_dir>`（`--yes` 真删，`--keep run_timings.jsonl` 保留个别文件）。
 
 查看状态与花费：
 

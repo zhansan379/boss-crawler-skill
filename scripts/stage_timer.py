@@ -38,20 +38,20 @@ import sys
 import time
 from contextlib import contextmanager
 
-TIMINGS_FILE = 'run_timings.jsonl'
+from resume_matcher import timings_path
 
 # report 里高亮的阈值：单阶段超过这个秒数就标记出来，提示值得优化
 SLOW_SECONDS = 60
 
 
 def _path(run_dir):
-    return os.path.join(run_dir, TIMINGS_FILE)
+    return timings_path(run_dir)
 
 
 def _append(run_dir, record):
     """追加一行。埋点绝不能因为自己失败而带崩业务流程，所以整体兜住异常。"""
     try:
-        os.makedirs(run_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(_path(run_dir)), exist_ok=True)
         line = json.dumps(record, ensure_ascii=False) + '\n'
         with open(_path(run_dir), 'a', encoding='utf-8') as f:
             f.write(line)

@@ -5,8 +5,8 @@
 产物文件名是下游的硬契约，`check_artifacts.py` / `write_application_md.py` /
 ShowCV 渲染都按它对齐：
 
-    {run_dir}/generated/greeting_{i}_{公司}.txt    纯文本招呼语
-    {run_dir}/generated/resume_{i}_{公司}.json     resume_optimize.st 的整个 JSON 对象
+    {run_dir}/materials/greeting_{i}_{公司}.txt    纯文本招呼语
+    {run_dir}/materials/resume_{i}_{公司}.json     resume_optimize.st 的整个 JSON 对象
 
 `{i}` 是岗位在 qualified_jobs.json 里的 1-based 序号 —— 下游全靠这个序号对齐，所以
 即使某个岗位失败，其余岗位的序号也不能挪动。
@@ -33,12 +33,13 @@ import threading
 import stage_timer
 from resume_matcher.prompts import get_greeting_prompt, get_optimize_prompt
 from resume_matcher.config import ResumeProfile
+from resume_matcher import qualified_jobs_path, profile_path
 from llm import (
     ConfigError, LLMError, chat, chat_json, map_concurrent, resolve,
     strip_fence, format_usage, reconfigure_stdout,
 )
 
-GEN_DIR = 'generated'
+GEN_DIR = 'materials'
 
 # Windows 文件名禁用字符 + 空白：公司名里出现 "（上海）有限公司/分公司" 这类写法很常见。
 # `[` `]` 不是文件名非法字符，但 write_application_md.resolve_greeting 用 glob 回找产物，
@@ -60,7 +61,7 @@ def safe_name(text, limit=24):
 # ==================== 输入 ====================
 
 def load_jobs(run_dir):
-    path = os.path.join(run_dir, 'qualified_jobs.json')
+    path = qualified_jobs_path(run_dir)
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     with open(path, 'r', encoding='utf-8') as f:
@@ -73,7 +74,7 @@ def load_jobs(run_dir):
 
 
 def load_profile(run_dir):
-    path = os.path.join(run_dir, 'profile.json')
+    path = profile_path(run_dir)
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     with open(path, 'r', encoding='utf-8') as f:
@@ -378,7 +379,7 @@ def main():
     ap = argparse.ArgumentParser(
         description='为 qualified_jobs.json 的每个岗位生成招呼语与优化简历',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='产物落在 <run_dir>/generated/，文件名契约与 check_artifacts.py 一致。\n'
+        epilog='产物落在 <run_dir>/materials/，文件名契约与 check_artifacts.py 一致。\n'
                '跑完可选：python scripts/render_images.py <run_dir>（简历转图片）\n')
     ap.add_argument('run_dir', help='运行目录（含 qualified_jobs.json 与 profile.json）')
     ap.add_argument('--greeting-mode', choices=('ai', 'default', 'skip'), default='ai',
@@ -554,7 +555,7 @@ def main():
             outcomes = map_concurrent(tasks, work, workers=workers, label=label)
     except KeyboardInterrupt:
         interrupted = True
-        print('\n⚠ 已中断。已写出的产物保留在 generated/，可再跑一次补齐剩下的。')
+        print('\n⚠ 已中断。已写出的产物保留在 materials/，可再跑一次补齐剩下的。')
     elapsed = time.time() - started
 
     failures = [o for o in outcomes if not o.ok]
@@ -595,11 +596,11 @@ def main():
 
     print('\n下一步：')
     if os.environ.get('BOSS_PIPELINE_STAGE'):
-        # 由 pipeline 启动：render 阶段会自动落盘 岗位信息+招呼语.md，不用单独跑。
+        # 由 pipeline 启动：materials 阶段会自动落盘 投递.md，不用单独跑。
         print('  python scripts/pipeline.py --run-dir "%s" --from verify --all'
               % run_dir)
     else:
-        # 直接跑（不经 pipeline）：render_images.py 不写 岗位信息+招呼语.md，
+        # 直接跑（不经 pipeline）：render_images.py 不写 投递.md，
         # 那份要么走 pipeline.py --from materials 让 materials 自动写，要么单独跑它。
         if args.resume_mode != 'skip':
             print('  python scripts/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)

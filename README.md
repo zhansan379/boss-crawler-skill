@@ -224,9 +224,9 @@ Claude 把 Tier 1 榜单和每个岗位的匹配理由列给你，由你决定**
 
 #### 阶段 5：确认发送 & 自动投递
 
-每个岗位会生成一份**个性化招呼语 + 简历图片**。发送前需要你确认——这是第二道、也是投递前最后一道确认。数据存在于 **skill的assets目录\时间戳\applications **。例如我的skill就在：
+每个岗位会生成一份**个性化招呼语 + 简历图片**。发送前需要你确认——这是第二道、也是投递前最后一道确认。数据存在于 **skill的assets目录\时间戳\deliver **。例如我的skill就在：
 
-C:\Users\feng1\ \.claude\skills\boss-crawler\assets\2026-08-14_17-32-26\applications
+C:\Users\feng1\ \.claude\skills\boss-crawler\assets\2026-08-14_17-32-26\deliver
 
 但同时也可能是当前项目下的\.claude\skills，最简单的方式是 
 
@@ -314,20 +314,20 @@ python scripts/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默
 
 | 数据                  | 路径（均在 `assets/<timestamp>/` 下）                        | 用途                                                     |
 | --------------------- | ------------------------------------------------------------ | -------------------------------------------------------- |
-| **简历图片**          | `applications/{公司}-{职位}/{姓名}-{职位}.png`               | 不含个人信息的定制简历图片，可直接上传/发送给 HR         |
-| **定制简历文本**      | `applications/{公司}-{职位}/{姓名}-{职位}.md`                | 针对该岗位优化过的 Markdown 简历                         |
-| **岗位信息 + 招呼语** | `applications/{公司}-{职位}/岗位信息+招呼语.md`              | 该岗位采集信息 + 个性化招呼语，方便你核对/手动发送       |
-| **可视化匹配报告**    | `matching_report.html`                                       | 全部岗位的匹配度卡片、分类统计、投递状态，浏览器打开即看 |
-| **岗位评分明细**      | `qualified_jobs.json`                                        | 投递候选池：每个岗位的评分、匹配理由、缺失技能、风险提示（自动生成，别手工改——序号是下游对齐键） |
-| **投递记录**          | `apply_log.json`                                             | 每次投递的时间、岗位、结果，方便复盘                     |
-| **爬取统计**          | `crawl_summary.json`                                         | 本次爬取写入/跳过/去重数量                               |
-| **简历解析结果**      | `profile.json` / `profile_validation.json`                   | 结构化简历字段 + 交叉校验结果                            |
-| **深度分析明细**      | `deep_candidates.json` / `deep_results.json`                 | LLM 深度匹配的候选与理由                                 |
-| **编辑器导出**        | `showcv_exports/` / `showcv_staging/`                        | ShowCV 编辑器导出的简历图片与中间稿                      |
-| **阶段耗时**          | `run_timings.jsonl`                                          | 各阶段耗时埋点，便于优化                                 |
-| **模型花费**          | `llm_usage.jsonl`                                            | 每次模型调用的 token 与重试次数                          |
+| **简历图片**          | `deliver/{公司}-{职位}/{姓名}-{职位}.png`                    | 不含个人信息的定制简历图片，可直接上传/发送给 HR         |
+| **岗位信息 + 招呼语** | `deliver/{公司}-{职位}/投递.md`                              | 该岗位采集信息 + 个性化招呼语，方便你核对/手动发送       |
+| **可视化匹配报告**    | `deliver/matching_report.html`                               | 全部岗位的匹配度卡片、分类统计、投递状态，浏览器打开即看 |
+| **岗位评分明细**      | `state/qualified_jobs.json`                                  | 投递候选池：每个岗位的评分、匹配理由、缺失技能、风险提示（自动生成，别手工改——序号是下游对齐键） |
+| **投递记录**          | `state/apply_log.json`                                       | 每次投递的时间、岗位、结果，方便复盘                     |
+| **爬取统计**          | `state/crawl_summary.json`                                   | 本次爬取写入/跳过/去重数量                               |
+| **简历解析结果**      | `state/profile.json` / `state/profile_validation.json`       | 结构化简历字段 + 交叉校验结果                            |
+| **LLM 源**            | `materials/greeting_#_*.txt` / `materials/resume_#_*.json`   | 招呼语与优化后简历（再渲染与核对靠它，花钱产的）         |
+| **深度分析明细**      | `intermediate/deep_candidates.json` / `intermediate/deep_results.json` | LLM 深度匹配的候选与理由                                 |
+| **编辑器导出**        | `intermediate/exports/` / `intermediate/staging/`            | ShowCV 编辑器导出的简历图片与中间稿                      |
+| **阶段耗时**          | `intermediate/run_timings.jsonl`                             | 各阶段耗时埋点，便于优化                                 |
+| **模型花费**          | `intermediate/llm_usage.jsonl`                               | 每次模型调用的 token 与重试次数                          |
 
-> **对你最有用的**是 `applications/{公司}-{职位}/` 下的三件套：定制简历图片、定制简历文本、岗位信息+招呼语——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。
+> **对你最有用的**是 `deliver/{公司}-{职位}/` 下的两件套：定制简历图片 + 投递.md——它们就是投递时真正发出去的东西，随时可以手动复用或再次投递。`intermediate/` 里的深度分析、日志、ShowCV 暂存都是跑完即无用的，用 `python scripts/clean_run.py <run_dir>` 整体清掉。
 
 ---
 
@@ -362,11 +362,11 @@ SKILL.md（逐阶段问你确认）               scripts/pipeline.py（参数�
     scripts/boss_crawler/     爬取   ──→  assets/post_data/**.csv
     scripts/resume_matcher/   评分   ──→  scored_jobs.json / matching_report.html
                     ▼
-        assets/<ts>/qualified_jobs.json  ← 投递候选池（自动生成；收窄用 --only，别改文件）
+        assets/<ts>/state/qualified_jobs.json  ← 投递候选池（自动生成；收窄用 --only，别改文件）
                     ▼
     apply.py --yes ／ resume_matcher/auto_apply.py   浏览器自动投递
 
-app/ 内置 ShowCV 编辑器 ──→ 简历长图渲染（render_images.py）／ assets/<ts>/showcv_exports/
+app/ 内置 ShowCV 编辑器 ──→ 简历长图渲染（render_images.py）／ assets/<ts>/intermediate/exports/
 ```
 
 ```
@@ -382,23 +382,28 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │   ├── chrome_user_data/             # BOSS 直聘登录 cookie（含隐私）
 │   ├── LATEST.txt                    # 最近运行指针
 │   └── <timestamp>/                  # 每次运行隔离到时间戳子目录
-│       ├── profile.json              # 简历结构化解析
-│       ├── profile_validation.json   # 简历交叉校验
-│       ├── crawl_params.json         # 爬取参数（关键词/城市/筛选项/匹配模式）
-│       ├── crawl_summary.json        # 爬取统计（也是「这轮真爬到了」的证据）
-│       ├── scored_jobs.json          # 规则评分分档（tier1..tier4）
-│       ├── qualified_jobs.json       # 投递候选池（自动生成，序号是下游对齐键）
-│       ├── matching_report.html      # HTML 可视化报告
-│       ├── deep_candidates.json      # 深度模式候选
-│       ├── deep_results.json         # 深度分析结果
-│       ├── apply_log.json            # 投递记录
-│       ├── resume_text.txt           # 简历纯文本
-│       ├── run_timings.jsonl         # 各阶段耗时
-│       ├── llm_usage.jsonl           # 每次模型调用的 token 与重试
-│       ├── generated/                # 个性化招呼语 / 定制简历 JSON
-│       ├── applications/{公司}-{职位}/  # 🎁 定制简历图片 + 定制简历文本 + 岗位信息+招呼语
-│       ├── showcv_staging/           # 渲染长图时的中间稿
-│       └── showcv_exports/           # ShowCV 编辑器导出（简历图片 zip）
+│       ├── state/                    # 机器状态（续跑/回溯用，人不直接看）
+│       │   ├── profile.json          # 简历结构化解析
+│       │   ├── profile_validation.json # 简历交叉校验
+│       │   ├── crawl_params.json     # 爬取参数（关键词/城市/筛选项/匹配模式）
+│       │   ├── crawl_summary.json    # 爬取统计（也是「这轮真爬到了」的证据）
+│       │   ├── scored_jobs.json      # 规则评分分档（tier1..tier4）
+│       │   ├── qualified_jobs.json   # 投递候选池（自动生成，序号是下游对齐键）
+│       │   ├── apply_log.json        # 投递记录
+│       │   └── resume_text.txt       # 简历纯文本
+│       ├── materials/                # LLM 源（花钱的，再渲染靠它）
+│       │   ├── greeting_#_*.txt      # 个性化招呼语
+│       │   └── resume_#_*.json       # 定制简历 JSON（含优化后简历 + 建议）
+│       ├── deliver/                  # 🎁 最终交付（人看的）
+│       │   ├── matching_report.html  # HTML 可视化报告
+│       │   └── {公司}-{职位}/         # 每个岗位：简历图片 + 投递.md
+│       └── intermediate/             # 跑完即无用：clean_run.py 可整体删
+│           ├── deep_candidates.json  # 深度模式候选
+│           ├── deep_results.json     # 深度分析结果
+│           ├── run_timings.jsonl     # 各阶段耗时
+│           ├── llm_usage.jsonl       # 每次模型调用的 token 与重试
+│           ├── staging/              # 渲染长图时的中间稿
+│           └── exports/              # ShowCV 编辑器导出（简历图片 zip）
 │
 ├── app/                              # 🌐 内置 ShowCV 简历编辑器（静态站点 + 字体）
 │
@@ -420,7 +425,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     ├── parse_resume.py               # 简历 → profile.json
     ├── infer_params.py               # profile → crawl_params.json
     ├── deep_analyze.py               # 逐岗位调模型 → deep_results.json
-    ├── gen_materials.py              # 招呼语 + 优化简历 → generated/
+    ├── gen_materials.py              # 招呼语 + 优化简历 → materials/
     ├── verify_no_fabrication.py      # 查材料里有没有简历原文没有的技术词（查到就拦住 render）
     ├── render_images.py              # 简历 JSON → 简历长图（串行，共用一个浏览器）
     ├── apply.py                      # 投递（必须显式 --yes，不加只演练）
@@ -429,8 +434,9 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     │
     │   ── 辅助 ──
     ├── check_artifacts.py            # 材料齐不齐（缺谁的哪一项）
+    ├── clean_run.py                  # 清掉 intermediate/（无用桶），保留 state/materials/deliver
     ├── verify_image.py               # 简历图体检（空白图发出去比不发更糟）
-    ├── write_application_md.py       # 组装 applications/ 下的可读投递材料
+    ├── write_application_md.py       # 组装 deliver/ 下的投递.md
     ├── read_thin.py                  # 瘦读数据文件（避免撑爆上下文）
     ├── where_am_i.py                 # 从产物反推当前阶段，提示下一步命令
     ├── stage_timer.py                # 阶段计时埋点

@@ -15,6 +15,9 @@
 
 import json
 import os
+from resume_matcher import (scored_jobs_path, job_classification_path,
+                            deep_candidates_path, deep_results_path,
+                            qualified_jobs_path)
 
 
 def _norm_list(value, limit=None):
@@ -50,7 +53,7 @@ def build_match_index(run_dir):
                 slot[key] = value
 
     # ── 1. scored_jobs.json：规则侧原始 tier ──
-    scored = os.path.join(run_dir, 'scored_jobs.json')
+    scored = scored_jobs_path(run_dir)
     if os.path.exists(scored):
         try:
             with open(scored, 'r', encoding='utf-8') as f:
@@ -67,7 +70,7 @@ def build_match_index(run_dir):
             pass
 
     # ── 2. job_classification.json：build_job_view 之后的视图 ──
-    classification = os.path.join(run_dir, 'job_classification.json')
+    classification = job_classification_path(run_dir)
     if os.path.exists(classification):
         try:
             with open(classification, 'r', encoding='utf-8') as f:
@@ -91,8 +94,8 @@ def build_match_index(run_dir):
     # ── 3. deep_results.json：模型逐岗分析，rank 经 deep_candidates 换成 link ──
     # 这两个文件之间**唯一**的对齐键是 rank；deep_results 自己不含 link，
     # 也不含公司职位。rank 错位不会报任何错，只会把一个岗位的分析安到另一个岗位上。
-    cand_path = os.path.join(run_dir, 'deep_candidates.json')
-    deep_path = os.path.join(run_dir, 'deep_results.json')
+    cand_path = deep_candidates_path(run_dir)
+    deep_path = deep_results_path(run_dir)
     if os.path.exists(cand_path) and os.path.exists(deep_path):
         try:
             with open(cand_path, 'r', encoding='utf-8') as f:
@@ -124,7 +127,7 @@ def build_match_index(run_dir):
 
 def load_jobs(run_dir):
     """qualified_jobs.json → list。被包一层（{"jobs": [...]}）时自动解开。"""
-    path = os.path.join(run_dir, 'qualified_jobs.json')
+    path = qualified_jobs_path(run_dir)
     with open(path, encoding='utf-8') as f:
         data = json.load(f)
     if isinstance(data, dict):

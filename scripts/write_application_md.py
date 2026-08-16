@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成每个岗位的 `岗位信息+招呼语.md`：把该岗位采到的**全部**字段和招呼语写进一个文件。
+"""生成每个岗位的 `投递.md`：把该岗位采到的**全部**字段和招呼语写进一个文件。
 
 为什么要有这个脚本，而不是让主 agent 按模板手写：
 
@@ -32,6 +32,8 @@ import os
 import re
 import sys
 import time
+
+from resume_matcher import qualified_jobs_path, greeting_pattern, deliver_dir
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
@@ -124,7 +126,7 @@ def bullets(items):
 
 def load_jobs(run_dir):
     """读 qualified_jobs.json。宽容处理被包一层的情况（同 check_artifacts.py）。"""
-    path = os.path.join(run_dir, 'qualified_jobs.json')
+    path = qualified_jobs_path(run_dir)
     with open(path, encoding='utf-8') as f:
         data = json.load(f)
     if isinstance(data, dict):
@@ -209,13 +211,13 @@ def merge(job, csv_row):
 
 
 def resolve_greeting(run_dir, index, args):
-    """招呼语来源优先级：命令行 > generated/greeting_{i}_*.txt > 空。"""
+    """招呼语来源优先级：命令行 > materials/greeting_{i}_*.txt > 空。"""
     if args.greeting:
         return args.greeting.strip(), '命令行 --greeting'
     if args.greeting_file:
         with open(args.greeting_file, encoding='utf-8') as f:
             return f.read().strip(), args.greeting_file
-    pattern = os.path.join(run_dir, 'generated', 'greeting_%d_*.txt' % index)
+    pattern = greeting_pattern(run_dir, index)
     hits = sorted(glob.glob(pattern))
     if hits:
         with open(hits[0], encoding='utf-8') as f:
@@ -343,9 +345,9 @@ def write_one(run_dir, job, index, args):
 
     company = sanitize(row.get('公司') or row.get('company') or '未知公司')
     position = sanitize(row.get('职位') or row.get('position') or '未知岗位')
-    out_dir = os.path.join(run_dir, 'applications', '%s-%s' % (company, position))
+    out_dir = os.path.join(deliver_dir(run_dir), '%s-%s' % (company, position))
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, '岗位信息+招呼语.md')
+    out_path = os.path.join(out_dir, '投递.md')
 
     existed = os.path.exists(out_path)
     with open(out_path, 'w', encoding='utf-8') as f:
@@ -371,7 +373,7 @@ def main():
         _stream.reconfigure(encoding='utf-8', errors='replace')
 
     ap = argparse.ArgumentParser(
-        description='生成 applications/<公司>-<岗位>/岗位信息+招呼语.md（含全部爬取字段）')
+        description='生成 deliver/<公司>-<岗位>/投递.md（含全部爬取字段）')
     ap.add_argument('run_dir')
     ap.add_argument('--all', action='store_true', help='处理 qualified_jobs.json 里所有岗位')
     ap.add_argument('--index', type=int, help='只处理第 N 个岗位（1-based，与 greeting_N_ 对齐）')

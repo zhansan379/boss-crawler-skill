@@ -23,6 +23,9 @@ import argparse
 
 import stage_timer
 from resume_matcher import parse_resume_file, create_run_dir
+from resume_matcher.paths import (profile_path as _profile_path,
+                                  resume_text_path as _text_path,
+                                  profile_validation_path as _validation_path)
 from resume_matcher.prompts import get_resume_parse_prompt
 from validate_profile import run_validation
 from llm import ConfigError, LLMError, chat_json, format_usage, reconfigure_stdout
@@ -157,7 +160,7 @@ def main():
         os.makedirs(run_dir, exist_ok=True)
     else:
         run_dir = create_run_dir()
-    profile_path = os.path.join(run_dir, 'profile.json')
+    profile_path = _profile_path(run_dir)
 
     if os.path.exists(profile_path) and not args.force:
         print('⚠ 已存在 %s' % profile_path)
@@ -179,7 +182,8 @@ def main():
         print('  可以先另存为 .md 或 .txt 再跑。')
         return 1
 
-    text_path = os.path.join(run_dir, 'resume_text.txt')
+    text_path = _text_path(run_dir)
+    os.makedirs(os.path.dirname(text_path), exist_ok=True)
     with open(text_path, 'w', encoding='utf-8') as f:
         f.write(resume_text)
     print('📄 简历正文: %s（%d 字符）' % (text_path, len(resume_text)))
@@ -198,6 +202,7 @@ def main():
         print('❌ 解析失败: %s' % exc)
         return 1
 
+    os.makedirs(os.path.dirname(profile_path), exist_ok=True)
     with open(profile_path, 'w', encoding='utf-8') as f:
         json.dump(profile, f, ensure_ascii=False, indent=2)
 
@@ -235,7 +240,9 @@ def main():
     # profile_validation.json 是 where_am_i.py 判定 3.5b 已完成的依据。
     # 这里自己写，而不是调 validate_profile.print_report —— 那个函数用
     # os.path.dirname(sys.argv[2]) 决定写哪里，import 进来会写错位置或直接崩。
-    with open(os.path.join(run_dir, 'profile_validation.json'), 'w', encoding='utf-8') as f:
+    vpath = _validation_path(run_dir)
+    os.makedirs(os.path.dirname(vpath), exist_ok=True)
+    with open(vpath, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
     print('\n' + format_usage(run_dir))

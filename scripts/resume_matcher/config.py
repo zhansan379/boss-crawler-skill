@@ -34,6 +34,13 @@ def create_run_dir(base_dir: Optional[str] = None) -> str:
     run_dir = os.path.join(base_dir, timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
+    # 四个桶：state/materials/deliver/intermediate。先建好让目录结构自明；
+    # 各写方写前仍会 os.makedirs 兜底（--run-dir 指向已有目录时桶可能不存在）。
+    import paths
+    for _sub in (paths.state_dir(run_dir), paths.materials_dir(run_dir),
+                 paths.deliver_dir(run_dir), paths.intermediate_dir(run_dir)):
+        os.makedirs(_sub, exist_ok=True)
+
     # 写入 latest 指针
     latest_file = os.path.join(base_dir, 'LATEST.txt')
     with open(latest_file, 'w', encoding='utf-8') as f:

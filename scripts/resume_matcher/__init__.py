@@ -63,6 +63,17 @@ from .deep_analysis import (
     deserialize_profile,
 )
 
+# ── 产物路径（统一走 paths.py，别各脚本自己拼）
+from .paths import (
+    state_dir, materials_dir, deliver_dir, intermediate_dir,
+    profile_path, resume_text_path, profile_validation_path,
+    crawl_params_path, crawl_summary_path, scored_jobs_path,
+    qualified_jobs_path, verify_report_path, apply_log_path,
+    matching_report_path, greeting_pattern, greeting_path, resume_pattern,
+    deep_candidates_path, deep_results_path, job_classification_path,
+    llm_usage_path, timings_path, showcv_staging_dir, showcv_exports_dir,
+)
+
 # ── 工具函数
 from .utils import (
     print_header,
@@ -99,6 +110,14 @@ __all__ = [
     # Deep analysis
     "save_deep_candidates", "merge_deep_results",
     "serialize_profile", "deserialize_profile",
+    # Paths
+    "state_dir", "materials_dir", "deliver_dir", "intermediate_dir",
+    "profile_path", "resume_text_path", "profile_validation_path",
+    "crawl_params_path", "crawl_summary_path", "scored_jobs_path",
+    "qualified_jobs_path", "verify_report_path", "apply_log_path",
+    "matching_report_path", "greeting_pattern", "greeting_path", "resume_pattern",
+    "deep_candidates_path", "deep_results_path", "job_classification_path",
+    "llm_usage_path", "timings_path", "showcv_staging_dir", "showcv_exports_dir",
     # Utils
     "print_header", "print_section", "ensure_output_dir",
     "parse_experience_years", "parse_company_size",

@@ -15,6 +15,7 @@ import time
 from typing import List, Dict, Any, Optional
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
+from .paths import deep_candidates_path, qualified_jobs_path
 from .scoring import (
     compute_difficulty,
     build_job_view,
@@ -154,7 +155,8 @@ def save_deep_candidates(
         ),
     }
 
-    output_path = os.path.join(output_dir, 'deep_candidates.json')
+    output_path = deep_candidates_path(output_dir)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
@@ -372,7 +374,8 @@ def merge_deep_results(
     # 文件里的 1-based 序号是下游所有产物（greeting_{i}_*、resume_{i}_*）的对齐键，
     # 改了就错位 —— 用 gen_materials.py / render_images.py / apply.py 的 --only 序号。
     # 字段为原始爬取 dict，供 write_application_md.py 按 link 回查 CSV。
-    qualified_path = os.path.join(output_dir, 'qualified_jobs.json')
+    qualified_path = qualified_jobs_path(output_dir)
+    os.makedirs(os.path.dirname(qualified_path), exist_ok=True)
     with open(qualified_path, 'w', encoding='utf-8') as f:
         json.dump(qualified_raw + need_optimization_raw, f, ensure_ascii=False, indent=2)
     print(f"  ✅ 已生成投递候选池: {qualified_path}（{len(qualified_raw) + len(need_optimization_raw)} 个岗位，含符合+需优化）")

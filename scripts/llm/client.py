@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .config import LLMConfig, resolve
+from resume_matcher import llm_usage_path
 
 try:
     import requests
@@ -30,7 +31,6 @@ except ImportError:                                     # pragma: no cover
 _RETRY_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 
 _MAX_BACKOFF = 30.0
-_USAGE_FILE = 'llm_usage.jsonl'
 
 # Anthropic Messages API（Claude Code 的协议）版本头，以及该协议强制要求的 max_tokens
 # （OpenAI 端点不传也能跑，anthropic 不传直接 400；调用方没给时用这个保守上限）。
@@ -172,10 +172,11 @@ def _log_usage(run_dir: Optional[str], record: Dict[str, Any]) -> None:
     if not run_dir:
         return
     try:
-        os.makedirs(run_dir, exist_ok=True)
+        path = llm_usage_path(run_dir)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
         with _LOCK:
-            with open(os.path.join(run_dir, _USAGE_FILE), 'a', encoding='utf-8') as f:
+            with open(path, 'a', encoding='utf-8') as f:
                 f.write(line + '\n')
     except (OSError, TypeError, ValueError):
         pass
@@ -183,7 +184,7 @@ def _log_usage(run_dir: Optional[str], record: Dict[str, Any]) -> None:
 
 def usage_summary(run_dir: str) -> Dict[str, Any]:
     """汇总 llm_usage.jsonl。没有文件返回全 0，不抛异常。"""
-    path = os.path.join(run_dir, _USAGE_FILE)
+    path = llm_usage_path(run_dir)
     total = {'calls': 0, 'prompt_tokens': 0, 'completion_tokens': 0,
              'total_tokens': 0, 'seconds': 0.0, 'retries': 0, 'failures': 0,
              'by_stage': {}}

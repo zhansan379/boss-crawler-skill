@@ -24,10 +24,11 @@ import os
 import sys
 import json
 import argparse
+from resume_matcher import qualified_jobs_path, materials_dir
 
 
 def _load_jobs(run_dir):
-    path = os.path.join(run_dir, 'qualified_jobs.json')
+    path = qualified_jobs_path(run_dir)
     with open(path, encoding='utf-8') as f:
         data = json.load(f)
     # 容忍被包一层的情况
@@ -78,7 +79,7 @@ def check(run_dir, kinds, jobs=None, only=None):
     """
     if jobs is None:
         jobs = _load_jobs(run_dir)
-    gen = os.path.join(run_dir, 'generated')
+    gen = materials_dir(run_dir)
     # 目录可能整个不存在——那就是全缺，而不是崩掉
     existing = os.listdir(gen) if os.path.isdir(gen) else []
 
@@ -112,7 +113,7 @@ def main():
         _stream.reconfigure(encoding='utf-8', errors='replace')
 
     ap = argparse.ArgumentParser(
-        description='核对 generated/ 下的招呼语与简历产物齐不齐（一次性快照）')
+        description='核对 materials/ 下的招呼语与简历产物齐不齐（一次性快照）')
     ap.add_argument('run_dir')
     ap.add_argument('--greeting', action='store_true', help='只查招呼语')
     ap.add_argument('--resume', action='store_true', help='只查简历')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把 generated/resume_*.json 渲染成简历长图（流水线的 render 阶段）。
+"""把 materials/resume_*.json 渲染成简历长图（流水线的 render 阶段）。
 
 这一步曾经是五条手工命令：起服务 → 暂存 md → 批量导入 → 批量导出 → 分发改名 →
 删临时简历。每一步的失败模式都不一样，而且**必须串行** —— 全部简历共用
@@ -43,6 +43,9 @@ import subprocess
 
 import stage_timer
 from write_application_md import sanitize, load_jobs, resolve_csv_row, merge
+from resume_matcher import (materials_dir, resume_pattern, deliver_dir,
+                            profile_path as _profile_path,
+                            showcv_staging_dir, showcv_exports_dir)
 
 _SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SHOWCV_DIR = os.path.join(_SKILL_ROOT, 'scripts', 'showcv')
@@ -108,8 +111,8 @@ def resolve_name(profile, override):
 
 
 def find_resume_artifact(run_dir, index):
-    """generated/resume_{i}_*.json 的路径。找不到返回 None。"""
-    pattern = os.path.join(run_dir, 'generated', 'resume_%d_*.json' % index)
+    """materials/resume_{i}_*.json 的路径。找不到返回 None。"""
+    pattern = resume_pattern(run_dir, index)
     hits = [p for p in sorted(glob.glob(pattern)) if os.path.getsize(p) > 0]
     return hits[0] if hits else None
 
@@ -133,70 +136,11 @@ def read_markdown(path):
     return text
 
 
-def _section_items(value, key):
-    """把 [{section, content}] 或 [{section, suggestion}] 摊平成 (section, body) 列表。
-
-    部分 prompt 返回的条目可能没有 section 字段，那就用序号兜底而不是丢掉。
-    """
-    out = []
-    for i, item in enumerate(value or [], 1):
-        if not isinstance(item, dict):
-            continue
-        body = str((item.get('content') or item.get('suggestion') or '').strip())
-        if not body:
-            continue
-        section = str(item.get('section') or '').strip() or '第 %d 条' % i
-        out.append((section, body))
-    return out
-
-
-def render_suggestions(data):
-    """把 optimization_suggestions + key_changes 渲染成 `优化建议.md` 的正文。
-
-    这两块是给人看的改进建议，正好就是简历 md 里故意不出现的东西
-    （verify_no_fabrication 只查 optimized_resume，不查这里）。
-    """
-    s = (data or {}).get('optimization_suggestions') or {}
-    parts = ['# 简历优化建议', '']
-
-    must = _section_items(s.get('must_add'), 'content')
-    if must:
-        parts += ['## 必加内容', '']
-        for section, body in must:
-            parts += ['### %s' % section, '', body, '']
-
-    adjust = _section_items(s.get('should_adjust'), 'suggestion')
-    if adjust:
-        parts += ['## 应调整', '']
-        for section, body in adjust:
-            parts += ['### %s' % section, '', body, '']
-
-    keywords = [str(k).strip() for k in (s.get('keywords_to_emphasize') or []) if str(k).strip()]
-    if keywords:
-        parts += ['## 需强调的关键词', '']
-        parts += ['- %s' % k for k in keywords]
-        parts.append('')
-
-    formats = [str(f).strip() for f in (s.get('format_suggestions') or []) if str(f).strip()]
-    if formats:
-        parts += ['## 格式建议', '']
-        parts += ['- %s' % f for f in formats]
-        parts.append('')
-
-    changes = [str(c).strip() for c in (data or {}).get('key_changes') or [] if str(c).strip()]
-    if changes:
-        parts += ['## 关键改动', '']
-        parts += ['- %s' % c for c in changes]
-        parts.append('')
-
-    return '\n'.join(parts).rstrip() + '\n'
-
-
 def job_dir_name(job):
     """`<公司>-<岗位>` 目录名。
 
     刻意走 write_application_md 的 resolve_csv_row + merge + sanitize：那个脚本写
-    `岗位信息+招呼语.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
+    `投递.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
     只差几个字的目录里，而且要等用户翻文件夹才发现。
     """
     csv_row, _ = resolve_csv_row(job)
@@ -219,12 +163,16 @@ def run_stamp(run_dir, override):
 # ==================== 暂存 ====================
 
 def stage_all(run_dir, jobs, indexes, person, stamp):
-    """写 applications/<公司>-<岗位>/<姓名>-<应聘岗位>.md 和 showcv_staging/ 暂存副本。
+    """把 materials/resume_*.json 渲染成 deliver/<公司>-<岗位>/<姓名>-<岗位>.png。
 
-    返回 (items, failures)。item 是 dict：index / job_dir / md_path / staged_path /
+    只向岗位目录写最终要交的 PNG（和投递.md，那是 write_application_md 的事）。
+    优化后的简历正文不进岗位目录 —— 想看或改就用 read_thin.py 读 materials/resume_#.json，
+    避免同一份内容在多个地方派生、漂移（见 SKILL.md 的去冗余说明）。
+
+    返回 (items, failures)。item 是 dict：index / job_dir / staged_path /
     staged_name / png_path。
     """
-    staging_dir = os.path.join(run_dir, 'showcv_staging')
+    staging_dir = showcv_staging_dir(run_dir)
     os.makedirs(staging_dir, exist_ok=True)
 
     items, failures = [], []
@@ -232,7 +180,7 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
         job = jobs[index - 1]
         artifact = find_resume_artifact(run_dir, index)
         if not artifact:
-            failures.append((index, '没有 generated/resume_%d_*.json（先跑 gen_materials.py）' % index))
+            failures.append((index, '没有 materials/resume_%d_*.json（先跑 gen_materials.py）' % index))
             continue
         try:
             data = _load_resume_data(artifact)
@@ -245,29 +193,20 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
             continue
 
         dir_name, position = job_dir_name(job)
-        job_dir = os.path.join(run_dir, 'applications', dir_name)
+        job_dir = os.path.join(deliver_dir(run_dir), dir_name)
         os.makedirs(job_dir, exist_ok=True)
 
         base = '%s-%s' % (sanitize(person), sanitize(position))
-        md_path = os.path.join(job_dir, base + '.md')
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(markdown if markdown.endswith('\n') else markdown + '\n')
-
-        # 优化建议：同一份 JSON 里的 optimization_suggestions + key_changes。
-        # 独立成 `优化建议.md`，与简历 md 放一起，方便对照着改。
-        sug_path = os.path.join(job_dir, '优化建议.md')
-        with open(sug_path, 'w', encoding='utf-8') as f:
-            f.write(render_suggestions(data))
 
         # 暂存名带时间戳，见模块 docstring 第 2 条
         staged_name = '%s__%s' % (dir_name, stamp)
         staged_path = os.path.join(staging_dir, staged_name + '.md')
-        shutil.copyfile(md_path, staged_path)
+        with open(staged_path, 'w', encoding='utf-8') as f:
+            f.write(markdown if markdown.endswith('\n') else markdown + '\n')
 
         items.append({
             'index': index,
             'job_dir': job_dir,
-            'md_path': md_path,
             'staged_path': staged_path,
             'staged_name': staged_name,
             'png_path': os.path.join(job_dir, base + '.png'),
@@ -381,7 +320,7 @@ def snapshot(directory):
 
 
 def unique_export_dir(base, stamp):
-    """给本次导出一个**空**目录：showcv_exports/<stamp>[-n]。
+    """给本次导出一个**空**目录：intermediate/exports/<stamp>[-n]。
 
     不复用同一个目录，因为 export_images.py 设了 when_download_file_exists('rename')：
     目录里已有同名 png 时，Chrome 会把新文件存成 `<名字> (1).png`，而分发是按
@@ -454,7 +393,7 @@ def main():
         stream.reconfigure(encoding='utf-8', errors='replace')
 
     ap = argparse.ArgumentParser(
-        description='把 generated/resume_*.json 渲染成 <姓名>-<应聘岗位>.png（串行）',
+        description='把 materials/resume_*.json 渲染成 <姓名>-<应聘岗位>.png（串行）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='全部简历共用一个浏览器和一份 localStorage，所以本步骤必须串行，没有 --workers。\n')
     ap.add_argument('run_dir')
@@ -484,7 +423,7 @@ def main():
 
     # ── 前置：姓名与岗位 ──
     profile = {}
-    profile_path = os.path.join(run_dir, 'profile.json')
+    profile_path = _profile_path(run_dir)
     if os.path.exists(profile_path):
         try:
             with open(profile_path, 'r', encoding='utf-8') as f:
@@ -530,9 +469,9 @@ def main():
         print('  先跑：python scripts/gen_materials.py "%s"' % run_dir)
         return 1
     print('\n已暂存 %d 份 markdown → %s'
-          % (len(items), os.path.join(run_dir, 'showcv_staging')))
+          % (len(items), showcv_staging_dir(run_dir)))
 
-    export_base = os.path.join(run_dir, 'showcv_exports')
+    export_base = showcv_exports_dir(run_dir)
     names = []
     for item in items:
         names.extend(['--name', item['staged_name']])
@@ -607,7 +546,7 @@ def main():
                 missing = distribute(items, pngs)
         except _StepFailed as exc:
             if exc.step == 'import':
-                print('\n❌ 导入失败，未继续导出。暂存文件留在 showcv_staging/ 可手动重试。')
+                print('\n❌ 导入失败，未继续导出。暂存文件留在 intermediate/staging/ 可手动重试。')
             else:
                 print('\n❌ 导出失败。ShowCV 里的临时简历**保留**着，'
                       '可以打开编辑器看看是哪份出的问题。')

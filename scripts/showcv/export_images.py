@@ -142,7 +142,8 @@ def main() -> None:
                         help='paginated=每页一张 A4（默认），flat=一张长图')
     parser.add_argument('--scale', type=int, choices=(1, 2, 3), default=2,
                         help='像素倍率，只能是 1/2/3，默认 2')
-    parser.add_argument('--out', default=str(DEFAULT_OUT), help=f'下载目录，默认 {DEFAULT_OUT}')
+    parser.add_argument('--out', default=None,
+                        help=f'下载目录；省略时落 {DEFAULT_OUT}（/intermediate/exports 若给了 --run-dir）')
     parser.add_argument('--dry-run', action='store_true', help='只解析目标并打印直链，不导出')
     parser.add_argument('--timeout', type=float, default=180, help='页面出图等待上限（秒），默认 180')
     parser.add_argument('--download-timeout', type=float, default=60,
@@ -163,7 +164,14 @@ def main() -> None:
     if args.all and (ids or names):
         raise SystemExit('--all 和 --id/--name 只能给一个：前端 all 优先，混着写等于有一半参数是废的')
 
-    out_dir = Path(args.out).resolve()
+    if args.out:
+        out_dir = Path(args.out).resolve()
+    elif args.run_dir:
+        # 跟着运行目录走：临时导出归 intermediate/exports，好整体清理
+        from resume_matcher import showcv_exports_dir
+        out_dir = Path(showcv_exports_dir(args.run_dir)).resolve()
+    else:
+        out_dir = Path(DEFAULT_OUT).resolve()
 
     browser = connect(args.browser, args.headless)
     print(f'实际 profile：{real_profile(browser)}')

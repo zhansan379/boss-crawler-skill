@@ -23,6 +23,7 @@ import functools
 from typing import List, Dict, Any, Optional, Union
 
 from .config import ResumeProfile, OUTPUT_DIR, get_latest_run_dir, create_run_dir
+from .paths import apply_log_path
 from .utils import ensure_output_dir
 from .scoring import hr_activity_rank, hr_activity_sort_key
 
@@ -921,8 +922,8 @@ def _auto_apply_jobs_impl(
     # === 保存投递记录 ===
     if output_dir is None:
         output_dir = get_latest_run_dir() or create_run_dir()
-    os.makedirs(output_dir, exist_ok=True)
-    log_path = os.path.join(output_dir, 'apply_log.json')
+    log_path = apply_log_path(output_dir)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
     applied_count = sum(1 for r in results if r['status'] == 'applied')
     partial_count = sum(1 for r in results if r['status'] == 'partial')

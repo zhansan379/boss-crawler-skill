@@ -10,14 +10,14 @@
     match      run_matcher.py             quick=直接评分 ／ deep=预筛出 deep_candidates.json
     deep       deep_analyze.py            逐个候选调模型（只有 deep 模式有这一步）
     merge      run_matcher.py --merge      → qualified_jobs.json（同上）
-    materials  gen_materials.py           → generated/{greeting,resume}_{i}_*
+    materials  gen_materials.py           → materials/{greeting,resume}_{i}_*
     verify     verify_no_fabrication.py   查简历原文没有的技术词 → verify_report.json
-    render     render_images.py           → applications/<公司>-<岗位>/<姓名>-<岗位>.png
+    render     render_images.py           → deliver/<公司>-<岗位>/<姓名>-<岗位>.png
 
 再往里挂了三道**自动子步骤**，跟着阶段跑、不是独立阶段：
     - 计划里含任何 LLM 阶段时，跑之前先 `llm_check.py --no-call` 预检配置，缺了早停
-    - materials 之后自动 `write_application_md.py --all` 落盘 岗位信息+招呼语.md
-    - render 之后自动 `verify_image.py <applications> --all` 把图检数字打给模型看
+    - materials 之后自动 `write_application_md.py --all` 落盘 投递.md
+    - render 之后自动 `verify_image.py <deliver> --all` 把图检数字打给模型看
 
 **不给 `--to` 就只跑一个阶段。** 一次跑一步，每步跑完自己看一眼再决定要不要往下 ——
 下游那几步不是免费的：materials 按岗位调两次模型（招呼语 + 简历优化），deep 按岗位调一次。
@@ -66,6 +66,9 @@ from llm import reconfigure_stdout
 from resume_matcher.config import (
     CSV_FIELDS, OUTPUT_DIR, create_run_dir, get_latest_run_dir,
 )
+from resume_matcher import (crawl_params_path, crawl_summary_path,
+                            scored_jobs_path, qualified_jobs_path,
+                            profile_path, deliver_dir)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -134,7 +137,7 @@ def resolve_run_dir(args, plan):
 
 def load_params(run_dir):
     """读回 crawl_params.json。没有就返回空 dict（由调用方决定这是否致命）。"""
-    path = os.path.join(run_dir, 'crawl_params.json')
+    path = crawl_params_path(run_dir)
     if not os.path.exists(path):
         return {}
     try:
@@ -174,11 +177,11 @@ def qualified_from_scored(run_dir):
     已存在就不动：用户很可能已经手工收窄过投递池（删掉不想投的），
     覆盖回全量等于把他的选择丢了，而且他多半不会立刻发现。
     """
-    target = os.path.join(run_dir, 'qualified_jobs.json')
+    target = qualified_jobs_path(run_dir)
     if os.path.exists(target):
         return 'kept', '已存在 qualified_jobs.json，不覆盖（手工收窄过的池子不能被冲掉）'
 
-    scored_path = os.path.join(run_dir, 'scored_jobs.json')
+    scored_path = scored_jobs_path(run_dir)
     if not os.path.exists(scored_path):
         return 'error', '快速模式跑完了却没有 scored_jobs.json，无法生成投递池'
 
@@ -199,6 +202,7 @@ def qualified_from_scored(run_dir):
         return 'empty', ('tier1 + tier2 都是空的 —— 这批岗位没有一个够格投递。\n'
                          '  换个方向：放宽关键词/城市重爬，或改用 --match-mode deep 让模型再看一遍')
 
+    os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, 'w', encoding='utf-8') as f:
         json.dump(pool, f, ensure_ascii=False, indent=2)
     return 'written', '已写出 qualified_jobs.json（%d 个岗位，含符合 + 需优化）' % len(pool)
@@ -219,7 +223,7 @@ def check_crawl(run_dir, min_jobs):
     整批判负时把它们也标成 ❌，读的人会去找「40 条 CSV」哪里错了。
     """
     msgs = []
-    summary_path = os.path.join(run_dir, 'crawl_summary.json')
+    summary_path = crawl_summary_path(run_dir)
     if not os.path.exists(summary_path):
         # 爬虫检测到未登录时会打印「登录完成后再次运行」然后**正常退出**，
         # 退出码 0。只看退出码会把「一条都没爬」当成成功，接着拿旧 CSV 去匹配。
@@ -281,7 +285,7 @@ def infer_flags(args):
 def build_cmd(name, args, ctx):
     """返回该阶段的 argv；返回 None 表示这个阶段在当前模式下不跑。"""
     run_dir = ctx['run_dir']
-    profile = os.path.join(run_dir, 'profile.json')
+    profile = profile_path(run_dir)
     py = sys.executable
     extra = llm_flags(args) if name in _LLM_STAGES else []
 
@@ -629,7 +633,7 @@ def main(argv=None):
             if name in _DEEP_ONLY:
                 print('\n○ %s：快速模式没有这一步，跳过' % name)
             elif name == 'render':
-                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（岗位信息+招呼语.md 已由 materials 落盘）')
+                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（投递.md 已由 materials 落盘）')
             elif name == 'verify':
                 print('\n○ verify：--skip-verify 已跳过材料核查'
                       '（发送前请自己逐份看一遍是否有简历里没有的技术词）')
@@ -653,7 +657,7 @@ def main(argv=None):
             elif name == 'render':
                 # verify_image 是 render 之后自动图检的子步骤 —— 见 render 的核查分支
                 print('\n▶ verify_image\n  %s' % show([sys.executable, script('verify_image.py'),
-                                                      os.path.join(run_dir, 'applications'), '--all']))
+                                                      deliver_dir(run_dir), '--all']))
             continue
 
         code = run_stage(name, cmd, run_dir, timed=(name == 'crawl'))
@@ -703,7 +707,7 @@ def main(argv=None):
                 return 1
 
         elif name == 'materials':
-            # ── materials 之后自动落盘 岗位信息+招呼语.md。原先这是 render 之后一道
+            # ── materials 之后自动落盘 投递.md。原先这是 render 之后一道
             #    手工步骤（SKILL.md 里的「材料落盘」），现在并入 materials —— 材料生成
             #    后自动写出来，不依赖长图渲染，所以 --no-images / --resume-mode skip
             #    （render 被跳过）时也照跑。`--all` 与旧行为一致：所有 qualified 岗位都写。
@@ -732,7 +736,7 @@ def main(argv=None):
             #    不碰浏览器，替代的是「Read 一张 0.5MB 的 PNG = 640k token」。
             #    注意：这里只能走到 —— 说明 render 真跑了（--resume-mode skip 时 render
             #    的 cmd 是 None，在上面的 continue 分支就跳过了，不会到这里）。
-            vdir = os.path.join(run_dir, 'applications')
+            vdir = deliver_dir(run_dir)
             vcmd = [sys.executable, script('verify_image.py'), vdir, '--all']
             v_code = run_stage('verify_image', vcmd, run_dir)
             if v_code != 0:
@@ -781,7 +785,7 @@ def main(argv=None):
         if nxt == 'materials':
             print('  materials 会给每个岗位各调两次模型（招呼语 + 简历优化），'
                   '先看一眼投递池再跑：')
-            print('    %s' % os.path.join(run_dir, 'qualified_jobs.json'))
+            print('    %s' % qualified_jobs_path(run_dir))
     elif STAGES.index(plan[-1]) >= STAGES.index('materials'):
         print('\n材料已生成。**投递是单独一条命令**，本流水线不会自己投：')
         print('  python scripts/apply.py "%s" --yes%s'

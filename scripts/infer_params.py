@@ -37,6 +37,7 @@ from datetime import date
 import preferences
 from boss_crawler.config import FILTER_LABELS
 from resume_matcher.prompts import get_crawl_params_prompt
+from resume_matcher.paths import profile_path as _profile_path, crawl_params_path as _crawl_params_path
 from llm import (
     ConfigError, LLMError, chat_json, resolve, format_usage, reconfigure_stdout,
 )
@@ -409,7 +410,7 @@ def main():
             print('❌ --today 要写成 YYYY-MM-DD（如 %s），收到的是 %r'
                   % (date.today().isoformat(), args.today))
             return 1
-    profile_path = args.profile or (os.path.join(run_dir, 'profile.json') if run_dir else None)
+    profile_path = args.profile or (_profile_path(run_dir) if run_dir else None)
     if not profile_path:
         print('❌ 需要 <run_dir> 或 --profile 其中之一')
         return 1
@@ -502,8 +503,8 @@ def main():
         print('  ⚠ %s' % warning)
 
     if run_dir:
-        os.makedirs(run_dir, exist_ok=True)
-        out_path = os.path.join(run_dir, 'crawl_params.json')
+        os.makedirs(os.path.dirname(_crawl_params_path(run_dir)), exist_ok=True)
+        out_path = _crawl_params_path(run_dir)
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(params, f, ensure_ascii=False, indent=2)
         print('\n  已写出: %s' % out_path)

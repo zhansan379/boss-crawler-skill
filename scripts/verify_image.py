@@ -5,7 +5,7 @@
 为什么必须有它：`Read` 一张生成的简历 PNG 是本 skill 能干出的最贵的一件事。
 2026-08-13 实测（session 3b45c941，投递材料目检环节）：
 
-    Read applications/<job>/<姓名>-<岗位>.png
+    Read deliver/<job>/<姓名>-<岗位>.png
       → 509 KB JPEG → 单次请求 638,960 input tokens
       → 上下文 83k 一步顶到 722k，立刻触发 auto-compact
       → 那 639k 占了整场 46 分钟会话全部新增 input token（809k）的 79%

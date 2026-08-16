@@ -10,8 +10,8 @@
 还没命中、留了残留。发出去的是简历长图和招呼语，这类错误一旦投递就收不回来。
 
 范围（刻意收窄）：
-  查   `generated/resume_{i}_*.json` 的 **optimized_resume** 字段 —— render 只渲染这一个
-  查   `generated/greeting_{i}_*.txt` 全文
+  查   `materials/resume_{i}_*.json` 的 **optimized_resume** 字段 —— render 只渲染这一个
+  查   `materials/greeting_{i}_*.txt` 全文
   不查 **optimization_suggestions** —— 那是给人看的改进建议，本来就该出现简历里
        还没有的技术词。复盘时的误判正是从这里来的。
   不查 中文表述。「多智能体面试系统」那次误判说明中文语义判断不可靠：那个词在简历
@@ -51,6 +51,8 @@ if _HERE not in sys.path:
 
 import check_artifacts
 from check_artifacts import parse_only          # 与 materials/核对侧共用同一份严格解析
+from resume_matcher import (resume_text_path, profile_path as _profile_path,
+                            materials_dir, verify_report_path)
 
 
 def reconfigure_stdout():
@@ -160,7 +162,7 @@ def load_baseline(run_dir, override=None):
     """
     parts, sources = [], []
 
-    for path in (override, os.path.join(run_dir, 'resume_text.txt')):
+    for path in (override, resume_text_path(run_dir)):
         if path and os.path.isfile(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -172,7 +174,7 @@ def load_baseline(run_dir, override=None):
                 sources.append(os.path.basename(path))
                 break                       # 与 gen_materials 一致：择一，不叠加
 
-    profile_path = os.path.join(run_dir, 'profile.json')
+    profile_path = _profile_path(run_dir)
     if os.path.isfile(profile_path):
         try:
             with open(profile_path, 'r', encoding='utf-8') as f:
@@ -194,7 +196,7 @@ def _index_of(path, kind):
 
 def collect_targets(run_dir, only=None):
     """[(序号, 标签, 文本)]，按序号排序。只取会真正发出去的内容。"""
-    gen = os.path.join(run_dir, 'generated')
+    gen = materials_dir(run_dir)
     targets, broken = [], []
 
     for path in sorted(glob.glob(os.path.join(gen, 'resume_*_*.json'))):
@@ -283,7 +285,7 @@ def write_report(run_dir, sources, targets, findings, broken, allow):
     报告里存**被查文件的 mtime**：材料重新生成过就说明这份报告过期了。
     只记「查过」而不记查的是哪一版，等于给人一个永远显示通过的旧结论。
     """
-    gen = os.path.join(run_dir, 'generated')
+    gen = materials_dir(run_dir)
     checked = {}
     for _, label, _ in targets:
         try:
@@ -303,8 +305,9 @@ def write_report(run_dir, sources, targets, findings, broken, allow):
         'clean': not findings,
     }
     try:
-        with open(os.path.join(run_dir, 'verify_report.json'), 'w',
-                  encoding='utf-8') as f:
+        vpath = verify_report_path(run_dir)
+        os.makedirs(os.path.dirname(vpath), exist_ok=True)
+        with open(vpath, 'w', encoding='utf-8') as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
     except OSError as e:
         return str(e)
@@ -317,7 +320,7 @@ def report_is_stale(run_dir):
     给 where_am_i.py 用。材料比报告新 = 重新生成过 = 那一版没查过。
     """
     try:
-        with open(os.path.join(run_dir, 'verify_report.json'),
+        with open(verify_report_path(run_dir),
                   'r', encoding='utf-8') as f:
             report = json.load(f)
     except (ValueError, OSError):
@@ -325,7 +328,7 @@ def report_is_stale(run_dir):
     if not isinstance(report, dict):
         return '报告格式不对，重查一遍', None
 
-    gen = os.path.join(run_dir, 'generated')
+    gen = materials_dir(run_dir)
     checked = report.get('checked') or {}
     for label, was in checked.items():
         try:
@@ -404,7 +407,7 @@ def main(argv=None):
         print('  ⚠ 读不动，已跳过: %s（%s）' % (name, err))
 
     if not targets:
-        print('[无材料] generated/ 下没有可查的 optimized_resume 或 greeting_*.txt')
+        print('[无材料] materials/ 下没有可查的 optimized_resume 或 greeting_*.txt')
         return 1
 
     print('待查: %d 份材料' % len(targets))

@@ -39,6 +39,7 @@ from types import SimpleNamespace
 
 from write_application_md import sanitize, load_jobs, resolve_greeting, resolve_csv_row, merge
 from render_images import parse_only, resolve_name, job_dir_name
+from resume_matcher import profile_path, deliver_dir, apply_log_path
 
 # 投递入口在**模块层**导入，不在 main() 里 —— 局部 import 会遮蔽模块属性，
 # 让 test_apply_gate.py 换不掉它，于是「验证闸门」的测试反而会真的打开浏览器去投递。
@@ -86,7 +87,7 @@ def scrub_nulls(data):
 
 
 def load_profile(run_dir):
-    path = os.path.join(run_dir, 'profile.json')
+    path = profile_path(run_dir)
     with open(path, 'r', encoding='utf-8') as f:
         return scrub_nulls(json.load(f))
 
@@ -102,7 +103,7 @@ def find_image(run_dir, job, person):
     """该岗位的 <姓名>-<应聘岗位>.png。走 render_images 的同一套目录/命名推导。"""
     dir_name, position = job_dir_name(job)
     base = '%s-%s' % (sanitize(person), sanitize(position))
-    path = os.path.join(run_dir, 'applications', dir_name, base + '.png')
+    path = os.path.join(deliver_dir(run_dir), dir_name, base + '.png')
     return path if os.path.exists(path) and os.path.getsize(path) > 0 else None
 
 
@@ -137,7 +138,7 @@ def company_of(job):
     """岗位所属公司名（原文，未 sanitize）。
 
     刻意走 job_dir_name 的同一套 resolve_csv_row + merge：`--company` 认的名字、
-    演练里列出的名字、applications/ 下的目录名必须是同一个口径，否则用户照着列表
+    演练里列出的名字、deliver/ 下的目录名必须是同一个口径，否则用户照着列表
     抄一遍反而匹配不上。
     """
     csv_row, _ = resolve_csv_row(job)
@@ -266,7 +267,7 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
         greeting, source = find_greeting(run_dir, index)
         if not greeting:
             blockers.append(
-                '#%d %s 没有招呼语（generated/greeting_%d_*.txt 缺失或为空）'
+                '#%d %s 没有招呼语（materials/greeting_%d_*.txt 缺失或为空）'
                 % (index, dir_name, index))
             continue
 
@@ -508,7 +509,7 @@ def main():
         )
     except KeyboardInterrupt:
         print('\n⚠ 已中断。已投出的岗位不会撤回；日志见 %s'
-              % os.path.join(run_dir, 'apply_log.json'))
+              % apply_log_path(run_dir))
         return 3
 
     if not results:
@@ -516,7 +517,7 @@ def main():
         return 1
 
     code = summarize(results)
-    print('\n  明细日志: %s' % os.path.join(run_dir, 'apply_log.json'))
+    print('\n  明细日志: %s' % apply_log_path(run_dir))
     return code
 
 

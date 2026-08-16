@@ -13,6 +13,7 @@ from DrissionPage import WebPage
 
 from .config import WAIT_TIMEOUT, IS_WINDOWS, ASSETS_DIR, co, sleep_config
 from .utils import entry_cmd, script_cmd
+from resume_matcher.paths import crawl_summary_path, crawl_params_path
 
 # 条件导入 Windows 键盘检测
 if IS_WINDOWS:
@@ -203,8 +204,8 @@ def _print_next_steps():
     """
     print('\n下一步：')
     latest = _latest_run_dir()
-    crawled = latest and os.path.exists(os.path.join(latest, 'crawl_summary.json'))
-    ready = latest and os.path.exists(os.path.join(latest, 'crawl_params.json'))
+    crawled = latest and os.path.exists(crawl_summary_path(latest))
+    ready = latest and os.path.exists(crawl_params_path(latest))
     if ready and not crawled:
         # 正是被爬取那一步打断的那一轮：参数都在，接着跑不会重复调模型。
         # --all 不能省：pipeline 不给终点只跑一个阶段，这里的意图是「把后面跑完」。

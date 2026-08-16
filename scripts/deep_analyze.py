@@ -27,6 +27,7 @@ import threading
 
 import stage_timer
 from resume_matcher.prompts import get_match_analysis_prompt
+from resume_matcher import deep_candidates_path, deep_results_path
 from llm import (
     ConfigError, LLMError, chat_json, map_concurrent, resolve,
     format_usage, reconfigure_stdout,
@@ -207,7 +208,7 @@ def normalize_result(data, candidate):
 
 
 def load_candidates(run_dir):
-    path = os.path.join(run_dir, 'deep_candidates.json')
+    path = deep_candidates_path(run_dir)
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     with open(path, 'r', encoding='utf-8') as f:
@@ -219,7 +220,7 @@ def load_candidates(run_dir):
 
 def load_existing(run_dir):
     """已有的 deep_results.json → {rank: record}，用于 --resume 续跑。"""
-    path = os.path.join(run_dir, 'deep_results.json')
+    path = deep_results_path(run_dir)
     if not os.path.exists(path):
         return {}
     try:
@@ -243,7 +244,8 @@ def write_results(run_dir, records, model):
         'analyzed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'results': ordered,
     }
-    path = os.path.join(run_dir, 'deep_results.json')
+    path = deep_results_path(run_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
     return path

@@ -31,6 +31,13 @@ import argparse
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
+from resume_matcher import (                        # noqa: E402  (sys.path 之后)
+    profile_path, resume_text_path, profile_validation_path,
+    crawl_params_path, crawl_summary_path, qualified_jobs_path,
+    matching_report_path, deep_candidates_path, deep_results_path,
+    materials_dir, deliver_dir, apply_log_path,
+)
+
 SKILL_ROOT = os.path.dirname(_HERE)
 
 # 需要 api_key 的阶段。下一步落在这些阶段上时，提醒先跑一次 llm_check。
@@ -72,12 +79,12 @@ def _match_mode(run_dir):
     只信 crawl_params.json 里 infer 写下的那个值。读不出来时看产物：有
     deep_candidates.json 就是 deep，否则按 pipeline 的默认当 quick。
     """
-    params = _load(os.path.join(run_dir, 'crawl_params.json'))
+    params = _load(crawl_params_path(run_dir))
     if isinstance(params, dict):
         mode = params.get('match_mode')
         if mode in ('quick', 'deep'):
             return mode
-    if os.path.exists(os.path.join(run_dir, 'deep_candidates.json')):
+    if os.path.exists(deep_candidates_path(run_dir)):
         return 'deep'
     return 'quick'
 
@@ -100,8 +107,8 @@ def _pipe(run_dir, stage):
 
 def survey(run_dir):
     """返回 (已完成阶段列表, 下一步 (标题, 命令列表), 备注列表)。"""
-    has = lambda *parts: os.path.exists(os.path.join(run_dir, *parts))
     done, notes = [], []
+    has = lambda path: os.path.exists(path)
     mode = _match_mode(run_dir)
 
     def nxt(stage, title, extra_cmds=(), extra_notes=()):
@@ -114,9 +121,9 @@ def survey(run_dir):
         return done, ('%s（pipeline 阶段 %s）' % (title, stage), cmds), ns
 
     # ── parse: 简历 → profile.json ──
-    if has('profile.json') and has('resume_text.txt'):
+    if has(profile_path(run_dir)) and has(resume_text_path(run_dir)):
         done.append('parse：profile.json + resume_text.txt')
-        if not has('profile_validation.json'):
+        if not has(profile_validation_path(run_dir)):
             # parse_resume.py 自己会写这个文件，缺了说明那一步是旧版/半途中断的产物
             notes.append('没有 profile_validation.json（正常由 parse_resume.py 一起写）：'
                          'python scripts/validate_profile.py "%s/resume_text.txt" '
@@ -127,7 +134,7 @@ def survey(run_dir):
                                 'parse 阶段要给简历文件：pipeline.py 简历.pdf'])
 
     # ── infer: profile.json → crawl_params.json ──
-    if has('crawl_params.json'):
+    if has(crawl_params_path(run_dir)):
         done.append('infer：crawl_params.json（match_mode=%s）' % mode)
     else:
         return nxt('infer', '推断爬取参数',
@@ -135,8 +142,8 @@ def survey(run_dir):
                                 '用户已确认的条件用 --city/--salary/--match-mode 等直接传进去'])
 
     # ── crawl: → assets/post_data/**.csv ──
-    if has('crawl_summary.json'):
-        summary = _load(os.path.join(run_dir, 'crawl_summary.json'))
+    if has(crawl_summary_path(run_dir)):
+        summary = _load(crawl_summary_path(run_dir))
         written = summary.get('written', '?') if isinstance(summary, dict) else '?'
         done.append('crawl：crawl_summary.json（本轮新增 %s 条）' % written)
     else:
@@ -151,16 +158,16 @@ def survey(run_dir):
                        '爬取动辄几十分钟：放后台跑，别在前台等'])
 
     # ── match / deep / merge: 三步一组 ──
-    if has('qualified_jobs.json') and has('matching_report.html'):
+    if has(qualified_jobs_path(run_dir)) and has(matching_report_path(run_dir)):
         done.append('match%s：matching_report.html + qualified_jobs.json'
                     % (' → deep → merge' if mode == 'deep' else ''))
-    elif mode == 'deep' and has('deep_candidates.json') and not has('deep_results.json'):
-        cands = _load(os.path.join(run_dir, 'deep_candidates.json'))
+    elif mode == 'deep' and has(deep_candidates_path(run_dir)) and not has(deep_results_path(run_dir)):
+        cands = _load(deep_candidates_path(run_dir))
         n = len(cands) if isinstance(cands, list) else '?'
         return nxt('deep', '逐个候选调模型做深度分析',
                    extra_notes=['deep_candidates.json 在（%s 个候选），缺 deep_results.json' % n,
                                 '按岗位各一次请求，会花钱；--from deep 会连着把 merge 跑完'])
-    elif mode == 'deep' and has('deep_results.json'):
+    elif mode == 'deep' and has(deep_results_path(run_dir)):
         return nxt('merge', '把深度结果与规则评分合并、出报告',
                    extra_notes=['deep_results.json 在，缺 matching_report.html '
                                 '或 qualified_jobs.json'])
@@ -170,22 +177,22 @@ def survey(run_dir):
                                 'match_mode=%s（deep 会连着跑 deep → merge）' % mode])
 
     # ── gate:jobs — 投递池要人过目 ──
-    jobs = _load(os.path.join(run_dir, 'qualified_jobs.json'))
+    jobs = _load(qualified_jobs_path(run_dir))
     if not jobs:
         return done, ('qualified_jobs.json 是空的 —— 没有岗位进投递池', [
-            '打开 %s   # 看评分明细' % os.path.join(run_dir, 'matching_report.html'),
+            '打开 %s   # 看评分明细' % matching_report_path(run_dir),
         ]), ['放宽条件重跑 match，或确认这一轮确实没有合适岗位']
     n = len(jobs)
     done.append('投递池：%d 个岗位' % n)
 
     # ── materials: 招呼语 + 优化简历 ──
-    gen = os.path.join(run_dir, 'generated')
+    gen = materials_dir(run_dir)
     greets, resumes = _count(gen, 'greeting_*'), _count(gen, 'resume_*')
     if greets < n or resumes < n:
         return nxt('materials', '生成招呼语 + 优化简历',
                    extra_cmds=['python scripts/gen_materials.py "%s" --only <序号>   '
                                '# 只补缺的那几个' % run_dir],
-                   extra_notes=['generated/ 有 %d 个招呼语、%d 份简历，期望各 %d 个'
+                   extra_notes=['materials/ 有 %d 个招呼语、%d 份简历，期望各 %d 个'
                                 % (greets, resumes, n),
                                 '每个岗位两次请求（招呼语 + 简历改写）—— 先确认投递池再跑'])
     done.append('materials：%d 招呼语 + %d 简历' % (greets, resumes))
@@ -215,28 +222,27 @@ def survey(run_dir):
                     % len(report.get('checked') or {}))
 
     # ── render: 简历长图 ──
-    apps = os.path.join(run_dir, 'applications')
+    apps = deliver_dir(run_dir)
     job_dirs = [d for d in glob.glob(os.path.join(apps, '*')) if os.path.isdir(d)]
     pngs = len(glob.glob(os.path.join(apps, '*', '*.png')))
     if pngs < n:
         return nxt('render', '渲染简历长图',
-                   extra_notes=['applications/ 下有 %d 张 PNG，期望 %d 张' % (pngs, n),
+                   extra_notes=['deliver/ 下有 %d 张 PNG，期望 %d 张' % (pngs, n),
                                 '必须串行（共用一个浏览器 + 一份 localStorage），'
                                 '所以没有 --workers',
                                 '不需要长图就跳过这一步：pipeline 加 --no-images'])
     done.append('render：%d 张简历长图' % pngs)
 
-    # ── 收尾一：各岗位的 岗位信息+招呼语.md（不在流水线里）──
-    ready = [d for d in job_dirs
-             if os.path.exists(os.path.join(d, '岗位信息+招呼语.md'))]
+    # ── 收尾一：各岗位的 投递.md（不在流水线里）──
+    ready = [d for d in job_dirs if os.path.exists(os.path.join(d, '投递.md'))]
     if len(ready) < n:
-        return done, ('写各岗位的 岗位信息+招呼语.md（流水线之外）', [
+        return done, ('写各岗位的 投递.md（流水线之外）', [
             'python scripts/write_application_md.py "%s" --all' % run_dir,
-        ]), ['%d/%d 个岗位目录有 岗位信息+招呼语.md' % (len(ready), n)]
+        ]), ['%d/%d 个岗位目录有 投递.md' % (len(ready), n)]
     done.append('材料：%d/%d 个岗位目录齐全' % (len(ready), n))
 
     # ── 收尾二：gate:send → 投递（唯一不可撤销的一步）──
-    log = _load(os.path.join(run_dir, 'apply_log.json'))
+    log = _load(apply_log_path(run_dir))
     if not log:
         return done, ('确认后投递（唯一不可撤销的一步）', [
             'python scripts/verify_image.py "%s" --all   # 投出去之前先查图，别用 Read 看' % apps,

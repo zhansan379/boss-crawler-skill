@@ -35,6 +35,11 @@ import sys
 import stage_timer
 from resume_matcher import (
     ResumeProfile,
+    # 路径集中在 paths.py，这里按需取
+    scored_jobs_path as _scored_jobs_path,
+    deep_candidates_path as _deep_candidates_path,
+    deep_results_path as _deep_results_path,
+    matching_report_path as _matching_report_path,
     JobClassification,
     load_job_data,
     list_available_job_files,
@@ -119,7 +124,7 @@ def run_quick_mode(profile: ResumeProfile, output_dir: str) -> None:
     )
 
     # 5. 保存全量评分结果
-    scored_path = os.path.join(output_dir, 'scored_jobs.json')
+    scored_path = _scored_jobs_path(output_dir)
     scored_output = {
         'tier1': tier1,
         'tier2': tier2,
@@ -128,6 +133,7 @@ def run_quick_mode(profile: ResumeProfile, output_dir: str) -> None:
         'total': len(jobs),
         'analysis_mode': 'quick',
     }
+    os.makedirs(os.path.dirname(scored_path), exist_ok=True)
     with open(scored_path, 'w', encoding='utf-8') as f:
         json.dump(scored_output, f, ensure_ascii=False, indent=2)
 
@@ -202,8 +208,8 @@ def run_deep_merge(output_dir: str) -> None:
     print("  🧠 深度模式 — 阶段 3: 合并分析结果")
     print("=" * 60)
 
-    candidates_file = os.path.join(output_dir, 'deep_candidates.json')
-    results_file = os.path.join(output_dir, 'deep_results.json')
+    candidates_file = _deep_candidates_path(output_dir)
+    results_file = _deep_results_path(output_dir)
 
     if not os.path.exists(candidates_file):
         print(f"错误: 候选文件不存在 {candidates_file}")
@@ -225,7 +231,7 @@ def run_deep_merge(output_dir: str) -> None:
         print(f"\n{'=' * 60}")
         print("  ✅ 深度模式分析完成！")
         print(f"{'=' * 60}")
-        print(f"  📄 HTML 报告: {os.path.join(output_dir, 'matching_report.html')}")
+        print(f"  📄 HTML 报告: {_matching_report_path(output_dir)}")
         print()
 
 
@@ -304,7 +310,7 @@ def main():
     elif args.mode == 'deep' and args.merge:
         # --merge 模式：尝试自动找到最近一次 deep 运行的目录
         latest = get_latest_run_dir()
-        if latest and os.path.exists(os.path.join(latest, 'deep_candidates.json')):
+        if latest and os.path.exists(_deep_candidates_path(latest)):
             output_dir = latest
             print(f"📂 自动定位到最近运行目录: {output_dir}")
         else:

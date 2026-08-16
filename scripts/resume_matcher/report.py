@@ -11,6 +11,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 from .config import ResumeProfile, JobClassification, OUTPUT_DIR
+from .paths import matching_report_path, job_classification_path
 from .utils import ensure_output_dir
 from .scoring import (
     compute_difficulty,
@@ -139,7 +140,8 @@ def generate_html_report(
     template = _load_report_template()
     html = template.replace('___REPORT_DATA___', json.dumps(report_data, ensure_ascii=False))
 
-    output_path = os.path.join(output_dir, 'matching_report.html')
+    output_path = matching_report_path(output_dir)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
@@ -234,7 +236,8 @@ def generate_bauhaus_json(
         'analysis_mode': analysis_mode,
     }
 
-    output_path = os.path.join(output_dir, 'job_classification.json')
+    output_path = job_classification_path(output_dir)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 

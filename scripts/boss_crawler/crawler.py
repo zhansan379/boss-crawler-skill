@@ -19,6 +19,7 @@ from .config import (
     co, sleep_config,
 )
 from .data_loader import load_existing_links, init_csv_file
+from resume_matcher.paths import crawl_summary_path
 from .menu import print_header, estimate_time
 from .state import time_stats
 
@@ -862,8 +863,8 @@ def run_crawl_cli(args):
     run_dir = getattr(args, 'run_dir', None)
     if run_dir:
         try:
-            os.makedirs(run_dir, exist_ok=True)
-            with open(os.path.join(run_dir, 'crawl_summary.json'), 'w', encoding='utf-8') as f:
+            os.makedirs(os.path.dirname(crawl_summary_path(run_dir)), exist_ok=True)
+            with open(crawl_summary_path(run_dir), 'w', encoding='utf-8') as f:
                 json.dump({
                     'written': total_stats.get('written', 0),
                     'total': total_stats.get('total', 0),

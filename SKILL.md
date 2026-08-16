@@ -89,7 +89,7 @@ python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺
 - [ ] crawl:     后台运行，然后检查下限（路径 A、C）
 - [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json
 - [ ] gate:jobs  一次 AskUserQuestion：投哪些 + 招呼语方式 + 图片方式
-- [ ] materials: 招呼语 + 优化后简历（后自动落盘 岗位信息+招呼语.md）
+- [ ] materials: 招呼语 + 优化后简历（后自动落盘 投递.md）
 - [ ] verify:    没有凭空造技能（退出 1 = 发现了——停下给用户看）
 - [ ] render:    简历长图（用 --no-images 跳过；后自动 verify_image 图检）
 - [ ] gate:send  一次 AskUserQuestion → apply.py --yes
@@ -125,7 +125,7 @@ python scripts/where_am_i.py           # 或传一个显式的 <run_dir>
    grep -E "✅|❌|⚠|阶段|失败|写入" <后台任务输出文件> | tail -20
    ```
 
-耗时自动落在 `{run_dir}/run_timings.jsonl`——每个阶段都会自我埋点，所以不用手工标记。`python scripts/stage_timer.py report <run_dir>` 给它们排序。
+耗时自动落在 `{run_dir}/intermediate/run_timings.jsonl`——每个阶段都会自我埋点，所以不用手工标记。`python scripts/stage_timer.py report <run_dir>` 给它们排序。
 
 ### 阶段 0：启动简历编辑器（路径 D）
 
@@ -313,7 +313,7 @@ python scripts/deep_analyze.py <run_dir> --resume    # 跳过 deep_results.json 
 | 答案 | 如何执行 |
 |---|---|
 | 投递范围 = 子集 | 在 `materials` **和** `render` 上用 `--only 1,3,5-7`（对 `qualified_jobs.json` 从 1 开始计数的下标）——别去改文件 |
-| 招呼语 **自定义** | 把文字写进每个选中的 `i` 的 `{run_dir}/generated/greeting_{i}_custom.txt`，然后用 `--greeting-mode skip` 跑 materials…或把模式留在 `ai`：已存在的非空产物会被跳过，绝不覆盖 |
+| 招呼语 **自定义** | 把文字写进每个选中的 `i` 的 `{run_dir}/materials/greeting_{i}_custom.txt`，然后用 `--greeting-mode skip` 跑 materials…或把模式留在 `ai`：已存在的非空产物会被跳过，绝不覆盖 |
 | 招呼语 **默认模板** | `--greeting-mode default`（规则模板，不调模型） |
 | 招呼语 **AI生成** | `--greeting-mode ai`（默认） |
 | 图片 **自定义上传** | 校验路径，`--resume-mode skip`，发送时 `apply.py --image <path>`。`skip` 也会抑制 `render`——生成的 PNG 反正不会被发送 |
@@ -340,7 +340,7 @@ python -c "from resume_matcher.auto_apply import has_wasted_preview; print(has_w
 python scripts/pipeline.py --from materials --only 1,3,5     # 后台任务
 ```
 
-每个岗位两次模型请求（招呼语 + 简历改写），所以这是对用户刚批准的岗位列表花钱的阶段——这正是 `gate:jobs` 先行的原因。产物是 `generated/greeting_{i}_{company}.txt` 和 `generated/resume_{i}_{company}.json`，其中 `{i}` 是 `qualified_jobs.json` 里从 1 开始计数的下标。**这个下标是下游一切的对齐键**，所以一个失败的岗位会留下空隙，而不是把后面的都错位。
+每个岗位两次模型请求（招呼语 + 简历改写），所以这是对用户刚批准的岗位列表花钱的阶段——这正是 `gate:jobs` 先行的原因。产物是 `materials/greeting_{i}_{company}.txt` 和 `materials/resume_{i}_{company}.json`，其中 `{i}` 是 `qualified_jobs.json` 里从 1 开始计数的下标。**这个下标是下游一切的对齐键**，所以一个失败的岗位会留下空隙，而不是把后面的都错位。
 
 部分成功退出 3，不是 1。检查并只补齐缺失的——已存在的非空产物会被跳过，绝不覆盖（`--force` 才覆盖）：
 
@@ -388,14 +388,14 @@ python scripts/pipeline.py --from render --only 1,3,5
 
 **附件文件名是 `<姓名>-<应聘岗位>`，所以这个阶段需要一个真名。** 当 `profile.json` 的 `basic_info.name` 为空或占位符（`未提取` / `未知` / `无` / …）时，脚本退出 1，而不是渲染一张 `未提取-Python工程师.png`——HR 会看到那个字符串。传 `--name "真实姓名"`（`apply.py` 上有同一个 flag）。这里的退出码：`0` 每张图都渲染了，`1` 前置条件失败且什么都没跑，`3` 阶段跑完但部分岗位没有图——在 `gate:send` 之前检查是哪些。
 
-### 岗位信息+招呼语.md 自动落盘，然后看一眼
+### 投递.md 自动落盘，然后看一眼
 
-`岗位信息+招呼语.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py --all`，为每个岗位写 `applications/{company}-{position}/岗位信息+招呼语.md`（所有爬取字段加招呼语；绝不手写）。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。
+`投递.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py --all`，为每个岗位写 `deliver/{company}-{position}/投递.md`（所有爬取字段加招呼语；绝不手写）。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。优化后的简历正文不再派生 `.md`，要看就用 `read_thin.py` 读 `materials/resume_#.json`。
 
-长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/applications" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
+长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/deliver" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
 
 ```bash
-python scripts/verify_image.py "{run_dir}/applications" --all
+python scripts/verify_image.py "{run_dir}/deliver" --all
 ```
 
 `verify_image.py` 是你检查图片的方式：它返回十几行数字，而不是一张 639k token 的截图。如果用户想看某一张，把路径给他们，让他们自己打开。
