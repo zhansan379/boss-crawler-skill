@@ -1000,6 +1000,20 @@
           <div class="row"><dt>改法 b</dt><dd>
             默认经验不限、关键词默认 3–4 个，把收窄留到匹配阶段——反正规则打分和 <code>top_n</code> 已经在做收窄。（工作量 极小）
           </dd></div>
+          <div class="row is-risk"><dt>实施时发现（P6b 已完成）</dt><dd>
+            只做 <strong>b（改默认值 + 改 SKILL.md 问法）</strong>，<strong>a（单页探测）视效果再决定</strong>。
+            <code>crawl_params.st</code> 约束 6 原本把 experience 和 job_type 绑在一起按毕业日期推——
+            改成 experience 一律默认 <code>["经验不限"]</code>（除非明确应届/在校），job_type 才按日期分
+            实习/全职。关键词约束从「宁可少给，不给满」翻转为「默认给足 3–4 个，不要 1 个」。
+            SKILL.md 两处示例命令（pipeline + save）把 <code>--experience 应届生</code> 删掉、
+            关键词扩到 4 个，与「不限省略该 flag」的既有规则保持一致。测试里约束 6 那几个词
+            （在校生/应届生/实习/全职/null）一个都没删，job_type 的日期逻辑原样保留。
+          </dd></div>
+          <div class="row"><dt>验收</dt><dd>
+            <code>test_infer_prompt.py</code> 全绿：约束 6 仍覆盖在校/应届/实习/全职、仍拿日期比毕业年份、
+            job_type 仍不能为 null；枚举值仍从 <code>FILTER_LABELS</code> 注入。无新增测试 —— 这条是
+            提示词倾向 + 文档改，不是行为契约。相关三套件（infer_prompt / infer_hint / pipeline）全绿。
+          </dd></div>
           <div class="row"><dt>附带</dt><dd>
             合法取值和 <code>--count</code> 语义归 <strong>P0</strong> 处理（文档里已有，只是没被读到）。
             这里只需保证：AskUserQuestion 的选项文案本身带上数字和单位，别让人对着「40 条」猜是总数还是每关键词数。

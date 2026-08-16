@@ -280,15 +280,20 @@ this file, so open that only to debug a field the parser got wrong.**
 `match` reads `match_mode`/`top_n` out of it. Skipping this stage means the crawl cannot start and the
 match silently falls back to quick mode.
 
-**Budget keywords by city, not by imagination.** Crawl time is linear in keyword count: 5 keywords in
-太原 returned 117 rows holding 53 unique jobs. Small market → 2-3 keywords; 一线/新一线 → up to 5.
-Spend them on distinct concepts — `AI应用开发` and `大模型应用开发` are the same search.
+**Default to 3–4 keywords, not fewer.** Crawl time is linear in keyword count, but a thin pool is
+worse than a long one — 1 keyword + 应届生筛选 once crawled only 19 rows and wasted a whole run;
+4 keywords + 经验不限 got 197. So default wide, spend the keywords on distinct concepts
+(`AI应用开发` and `大模型应用开发` are the same search), and let the match-stage scoring do the
+narrowing. A small market is the only reason to trim (2–3), and even then cap at the city budget
+(`keyword_budget` in `infer_params.py`: 3 small / 5 一线).
 
 Confirm in **two** `AskUserQuestion` calls plus one small follow-up (4 questions max per call):
 
-1. **爬取与匹配核心** — city, keywords (multi-select), match mode (quick/deep), deep's Top-N.
-2. **列表筛选** — experience, job type, salary floor, company scale. First option in each is the
-   candidate-appropriate default, so accepting is one click; leave one empty to skip that filter.
+1. **爬取与匹配核心** — city, keywords (multi-select, default 3-4), match mode (quick/deep), deep's Top-N.
+2. **列表筛选** — experience, job type, salary floor, company scale. **Experience defaults to
+   `经验不限`** — don't narrow it by the resume's years; the match stage does that. The other
+   filters' first option is the candidate-appropriate default, so accepting is one click; leave one
+   empty to skip that filter.
 3. **最低岗位数量 (`min_count`)** — the floor below which a crawl counts as thin. Default ~10, 0
    disables the check. Separate because it is a sufficiency threshold, not a list filter.
 
@@ -296,9 +301,9 @@ Then pass every confirmed value as a flag. Fully-specified parameters mean the s
 call at all** — it only calls the model for the fields you leave out:
 
 ```bash
-python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发,Python" \
+python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
     --match-mode deep --top-n 10 --count 20 --degree 本科 \
-    --experience 应届生 --job-type 实习,全职 --salary 5-10K --min-count 10
+    --job-type 全职 --salary 5-10K --min-count 10
 ```
 
 Accepted filter values — the Chinese labels below are the whole set (`boss_crawler/config.py:42-89`).
@@ -327,9 +332,9 @@ Then save the answers so the next run can replay them (path C). This writes the 
 `--replace` is right here; later single-field touch-ups drop the flag and merge:
 
 ```bash
-python scripts/preferences.py save --replace --city 太原 --keywords "AI应用开发,Python" \
+python scripts/preferences.py save --replace --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
     --match-mode deep --top 10 --count 20 --degree 本科 \
-    --experience 应届生 --job-type 实习,全职 --salary 5-10K --min-count 10
+    --job-type 全职 --salary 5-10K --min-count 10
 ```
 
 **Keep this gate even when the inference looks unambiguous.** The crawl is an outward-facing action
