@@ -494,6 +494,13 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 - **真实性**：简历优化只基于真实经历，绝不编造虚假内容
 - **隐私保护**：`assets/chrome_user_data/` 包含你的登录 cookie、`assets/llm_config.json` 包含你的 api_key，请勿提交到 Git 或分享给他人（整个 `assets/` 已在 `.gitignore` 里）；生成的简历图片已隐去个人信息，但生成的原始简历文本仍含隐私，注意保管
 - **验证码**：遇到验证码时脚本会暂停并通知你手动处理
+- **浏览器自动探测不保准**：脚本会自动找 Chrome/Edge（`--browser` / 环境变量 `CHROME_PATH` / `PATH` / 注册表 / 常见安装目录，按此顺序）。若你的浏览器装在特殊目录找不到，请用 `--browser <exe路径>` 显式指定，或设环境变量 `CHROME_PATH`；仍不行就去提 issue
+
+---
+
+## 🙋 反馈与贡献
+
+遇到问题、发现 bug、或想提功能建议，欢迎来 **[Issues](https://github.com/zhansan379/boss-crawler-skill/issues)** 开贴交流。你的机型和安装方式五花八门，很多兼容性问题只靠我们这台机器测不到，正好需要你帮忙补上。
 
 ---
 
