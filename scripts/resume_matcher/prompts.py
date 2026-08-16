@@ -48,8 +48,7 @@ def get_greeting_prompt(
     """获取招呼语提示词（gen_materials.py 的 greeting 阶段在用）
 
     规则本体在 prompts/greeting.st，不要在调用处复述 —— 这套口径（前 15 字预览框、
-    校招不许提出勤、到岗信息不许编）曾经散在 references/auto-apply.md 的一张表里，
-    改一次要同步两处。
+    校招不许提出勤、到岗信息不许编）以 greeting.st 为唯一来源。
 
     availability 为空时传「简历未提供」而不是空串：模板里那条「没给就别猜日期」的
     指令需要一个明确的取值才生效，留空会被模型读成「这栏我自己想」。

@@ -91,7 +91,7 @@ def real_profile(browser: Chromium) -> str:
 
     这一步不能省：debug 端口上已有实例时 DrissionPage 会直接接管它，
     `set_user_data_path` 被静默丢弃，于是 launch.py 打印的 profile 是配置值而非
-    实际值（详见 references/resume-editor.md）。导入和删除都是写操作，
+    实际值。导入和删除都是写操作，
     profile 错了就是在动别人的抽屉。
 
     走「pid → 命令行」而不是 CDP 的 `Browser.getBrowserCommandLine`：后者要求浏览器

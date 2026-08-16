@@ -7,8 +7,7 @@
 所以「不同端口复用同一份简历」只能靠显式搬运。
 
 导出的文件里 `value.state.resumes[i].content` 是 **Markdown 原文**，可直接当
-resume_text 喂给 Stage 3 解析，不需要 PDF/Word 解析 —— 见
-references/resume-editor.md。
+resume_text 喂给 Stage 3 解析，不需要 PDF/Word 解析。
 
 用法：
 

@@ -1,304 +1,214 @@
 ---
 name: boss-crawler
-description: Crawls BOSS Zhipin job listings via DrissionPage, parses resumes, matches jobs against candidate profiles using rule-based scoring and LLM semantic analysis, generates HTML visualization reports, auto-applies to matching positions, and launches an embedded Markdown resume editor (ShowCV). Use when the user wants to search BOSS Zhipin jobs, upload a resume for job matching, generate a job matching report, auto-apply to positions, optimize a resume for specific job descriptions, or open the resume editor to write/edit a resume ("打开简历编辑器", "启动 ShowCV", "写一份简历", "预览简历").
+description: 用 DrissionPage 爬取 BOSS 直聘职位，解析简历，用规则打分 + LLM 语义分析做岗位匹配，生成 HTML 可视化报告，自动投递匹配岗位，并启动内嵌的 Markdown 简历编辑器（ShowCV）。当用户想搜索 BOSS 直聘职位、上传简历做岗位匹配、生成岗位匹配报告、自动投递匹配岗位、针对特定 JD 优化简历，或打开简历编辑器写/改简历（"打开简历编辑器"、"启动 ShowCV"、"写一份简历"、"预览简历"）时使用。
 ---
 
-# BOSS Zhipin Job Crawling & Matching
+# BOSS 直聘 爬取与匹配
 
 > **⚠️ 语言强制要求（最高优先级）**：本 skill 面向中文用户。所有对用户的输出——包括提问（AskUserQuestion 的 question/header/option 文案）、说明、进度、报告、确认、错误提示——**一律使用简体中文**。术语、命令、脚本名、文件路径、代码片段可保留英文；除此之外的用户可见文本必须为中文。与用户的任何对话都不允许用英文正文。
 
-One pipeline, nine stages, one driver. Every stage is a command — you run it, read the last few
-lines, and decide whether to continue. **All model inference happens inside those commands**, against
-the user's own OpenAI-compatible endpoint; you never fill a prompt template yourself and never
-dispatch a subagent to do inference.
+一条流水线、九个阶段、一个驱动程序。每个阶段都是一条命令——你运行它，读最后几行，自己决定是否继续。**所有模型推断都发生在这些命令内部**，对着用户自己的 OpenAI 兼容端点调用；你从不自己填提示词模板，也不派子代理去做推断。
 
 ```
 parse → infer → crawl → match → deep → merge → materials → verify → render        [ apply ]
 ```
 
-`scripts/pipeline.py` is the driver. All scripts live under `scripts/` relative to this skill
-directory. **[references/cli.md](references/cli.md)** holds the full flag table and the per-stage
-troubleshooting — open it when a command fails in a way this file doesn't explain, not as routine
-reading.
+`scripts/pipeline.py` 是驱动程序。所有脚本都位于相对本 skill 目录的 `scripts/` 下。**[references/cli.md](references/cli.md)** 保存完整的参数表和每个阶段的故障排查——当一条命令以本文件无法解释的方式失败时打开它，而不是当作例行阅读。
 
-**Every script uses the same four exit codes. Read them before deciding a stage failed:**
+**所有脚本共用同一套四个退出码。在判定某个阶段失败之前先读它们：**
 
-| code | meaning | what to do |
+| 码 | 含义 | 该怎么处理 |
 |---|---|---|
-| `0` | success | continue |
-| `1` | precondition unmet / input missing / everything failed — usually nothing was written | stop, fix, tell the user |
-| `2` | usage error (argparse). *Except `llm_check.py`, where `2` = config fine but endpoint unreachable* | fix the command |
-| `3` | **partial success — artifacts are on disk, some entries are missing** | check what's missing, top up only that; do **not** re-run the whole stage |
+| `0` | 成功 | 继续 |
+| `1` | 前置条件未满足 / 输入缺失 / 全部失败——通常什么都没写 | 停下，排查，告诉用户 |
+| `2` | 用法错误（argparse）。*唯一的例外是 `llm_check.py`，其中 `2` = 配置没问题但端点不可达* | 修正命令 |
+| `3` | **部分成功——产物已在磁盘上，部分条目缺失** | 检查缺了什么，只补齐那部分；**不要**重跑整个阶段 |
 
-`3` is the one that gets misread as failure. `deep`, `materials` and `render` all reach it routinely
-because they work per-job.
+`3` 是最容易被误读成失败的那个。`deep`、`materials` 和 `render` 都会常规性地走到它，因为它们按岗位逐个处理。
 
-One stage bends `1`: for `verify`, exit `1` means the check **succeeded and found something**. Nothing
-is broken and re-running changes nothing — read [verify](#verify--did-the-model-invent-a-skill) before
-touching it.
+有一个阶段弯曲了 `1`：对 `verify` 来说，退出 `1` 表示检查**成功并发现了问题**。没有坏任何东西，重跑也不会改变什么——动手之前先读 [verify](#verify--模型有没有凭空造技能) 一节。
 
-**Drive one stage at a time.** `pipeline.py --from <stage>` runs exactly that stage (`match` also
-pulls `deep`+`merge`, since stopping at `match` leaves a half product nothing downstream can read),
-then stops and prints the next command. **Never use `--all`**: the gates below sit between stages,
-and `--all` runs straight through them, spending the user's tokens on a job list they have not seen.
+**一次只驱动一个阶段。** `pipeline.py --from <stage>` 只运行那一个阶段（`match` 还会连带 `deep`+`merge`，因为停在 `match` 会留下一个下游谁也读不了的半成品），然后停下并打印下一条命令。**绝不用 `--all`**：下面的几道闸门处在阶段之间，而 `--all` 会直接冲过去，把用户的 token 花在一份他们还没看到的岗位列表上。
 
-## Precondition: LLM configuration
+## 前置条件：LLM 配置
 
-Every inference stage needs an API key. Check once, before anything else, and never later than the
-first `parse`:
+每个推断阶段都需要 API key。在别的任何事之前先检查一次，切莫晚于第一次 `parse`：
 
 ```bash
-python scripts/llm_check.py --no-call        # exit 0 = usable, 1 = missing/invalid config
+python scripts/llm_check.py --no-call        # 退出 0 = 可用，1 = 配置缺失/非法
 ```
 
-`--no-call` costs nothing. Exit 1 → show the user the three ways to configure it (the script prints
-them) and stop; do not start a crawl that will die at `match`. Add `--stage deep` to see what a
-single stage resolves to, or drop `--no-call` to also send one minimal request — **that path adds a
-third code, `2` = config is complete but the endpoint is unreachable** (this script is the one
-exception to the repo-wide `2 = usage error`; a network or base-URL problem, not a config problem).
-**Never print, log, or echo the `api_key`** — the scripts mask it, so pass paths and stage names
-around, not the key.
+`--no-call` 不花任何钱。退出 1 → 把三种配置方式展示给用户（脚本会打印它们）然后停下；不要启动一场会在 `match` 处死掉的爬取。加 `--stage deep` 看单个阶段被解析成什么，或去掉 `--no-call` 顺便发一个最小请求——**那一条路径会多出第三个码，`2` = 配置完整但端点不可达**（这个脚本是仓库范围内 `2 = 用法错误` 的唯一例外；是网络或 base-URL 的问题，不是配置问题）。**绝不打印、记录或回显 `api_key`**——脚本会把它打码，所以只传路径和阶段名，别传 key。
 
-## Path Selection
+## 路径选择
 
-**Always ask the user to choose a path at the start of every invocation** — one `AskUserQuestion`
-with **exactly 4 options**. Do not auto-select from a saved preset or from whatever happens to be on
-disk; a preset supplies parameters *after* a path is chosen.
+**每次调用开始都必须让用户选一条路径**——一次 `AskUserQuestion`，**恰好 4 个选项**。不要从保存过的预设或磁盘上恰好存在的东西自动选；预设是在路径选好*之后*才提供参数。
 
-| Option label | When | Flow |
+| 选项 | 何时用 | 流程 |
 |------|------|------|
-| **A: 简历驱动** ✨ | Have a resume, want precision | parse → infer → crawl → match… → apply |
-| **B: 已有岗位数据** | Have a resume and CSVs already in `assets/post_data/` | parse → infer → *(skip crawl)* → match… → apply |
-| **C: 预设重放** | Re-run with the saved preset, no re-declaring | preset → parse → infer *(preset values)* → crawl → match… |
-| **D: 仅编辑简历** | No resume file yet, wants to write or edit one | Launch resume editor → **stop there** |
+| **A: 简历驱动** ✨ | 有简历，想要精确 | parse → infer → crawl → match… → apply |
+| **B: 已有岗位数据** | 有简历，且 `assets/post_data/` 里已有 CSV | parse → infer → *(跳过 crawl)* → match… → apply |
+| **C: 预设重放** | 用保存的预设重跑，不用重新声明 | preset → parse → infer *(预设值)* → crawl → match… |
+| **D: 仅编辑简历** | 还没有简历文件，想写或改一份 | 启动简历编辑器 → **到此为止** |
 
-**Every path starts at `parse`.** `infer` reads `profile.json`, and `crawl` reads the
-`crawl_params.json` that `infer` writes — so "crawl first, parse later" is not a supported order.
-Path B differs from A by one thing: skip the `crawl` stage (`--from match` after `infer`).
+**每条路径都从 `parse` 开始。** `infer` 读 `profile.json`，`crawl` 读 `infer` 写出的 `crawl_params.json`——所以"先爬后解析"不是受支持的顺序。路径 B 与 A 只差一件事：跳过 `crawl` 阶段（`infer` 之后直接 `--from match`）。
 
-**AskUserQuestion option cap (every question in this skill):** at most 4 options per question. When a
-choice has more candidates — salary brackets, keyword picks — take the 4 most relevant with a
-recommended default first and let the auto-added 「其他」 carry the rest. Never emit a 5th option; the
-tool rejects the call. Split an over-long question into a follow-up rather than failing the call.
+**AskUserQuestion 选项上限（本 skill 的每个提问都一样）：** 每个问题最多 4 个选项。当某个选择有更多候选——薪资档、关键词选择——取最相关的 4 个，把推荐默认值放第一个，让自动加的「其他」兜住其余。绝不发出第 5 个选项；工具会拒绝该调用。与其让调用失败，不如把一个过长的提问拆成后续问题。
 
-**Path A is recommended**: the resume tells you what to search — skills, city, salary range — so
-crawled jobs align with the candidate's background instead of with guessed keywords.
+**每个阶段一轮 `AskUserQuestion`，而不是每个字段一轮。** 该工具接受一个问题列表；把一个阶段需要的所有决定都打包进那一次调用（最多 4 个问题）。本 skill 恰好有四个交互停点——路径选择、`infer` 确认、`gate:jobs`、`gate:send`——每个都**恰好一次**调用。绝不要单独问一个字段（`--salary?` 然后 `--degree?` 然后 `--count?`）：那正是 9 轮爬取参数会话的由来，而每一轮大约耗掉用户 1.5 分钟的注意力。如果某个阶段确实需要两批，就在下面的清单里点名写明，免得它悄悄变成四批。
 
-**Path D terminates at launch.** It opens the editor and reports the URL, nothing else. It commonly
-serves as a precursor: the user writes a resume, then re-enters at A/B/C. The editor's
-stored Markdown can feed `parse` directly (see
-[references/resume-editor.md](references/resume-editor.md)) — but only when the user asks.
+**推荐路径 A**：简历会告诉你搜什么——技能、城市、薪资区间——所以爬到的岗位跟候选人的背景对齐，而不是跟瞎猜的关键词对齐。
 
-**Path C is the preset path.** `preferences.py show` prints the saved params, `preferences.py missing`
-names any askable field the preset lacks (薪资/规模/最低岗位数 and siblings). Ask about **exactly
-those**, merge them back with `preferences.py save`, then pass the whole set to `infer` as flags. If
-`show` exits 1 there is no preset — fall back to path A's fresh confirmation instead of erroring.
+**路径 D 以启动告终。** 它打开编辑器、报告 URL，仅此而已。它通常作为前奏：用户写一份简历，然后从 A/B/C 重新进入。编辑器里存的 Markdown 可以直接喂给 `parse`——但只在用户要求时。
 
-`save` **merges** — pass only the fields you just asked about; everything else is preserved. Pass
-`--replace` only to rewrite the whole preset (that is what `infer --save` does after it has printed
-the full set for confirmation). Under merge you cannot clear one field by omitting it: rewrite with
-`--replace`, or wipe everything with `clear`.
+**路径 C 是预设路径。** `preferences.py show` 打印已存的参数，`preferences.py missing` 点名预设缺了哪些可问字段（薪资/规模/最低岗位数 以及同类）。只问**恰好**那些，用 `preferences.py save` 合并回去，再把整组作为 flag 传给 `infer`。如果 `show` 退出 1，说明没有预设——退回路径 A 的全新确认，而不是报错。
 
-> **Two gates, both mandatory.** `gate:jobs` (which jobs, and how materials are made) and
-> `gate:send` (approve what actually landed on disk). Never apply without both.
+`save` 是**合并**——只传你刚问过的字段；其余都保留。只有在要整体重写预设时才传 `--replace`（这正是 `infer --save` 在打印完整组待确认之后做的事）。合并模式下，你无法通过省略某个字段来清除它：用 `--replace` 重写，或用 `clear` 全部清空。
+
+> **两道闸门，都必须过。** `gate:jobs`（投哪些岗位，以及材料怎么做）和 `gate:send`（批准真正落到磁盘的东西）。缺了任何一道都不投递。
 >
-> **Presets never reach these gates.** `assets/preferences.json` covers crawl and matching
-> parameters only — it has no field for which jobs, what greeting, or whether to send, and `load()`
-> drops any key outside its whitelist.
+> **预设永远到不了这两道闸门。** `assets/preferences.json` 只覆盖爬取和匹配参数——它没有"投哪些岗位、用什么招呼语、是否发送"这些字段，`load()` 会丢弃白名单之外的任何键。
 
-## Run Directory
+## 运行目录
 
-`parse` creates a timestamped run directory under `assets/` (e.g. `assets/2026-08-16_14-30-00/`) and
-points `assets/LATEST.txt` at it. Every later stage finds it automatically; pass `--run-dir` to be
-explicit. Path D produces no run outputs and needs no run directory.
+`parse` 在 `assets/` 下创建带时间戳的运行目录（例如 `assets/2026-08-16_14-30-00/`）并把 `assets/LATEST.txt` 指向它。之后每个阶段都会自动找到它；要显式指定就传 `--run-dir`。路径 D 不产生运行产物，也不需要运行目录。
 
 ---
 
-## Workflow
+## 工作流
 
-Copy this checklist and check off items as you complete them:
+复制这份清单，完成一项就在前头打勾：
 
 ```
-Progress:
-- [ ] llm_check.py --no-call        (precondition — exit 1 stops the run)
-- [ ] Path selection: one AskUserQuestion, 4 options (A / B / C / D)
-- [ ] Stage 0: launch resume editor (path D — terminal step)
-- [ ] parse:     resume file → profile.json
-- [ ] infer:     confirm params (2 batched questions + min_count) → crawl_params.json
-- [ ] crawl:     background run, then check the floor (paths A, C)
+进度：
+- [ ] llm_check.py --no-call        (前置条件——退出 1 会停掉整次运行)
+- [ ] 路径选择：一次 AskUserQuestion，4 个选项 (A / B / C / D)
+- [ ] 阶段 0：启动简历编辑器（路径 D——终止步骤）
+- [ ] parse:     简历文件 → profile.json
+- [ ] infer:     确认参数（2 次打包提问 + min_count）→ crawl_params.json
+- [ ] crawl:     后台运行，然后检查下限（路径 A、C）
 - [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json
-- [ ] gate:jobs  one AskUserQuestion: which jobs + greeting method + image method
-- [ ] materials: greetings + optimized resumes
-- [ ] verify:    no invented skills (exit 1 = it found some — stop and show the user)
-- [ ] render:    resume long-images (skip with --no-images)
-- [ ] write_application_md.py --all, then verify_image.py
-- [ ] gate:send  one AskUserQuestion → apply.py --yes
+- [ ] gate:jobs  一次 AskUserQuestion：投哪些 + 招呼语方式 + 图片方式
+- [ ] materials: 招呼语 + 优化后简历
+- [ ] verify:    没有凭空造技能（退出 1 = 发现了——停下给用户看）
+- [ ] render:    简历长图（用 --no-images 跳过）
+- [ ] write_application_md.py --all，然后 verify_image.py
+- [ ] gate:send  一次 AskUserQuestion → apply.py --yes
 ```
 
-**Four stops.** Path selection, the `infer` confirmation (two batched `AskUserQuestion` calls plus a
-small `min_count` follow-up — skipped when path C reuses a complete preset), `gate:jobs`, and
-`gate:send`. Plus one conditional stop: the crawl floor, only when the pool came in thin.
+**四个停点。** 路径选择、`infer` 确认（两次打包的 `AskUserQuestion` 调用加一次小小的 `min_count` 后续——当路径 C 复用完整预设时跳过）、`gate:jobs`、`gate:send`。外加一个条件停点：爬取下限，只在池子来得太稀薄时。
 
-**Lost your place (e.g. after a context compaction)? Do not re-read docs to rebuild state.** Ask the
-filesystem:
+**迷失了位置（例如在上下文压缩之后）？不要重读文档来重建状态。** 问文件系统：
 
 ```bash
-python scripts/where_am_i.py           # or pass an explicit <run_dir>
+python scripts/where_am_i.py           # 或传一个显式的 <run_dir>
 ```
 
-It infers the stage from artifacts on disk and prints the next command in ~1k characters. Consult a
-reference doc only for the *one* section it points you at.
+它会根据磁盘上的产物推断出当前阶段，并用约 1k 字符打印下一条命令。只在它指向的那*一个*章节去查参考资料。
 
-**Three habits that keep a run cheap.**
+**让一次运行保持廉价的三个习惯。**
 
-1. **Never `Read` a rendered resume image.** Use `scripts/verify_image.py`. One 0.5 MB PNG cost
-   638,960 input tokens — 79% of that session's fresh input, in a single tool call.
-2. **Never `Read` full data files — use `read_thin.py`.** `qualified_jobs.json` carries full JDs and
-   company descriptions; you only need link/company/position/score/verdicts:
+1. **绝不 `Read` 一张渲染好的简历图片。** 用 `scripts/verify_image.py`。一张 0.5 MB 的 PNG 花掉 638,960 个输入 token——单次工具调用就占了那个会话 79% 的新鲜输入。
+2. **绝不 `Read` 完整数据文件——用 `read_thin.py`。** `qualified_jobs.json` 带着完整的 JD 和公司描述；你只需要 link/公司/职位/分数/判定：
 
    ```bash
-   python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → table fields
-   python scripts/read_thin.py {run_dir}/profile.json --kind profile         # → summary stats
-   python scripts/read_thin.py {run_dir}/deep_results.json --kind deep       # → verdicts only
+   python scripts/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → 表格字段
+   python scripts/read_thin.py {run_dir}/profile.json --kind profile         # → 汇总统计
+   python scripts/read_thin.py {run_dir}/deep_results.json --kind deep       # → 只看判定
    python scripts/read_thin.py {run_dir} --kind ranked                       # → 序号+公司+职位+分数+判定
    ```
 
-   `ranked` takes the **run directory**, not a file — score and verdict live in up to four different
-   files depending on the mode (`scored_jobs` → `job_classification` → `deep_results` joined through
-   `deep_candidates` by `rank`), and `qualified_jobs.json` has neither. It is the one view that answers
-   "which job number should I pick", because its `index` is the same 1-based number `--only`,
-   `materials_*_N` and `apply --max` use. **Reach for it instead of joining the files by hand.** It
-   reports `matched` alongside `total`: `matched < total` means some jobs never appeared in any
-   matching artifact (usually a crawl-only run), not that their scores are genuinely blank.
+   `ranked` 接受的是**运行目录**，不是文件——分数和判定依模式分散在最多四个不同的文件里（`scored_jobs` → `job_classification` → `deep_results`，通过 `deep_candidates` 按 `rank` 连接），而 `qualified_jobs.json` 两者都没有。它是唯一能回答"我该挑几号岗位"的视图，因为它的 `index` 就是 `--only`、`materials_*_N` 和 `apply --max` 用的同一个从 1 开始计数的编号。**优先用它，而不要手工去连文件。** 它会同时报告 `matched` 和 `total`：`matched < total` 说明有些岗位从未出现在任何匹配产物里（通常是只爬不匹配的运行），而不是分数真地是空的。
 
-3. **Run the long stages in the background and grep the output.** `crawl` takes tens of minutes and
-   `deep`/`materials` print one line per job — piping all of it through your context is what triggers
-   compaction. Start them with `run_in_background`, then read only what matters:
+3. **在后台跑长阶段并用 grep 过滤输出。** `crawl` 要几十分钟，`deep`/`materials` 每个岗位打印一行——把全部输出灌进你的上下文正是触发压缩的原因。用 `run_in_background` 启动它们，然后只读关键部分：
 
    ```bash
-   grep -E "✅|❌|⚠|阶段|失败|写入" <background task output file> | tail -20
+   grep -E "✅|❌|⚠|阶段|失败|写入" <后台任务输出文件> | tail -20
    ```
 
-Timings land in `{run_dir}/run_timings.jsonl` automatically — every stage instruments itself, so
-there is nothing to mark by hand. `python scripts/stage_timer.py report <run_dir>` ranks them.
+耗时自动落在 `{run_dir}/run_timings.jsonl`——每个阶段都会自我埋点，所以不用手工标记。`python scripts/stage_timer.py report <run_dir>` 给它们排序。
 
-### Stage 0: Launch Resume Editor (path D)
+### 阶段 0：启动简历编辑器（路径 D）
 
-Serves the embedded ShowCV build (`app/`) locally and opens it in an isolated Chromium. No
-`pnpm install` or node needed. See [references/resume-editor.md](references/resume-editor.md) for
-design rationale, limitations, and the `storage.py` data-moving tool.
+在本地提供内嵌的 ShowCV 构建（`app/`）并在一个隔离的 Chromium 里打开它。不需要 `pnpm install` 或 node。
 
-**Step 1 — start the static server** (background task):
+**第 1 步——启动静态服务器**（后台任务）：
 
 ```bash
 python scripts/showcv/serve.py
 ```
 
-Wait for the ready signal and read the actual address from it:
+等待就绪信号并从它读出实际地址：
 
 ```bash
-until grep -q "SHOWCV_READY" "<background task output file>"; do sleep 0.3; done
-grep "SHOWCV_READY" "<background task output file>"
+until grep -q "SHOWCV_READY" "<后台任务输出文件>"; do sleep 0.3; done
+grep "SHOWCV_READY" "<后台任务输出文件>"
 ```
 
-First line is always `SHOWCV_READY http://127.0.0.1:<port>`, default 3090. **If that background
-process exits immediately but still printed `SHOWCV_READY`**: the service was already running and
-this run reused it. Use the address and continue — do NOT restart it or pick another port; the port
-is what scopes the user's saved resumes.
+第一行永远是 `SHOWCV_READY http://127.0.0.1:<port>`，默认 3090。**如果那个后台进程立刻退出却仍打印了 `SHOWCV_READY`**：说明服务已经在运行，本次复用了它。用那个地址继续——**不要**重启它或另选端口；端口正是用户保存的简历的作用域。
 
-**Step 2 — open the browser** (use the address from step 1, don't assume 3090):
+**第 2 步——打开浏览器**（用第 1 步的地址，别假设是 3090）：
 
 ```bash
 python scripts/showcv/launch.py http://127.0.0.1:3090
 ```
 
-Prints `url=` / `title=` / `profile=` on success, with `ShowCV` in the title. **If the title lacks
-`ShowCV` the script exits 1** — the build is incomplete or the server isn't up. Don't report success.
-Optional flags: `--headless`, `--close`, `--browser <exe>`.
+成功时打印 `url=` / `title=` / `profile=`，title 里有 `ShowCV`。**如果 title 里没有 `ShowCV` 脚本就退出 1**——构建不完整或服务器没起来。不要报告成功。可选参数：`--headless`、`--close`、`--browser <exe>`。
 
-**Step 3 — report to the user**: the URL, that the browser is open, and **how to stop it** —
-`TaskStop` on the step-1 background task; they close the browser window themselves.
+**第 3 步——向用户报告**:URL、浏览器已打开，以及**怎么停下它**——对第 1 步的后台任务执行 `TaskStop`；浏览器窗口由用户自己关。
 
-Then stop. Path D ends here.
+然后停下。路径 D 到此结束。
 
-### Stages 0.5 / 0.6 / 0.7: ShowCV standalone tools (on request only)
+### 阶段 0.5 / 0.6 / 0.7：ShowCV 独立工具（仅在要求时）
 
-**Deliberately not wired into any path and not in the Progress checklist.** All three assume Stage 0
-already ran (server up, browser open) and fail rather than starting it themselves. Read the URL from
-Stage 0's `SHOWCV_READY` line — `--url` has no default on purpose.
+**刻意不接入任何路径，也不在进度清单里。** 三个工具都假设阶段 0 已经跑过（服务器起来、浏览器打开），失败也不自己启动。从阶段 0 的 `SHOWCV_READY` 行读 URL——`--url` 故意没有默认值。
 
 ```bash
-# 0.5 batch-import Markdown into the editor's resume list
-python scripts/showcv/import_md.py --url http://127.0.0.1:3090 <files-or-dirs> [-r] [--dry-run]
+# 0.5 批量把 Markdown 导入编辑器的简历列表
+python scripts/showcv/import_md.py --url http://127.0.0.1:3090 <文件或目录> [-r] [--dry-run]
 
-# 0.6 export resumes as images (repeatable --id, or --all; one call covers a batch)
+# 0.6 把简历导出为图片（可重复的 --id，或 --all；一次调用覆盖一个批次）
 python scripts/showcv/export_images.py --url http://127.0.0.1:3090 [--name N | --id I | --all] \
     [--mode paginated|flat] [--scale 1|2|3] [--out DIR] [--dry-run]
 
-# 0.7 delete resumes — destructive, localStorage is the only copy
+# 0.7 删除简历——破坏性操作，localStorage 是唯一副本
 python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --dry-run
 python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --yes
 ```
 
-`export_images.py` resolves names to ids locally, so a typo fails before anything is exported, and it
-confirms files reached disk rather than trusting the page's "已下载" text. `delete_resumes.py` without
-`--yes` only prints the plan; with `--yes` it backs up first (restore command printed), goes through
-the site's own confirmation page, and aborts if the names there differ from what it resolved. Unlike
-`/export`, a missing `id` is never taken to mean "the current resume".
+`export_images.py` 在本地把名字解析成 id，所以拼写错误会在导出任何东西之前就失败，而且它会确认文件真地落盘，而不是相信页面的"已下载"文字。`delete_resumes.py` 不带 `--yes` 只打印计划；带 `--yes` 先做备份（打印恢复命令），走站点自己的确认页，如果那里的名字与它解析出来的不一致就中止。与 `/export` 不同，缺失的 `id` 绝不会被当作"当前这份简历"。
 
-### parse — resume file → profile.json
+### parse —— 简历文件 → profile.json
 
-Ask for the resume file path, then one command:
+先问简历文件路径，然后一条命令：
 
 ```bash
 python scripts/pipeline.py "简历.pdf"
 ```
 
-PDF / Word / md / markdown / txt. It writes `resume_text.txt`, `profile.json` and
-`profile_validation.json` into a fresh run directory. **Don't read the resume to "check" a clean
-parse** — the validator already did, and the text costs context for no new information. Read
-`resume_text.txt` only when the validator exits 1, a hint looks like a real omission, or the user asks
-for a thorough check ([references/resume-parsing.md](references/resume-parsing.md)).
+PDF / Word / md / markdown / txt。它把 `resume_text.txt`、`profile.json` 和 `profile_validation.json` 写进一个全新的运行目录。**不要为了"检查"一次干净的 parse 而去读简历**——校验器已经做过了，而这段文本只会为毫无新信息地花掉上下文。只有当校验器退出 1、某条 hint 看起来像真实的遗漏、或用户要求彻底检查时，才去读 `resume_text.txt`。
 
-`profile_validation.json` is that validator's output. Exit code 1 from the parse stage means a known
-tech term appears in the resume but not in the profile — that is a dictionary lookup
-(`KNOWN_TECH_TERMS`), the one signal here independent of the model that produced the JSON. Anything
-it prints under `hints` (unmatched project/company names, thin skill categories) comes from loose
-regex: read hints, don't obey them, and don't let one become a gate. To re-run it alone:
+`profile_validation.json` 就是那个校验器的输出。parse 阶段退出码 1 表示简历里出现了一个已知的技术术语却没进 profile——那是一次字典查找（`KNOWN_TECH_TERMS`），是这里唯一不依赖产生 JSON 的那个模型的信号。它在 `hints` 下打印的任何东西（未匹配的项目/公司名、稀薄的技能类别）都来自宽松的正则：读 hints，别照做，也别让某一条变成闸门。单独重跑它：
 
 ```bash
 python scripts/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
 ```
 
-Use `read_thin.py --kind profile` if you need to confirm a specific field. The full `profile.json`
-schema is in [references/resume-parsing.md](references/resume-parsing.md) — **you never hand-write
-this file, so open that only to debug a field the parser got wrong.**
+需要确认某个具体字段时用 `read_thin.py --kind profile`。**你绝不手写 `profile.json`。**
 
-### infer — profile.json → crawl_params.json
+### infer —— profile.json → crawl_params.json
 
-`crawl_params.json` is **mandatory**, not an optimization: `crawl` builds its argv from it, and
-`match` reads `match_mode`/`top_n` out of it. Skipping this stage means the crawl cannot start and the
-match silently falls back to quick mode.
+`crawl_params.json` 是**必须的**，不是优化：`crawl` 用它的 argv 构建参数，`match` 从它读 `match_mode`/`top_n`。跳过这个阶段意味着爬取无法启动，匹配会静默回退到 quick 模式。
 
-**Default to 3–4 keywords, not fewer.** Crawl time is linear in keyword count, but a thin pool is
-worse than a long one — 1 keyword + 应届生筛选 once crawled only 19 rows and wasted a whole run;
-4 keywords + 经验不限 got 197. So default wide, spend the keywords on distinct concepts
-(`AI应用开发` and `大模型应用开发` are the same search), and let the match-stage scoring do the
-narrowing. A small market is the only reason to trim (2–3), and even then cap at the city budget
-(`keyword_budget` in `infer_params.py`: 3 small / 5 一线).
+**默认给 3–4 个关键词，别更少。** 爬取时间与关键词个数成线性，但稀薄的池子比长得多的难关更糟——1 个关键词 + 应届生筛选 曾经只爬出 19 行，浪费了整整一次运行；4 个关键词 + 经验不限拿到了 197。所以默认给宽，把关键词花在区分度高的概念上（`AI应用开发` 和 `大模型应用开发` 是同一个搜索），让匹配阶段的打分来做收窄。小市场是唯一要削减（2–3）的理由，即便如此也要封顶在城市预算之内（`infer_params.py` 里的 `keyword_budget`：3 个 小城市 / 5 个 一线）。
 
-Confirm in **two** `AskUserQuestion` calls plus one small follow-up (4 questions max per call):
+用**两次** `AskUserQuestion` 调用加一次小小的后续来确认（每次最多 4 个问题）：
 
-1. **爬取与匹配核心** — city, keywords (multi-select, default 3-4), match mode (quick/deep), deep's Top-N.
-2. **列表筛选** — experience, job type, salary floor, company scale. **Experience defaults to
-   `经验不限`** — don't narrow it by the resume's years; the match stage does that. The other
-   filters' first option is the candidate-appropriate default, so accepting is one click; leave one
-   empty to skip that filter.
-3. **最低岗位数量 (`min_count`)** — the floor below which a crawl counts as thin. Default ~10, 0
-   disables the check. Separate because it is a sufficiency threshold, not a list filter.
+1. **爬取与匹配核心** —— 城市、关键词（多选，默认 3-4 个）、匹配模式（quick/deep）、deep 的 Top-N。
+2. **列表筛选** —— 经验、职位类型、薪资下限、公司规模。**经验默认是 `经验不限`**——不要按简历里的年数去收窄它；匹配阶段会做。其余筛选的第一个选项就是适合候选人的默认，所以接受就是一次点击；留空一个就跳过该筛选。
+3. **最低岗位数量（`min_count`）** —— 低于它的爬取就算稀薄。默认约 10，0 关闭检查。单独拎出来是因为它是充足性阈值，不是列表筛选。
 
-Then pass every confirmed value as a flag. Fully-specified parameters mean the stage makes **no model
-call at all** — it only calls the model for the fields you leave out:
+然后把每个确认过的值作为 flag 传进去。参数完全指定意味着该阶段**根本不调模型**——它只为那些你留空的字段调模型：
 
 ```bash
 python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
@@ -306,30 +216,21 @@ python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发
     --job-type 全职 --salary 5-10K --min-count 10
 ```
 
-Accepted filter values — the Chinese labels below are the whole set (`boss_crawler/config.py:42-89`).
-An unrecognised value is **warned about and skipped**, which silently drops that filter rather than
-failing, so a typo here quietly widens the search:
+可接受的筛选值——下面这些中文标签就是全集（`boss_crawler/config.py:42-89`）。无法识别的值会被**警告并跳过**，这会让该筛选静默丢失而不是失败，所以这里的拼写错误会悄悄把搜索范围放宽：
 
-| flag | accepted values |
+| flag | 可接受的值 |
 |---|---|
-| `--job-type` | `全职` `实习` `兼职` — there is **no `校招`** |
+| `--job-type` | `全职` `实习` `兼职` ——**没有 `校招`** |
 | `--salary` | `3K以下` `3-5K` `5-10K` `10-20K` `20-50K` `50K以上` |
 | `--experience` | `在校生` `应届生` `经验不限` `1年以内` `1-3年` `3-5年` `5-10年` `10年以上` |
 | `--degree` | `初中及以下` `中专/中技` `高中` `大专` `本科` `硕士` `博士` |
-| `--scale` | `0-20人` `20-99人` `100-499人` `500-999人` `1000-9999人` `10000人以上` — never inferred, only given |
+| `--scale` | `0-20人` `20-99人` `100-499人` `500-999人` `1000-9999人` `10000人以上` —— 从不推断，只给定 |
 
-`不限` is skipped for these five — prefer omitting the flag. **`--city` is the exception, and it is
-also the one field that must have a value**: nationwide is a *city value*, so write it out
-(`--city 全国`, or `不限`). Omitting `--city` exits 1 rather than quietly searching nationwide.
-Keywords the model can usually infer; the city it cannot.
+这五种里 `不限` 会被跳过——优先省略该 flag。**`--city` 是例外，而且它也是唯一必须要有值的字段**：全国是一个*城市值*，所以要写出来（`--city 全国`，或 `不限`）。省略 `--city` 会退出 1，而不是悄悄全国搜索。关键词模型通常能推断；城市它不能。
 
-`--count` is the cap **per city per keyword** (default 0 = unlimited), so it multiplies by
-keywords × cities and is the main lever on crawl duration — `--count 20` with 3 keywords in 2 cities
-is up to 120 jobs, not 20. (If you ever call the crawler directly, its `-c all` means *every one of
-the 374 cities, one by one* — almost never what anyone wants.)
+`--count` 是**每个城市每个关键词**的上限（默认 0 = 不限制），所以它要乘以关键词 × 城市，是爬取时长的最大杠杆——`--count 20` 配 3 个关键词 2 个城市，最多 120 个岗位，不是 20。（如果你直接调用爬虫，它的 `-c all` 表示*374 个城市一个一个爬*——几乎从不是任何人想要的。）
 
-Then save the answers so the next run can replay them (path C). This writes the whole set, so
-`--replace` is right here; later single-field touch-ups drop the flag and merge:
+然后把答案保存下来，这样下次运行可以重放（路径 C）。这会写入整组，所以这里用 `--replace` 是对的；之后单字段微调就去掉这个 flag 走合并：
 
 ```bash
 python scripts/preferences.py save --replace --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
@@ -337,294 +238,196 @@ python scripts/preferences.py save --replace --city 太原 --keywords "AI应用�
     --job-type 全职 --salary 5-10K --min-count 10
 ```
 
-**Keep this gate even when the inference looks unambiguous.** The crawl is an outward-facing action
-driven through the user's own logged-in browser: wrong parameters cost a long crawl plus a batch of
-useless data, and there is nothing to undo. What gets collapsed here is rounds of typing, not the
-confirmation.
+**即使推断看起来毫无歧义，也要保留这道闸门。** 爬取是透过用户自己登录的浏览器驱动的对外动作：参数错了，代价是一次漫长的爬取加一批没用的数据，而且没有任何可撤销的东西。这里被压缩掉的是多轮输入，不是确认本身。
 
-### crawl — → assets/post_data/**.csv (paths A, C)
+### crawl —— → assets/post_data/**.csv（路径 A、C）
 
-Login first. This one is interactive by nature, so run it in the foreground:
+先登录。这一步天然是交互式的，跑在前台：
 
 ```bash
 python scripts/boss_post_interactive.py --ensure-login
 ```
 
-`[LOGIN_OK]` → browser closes, continue. `[LOGIN_NEEDED]` → browser stays open, the user logs in and
-tells you 已登录, then re-run. Login state persists in `assets/chrome_user_data/`.
+`[LOGIN_OK]` → 浏览器关闭，继续。`[LOGIN_NEEDED]` → 浏览器保持打开，用户登录后告诉你 已登录，然后重跑。登录状态保存在 `assets/chrome_user_data/`。
 
-Then crawl — **background task, tens of minutes**, argv built from `crawl_params.json`:
+然后爬取——**后台任务，几十分钟**，argv 由 `crawl_params.json` 构建：
 
 ```bash
 python scripts/pipeline.py --from crawl
 ```
 
-The floor check runs afterwards on its own: the threshold comes from `min_count` in
-`crawl_params.json`, and `--min-jobs N` only overrides it. A missing `crawl_summary.json` means
-**nothing was crawled** —
-the crawler exits 0 when it detects a logged-out session, so exit code alone cannot tell you. When
-the floor trips, **stop and ask the user** — 换关键词 / 放宽筛选 / 接受现状（继续，`--min-jobs 0`）—
-rather than proceeding on a thin pool. A small-city crawl can legitimately end early; that is the
-case this check exists to surface, not to override.
+之后下限检查自己跑：阈值来自 `crawl_params.json` 里的 `min_count`，`--min-jobs N` 只覆盖它。缺失 `crawl_summary.json` 意味着**什么都没爬到**——爬虫在检测到已登出会话时会以 0 退出，所以光靠退出码看不出来。当下限触发时，**停下问用户**——换关键词 / 放宽筛选 / 接受现状（继续，`--min-jobs 0`）——而不是拿着稀薄的池子硬往下走。小城市爬取可以合理地提前结束；这正是这个检查要暴露的情况，而不是要覆盖掉。
 
-Row count is an upper bound on jobs and it counts **the whole `assets/post_data/` pool**, not just
-this run: one job matching three keywords is written three times and deduped at load.
-Every filter value you need is in the table above; [references/crawl-commands.md](references/crawl-commands.md)
-adds the flags that only matter when you drive `boss_crawler` directly instead of through the pipeline.
+行数只是岗位数的上界，而且它数的是**整个 `assets/post_data/` 池子**，不只是本次运行：一个命中三个关键词的岗位会被写三次，加载时去重。你需要的每个筛选值都在上面的表里。
 
-### match → deep → merge — scoring and the report
+### match → deep → merge —— 打分与报告
 
-One command covers all three; `deep`/`merge` no-op in quick mode:
+一条命令覆盖全部三个；quick 模式下 `deep`/`merge` 是空操作：
 
 ```bash
-python scripts/pipeline.py --from match          # deep mode: background task, one request per job
+python scripts/pipeline.py --from match          # deep 模式：后台任务，每个岗位一次请求
 ```
 
-- **quick** — rule-based 6-dimension scoring (0-115 pts), seconds, zero token cost.
-- **deep** — rule pre-filter to Top-N, then one model request per candidate, then a merge that blends
-  rule score (40%) with model score (60%), reclassifies, and regenerates the report.
+- **quick** —— 基于规则的 6 维打分（0-115 分），数秒，零 token 成本。
+- **deep** —— 规则预筛到 Top-N，然后每个候选一次模型请求，再做一次合并，把规则分（40%）与模型分（60%）融合、重新分类并重新生成报告。
 
-Both write `matching_report.html` and `qualified_jobs.json` (the apply pool = 符合 + 需优化, in raw
-crawled fields). **Never hand-write `qualified_jobs.json`.** Don't call `generate_html_report()`
-yourself either — the script already did, and after a CLI run you don't hold the object it needs.
+两者都写 `matching_report.html` 和 `qualified_jobs.json`（投递池 = 符合 + 需优化，用原始爬取字段）。**绝不手写 `qualified_jobs.json`。** 也别自己调 `generate_html_report()`——脚本已经调过了，而且 CLI 运行之后你手里也没有它需要的那个对象。
 
-Open the report for the user: `Invoke-Item {run_dir}\matching_report.html` (PowerShell) or
-`start {run_dir}/matching_report.html` (Bash). The 6-dimension score breakdown and the alias
-normalisation live in [references/matching.md](references/matching.md) — **you consume
-`application_category` and `match_score`, you never recompute them, so open it only if a score looks
-wrong.**
+为用户打开报告：`Invoke-Item {run_dir}\matching_report.html`（PowerShell）或 `start {run_dir}/matching_report.html`（Bash）。**你消费 `application_category` 和 `match_score`，你绝不去重算它们。**
 
-Every job carries one of three `application_category` values — the enum is English, the report is
-Chinese, and both `read_thin.py --kind jobs` and `--kind ranked` print the raw enum, so translate it
-yourself when you speak to the user:
+每个岗位带三个 `application_category` 值之一——枚举是英文，报告是中文，而 `read_thin.py --kind jobs` 和 `--kind ranked` 都打印原始枚举，所以跟用户说话时你自己翻译：
 
-| enum | 中文 | means |
+| 枚举 | 中文 | 含义 |
 |---|---|---|
-| `qualified` | 符合 | no hard gate hit, skills and experience already there |
-| `need_optimization` | 需优化 | no hard gate hit, gap is closable — includes 经验差 1–3 年 / 薪资差 3–8K |
-| `cannot_apply` | 不可投递 | **a hard gate fired** |
+| `qualified` | 符合 | 没碰到硬闸门，技能和经验已在 |
+| `need_optimization` | 需优化 | 没碰到硬闸门，差距可弥合——包括 经验差 1–3 年 / 薪资差 3–8K |
+| `cannot_apply` | 不可投递 | **打中了硬闸门** |
 
-Only three things reach `cannot_apply`, and total score never overrides them
-(`resume_matcher/scoring.py:320-354`): degree below the JD's requirement, experience gap ≥ 3 years, or
-salary gap > 8K. Never describe a middle-band job as 不可投递.
+只有三件事会落到 `cannot_apply`，而且总分永远盖不过它们（`resume_matcher/scoring.py:320-354`）：学历低于 JD 的要求、经验差距 ≥ 3 年、或薪资差距 > 8K。绝不要把中档岗位说成 不可投递。
 
-**Deep mode sends one request per job, so partial failure is normal.** `deep` exiting **3** means the
-results file is written but some ranks are missing — top up with `--resume` instead of re-running the
-whole stage:
+**deep 模式每个岗位发一次请求，所以部分失败是常态。** `deep` 退出 **3** 表示结果文件已写但部分 rank 缺失——用 `--resume` 补齐，而不是重跑整个阶段：
 
 ```bash
-python scripts/deep_analyze.py <run_dir> --resume    # skips ranks already in deep_results.json
+python scripts/deep_analyze.py <run_dir> --resume    # 跳过 deep_results.json 里已有的 rank
 ```
 
-`deep_results.json` maps back onto the candidates by **`rank`**, not by `job_id` or link — that is the
-only alignment key, and a rank mix-up assigns one job's analysis to another with no error anywhere.
-`read_thin.py --kind ranked` already does that join; use it rather than reconstructing it.
+`deep_results.json` 靠 **`rank`** 映射回候选，而不是靠 `job_id` 或 link——那是唯一的对齐键，一旦 rank 错位，就会把某岗位的分析安到另一个岗位上而没有任何地方报错。`read_thin.py --kind ranked` 已经做这个连接了；用它而不是自己重建。
 
-### gate:jobs — one question, three axes
+### gate:jobs —— 一个问题，三个轴
 
-Show the table first (`read_thin.py --kind ranked` for score + verdict + company + position in one
-table, or `--kind jobs` for the crawl columns — never `Read` the file), then **one**
-`AskUserQuestion` covering three mutually independent choices:
+先展示表格（`read_thin.py --kind ranked` 把分数 + 判定 + 公司 + 职位放一张表，或 `--kind jobs` 拿爬取列——绝不 `Read` 文件），然后**一次** `AskUserQuestion` 覆盖三个互相独立的抉择：
 
-Three of the columns `--kind jobs` prints are decision signals, not detail — surface them in the table
-instead of letting the user pick a dead job:
+`--kind jobs` 打印的三列是决策信号，不是细节——把它们放进表格里，而不是让用户在死岗位上瞎选：
 
-- `已失效=是` — BOSS returned `invalidStatus=true`; applying is wasted, drop it from the range
-- `代招=是`, or `HR公司` ≠ `公司` — the contact is a headhunter/outsourcer, not the employer's own HR
-- all three are **tri-state**: an empty value means 未采集 (the crawl ran without `-d`), never 否
+- `已失效=是` —— BOSS 返回了 `invalidStatus=true`；投了也白投，把它从范围里拿掉
+- `代招=是`，或 `HR公司` ≠ `公司` —— 联系人是猎头/外包，不是雇主自己的 HR
+- 三者都是**三态**：空值表示 未采集（爬取是没带 `-d` 跑的），绝不是 否
 
-| Axis | Options |
+| 轴 | 选项 |
 |---|---|
-| 投递范围 | which jobs (job selection doesn't change the other two) |
+| 投递范围 | 投哪些岗位（岗位选择不影响另外两个） |
 | 招呼语生成方式 | 自定义 / 默认模板 / AI生成 |
 | 是否发送图片 | 自定义上传 / AI调整（渲染长图） / 不发送 |
 
-Map the answers onto flags rather than post-editing files:
+把答案映射成 flag，而不是事后编辑文件：
 
-| Answer | How it is executed |
+| 答案 | 如何执行 |
 |---|---|
-| 投递范围 = a subset | `--only 1,3,5-7` on `materials` **and** `render` (1-based index into `qualified_jobs.json`) — don't rewrite the file |
-| 招呼语 **自定义** | write the text to `{run_dir}/generated/greeting_{i}_custom.txt` for each chosen `i`, then run materials with `--greeting-mode skip`… or leave the mode at `ai`: an existing non-empty artifact is skipped, never overwritten |
-| 招呼语 **默认模板** | `--greeting-mode default` (rule template, no model call) |
-| 招呼语 **AI生成** | `--greeting-mode ai` (default) |
-| 图片 **自定义上传** | validate the path, `--resume-mode skip`, then `apply.py --image <path>` at send time. `skip` also suppresses `render` — the generated PNG would never be sent ([auto-apply.md](references/auto-apply.md)) |
-| 图片 **AI调整** | default: `materials` writes the resume JSON, `render` turns it into the long image |
-| 图片 **不发送** | `pipeline.py --no-images`, and `apply.py --no-image` at send time |
+| 投递范围 = 子集 | 在 `materials` **和** `render` 上用 `--only 1,3,5-7`（对 `qualified_jobs.json` 从 1 开始计数的下标）——别去改文件 |
+| 招呼语 **自定义** | 把文字写进每个选中的 `i` 的 `{run_dir}/generated/greeting_{i}_custom.txt`，然后用 `--greeting-mode skip` 跑 materials…或把模式留在 `ai`：已存在的非空产物会被跳过，绝不覆盖 |
+| 招呼语 **默认模板** | `--greeting-mode default`（规则模板，不调模型） |
+| 招呼语 **AI生成** | `--greeting-mode ai`（默认） |
+| 图片 **自定义上传** | 校验路径，`--resume-mode skip`，发送时 `apply.py --image <path>`。`skip` 也会抑制 `render`——生成的 PNG 反正不会被发送 |
+| 图片 **AI调整** | 默认：`materials` 写简历 JSON，`render` 把它变成长图 |
+| 图片 **不发送** | `pipeline.py --no-images`，发送时 `apply.py --no-image` |
 
-**The first 15 characters of a greeting are the only part most HR ever see.** BOSS's message-list
-preview truncates there, so `您好，我是…` spends the whole window on nothing. The rules and
-per-scenario formulas live in `scripts/prompts/greeting.st` — one copy, don't paraphrase.
+**招呼语的前 15 个字是大多数 HR 唯一会看到的部分。** BOSS 的消息列表预览在那里截断，所以 `您好，我是…` 把整个窗口都浪费在废话上了。规则和各场景公式在 `scripts/prompts/greeting.st`——唯一来源，别转述。
 
-`materials` already guards the **AI** path: it runs the check, spends one extra call to re-front-load
-a bad opening, and prints `N 条招呼语的前 15 字被客套话占掉，已重写：…`. Don't re-audit those. Three
-cases stay unguarded — check them yourself, importing from the package (not `auto_apply` bare):
+`materials` 已经守住了 **AI** 路径：它跑检查，花一次额外调用把糟糕的开头重新前置，并打印 `N 条招呼语的前 15 字被客套话占掉，已重写：…`。别再去复查那些。有三种情况留着没守住——你自己查，从包里导入（不是裸 `auto_apply`）：
 
 ```bash
 python -c "from resume_matcher.auto_apply import has_wasted_preview; print(has_wasted_preview(open('X.txt',encoding='utf-8').read()))"
 ```
 
-- `--greeting-mode default` — the offline template path never checks at all
-- a 自定义 text the user typed — never checked
-- an AI greeting whose retry also failed — kept as-is and **not** named in that print line
+- `--greeting-mode default` —— 离线模板路径从不检查
+- 用户手动打的一段自定义文字 —— 从不检查
+- 一段重试也失败了的 AI 招呼语 —— 原样保留，且**不会**出现在那行打印里
 
-If the check fails, say so and offer to re-front-load it, but **never silently rewrite a
-user-supplied greeting.**
+如果检查失败，说出来并提供重新前置，但**绝不静默改写用户提供的招呼语。**
 
-### materials — greetings + optimized resumes
+### materials —— 招呼语 + 优化后简历
 
 ```bash
-python scripts/pipeline.py --from materials --only 1,3,5     # background task
+python scripts/pipeline.py --from materials --only 1,3,5     # 后台任务
 ```
 
-Two model requests per job (greeting + resume rewrite), so this is the stage that spends money on the
-list the user just approved — which is exactly why `gate:jobs` comes first. Products are
-`generated/greeting_{i}_{company}.txt` and `generated/resume_{i}_{company}.json`, where `{i}` is the
-1-based index in `qualified_jobs.json`. **The index is the alignment key for everything downstream**,
-so a failed job leaves a gap rather than shifting the others.
+每个岗位两次模型请求（招呼语 + 简历改写），所以这是对用户刚批准的岗位列表花钱的阶段——这正是 `gate:jobs` 先行的原因。产物是 `generated/greeting_{i}_{company}.txt` 和 `generated/resume_{i}_{company}.json`，其中 `{i}` 是 `qualified_jobs.json` 里从 1 开始计数的下标。**这个下标是下游一切的对齐键**，所以一个失败的岗位会留下空隙，而不是把后面的都错位。
 
-Partial success exits 3, not 1. Check and top up only what is missing — existing non-empty artifacts
-are skipped, never overwritten (`--force` to overwrite):
+部分成功退出 3，不是 1。检查并只补齐缺失的——已存在的非空产物会被跳过，绝不覆盖（`--force` 才覆盖）：
 
 ```bash
 python scripts/check_artifacts.py {run_dir}
-python scripts/gen_materials.py {run_dir} --only 4        # just the one that failed
+python scripts/gen_materials.py {run_dir} --only 4        # 只补那个失败的
 ```
 
-**A job whose material fails is dropped from the batch, not retried forever.** Exclude it from
-`render` and from the apply list, and tell the user at `gate:send`.
+**材料失败的岗位会从批次里剔除，而不是无限重试。** 把它从 `render` 和投递列表里排除，并在 `gate:send` 告诉用户。
 
-### verify — did the model invent a skill?
+### verify —— 模型有没有凭空造技能？
 
 ```bash
 python scripts/pipeline.py --from verify
 ```
 
-Stdlib only, no model call, seconds to run. It collects every technology term in the text that
-actually gets sent — `optimized_resume` and the greetings — and reports the ones with no basis in
-`resume_text.txt` / `profile.json`. A resume rewrite that quietly adds PyTorch or Kubernetes is the
-single worst failure mode in this skill: the user takes it to an interview and cannot answer for it.
+只用标准库，不调模型，几秒跑完。它收集真正会被送出去的文本里的每个技术术语——`optimized_resume` 和招呼语——并报告那些在 `resume_text.txt` / `profile.json` 里没有依据的。一次悄悄加进 PyTorch 或 Kubernetes 的简历改写是本 skill 最糟糕的失败模式：用户带着它去面试，却答不上来。
 
-**Exit 1 means it found something, not that it broke.** The pipeline stops before `render` on
-purpose — once the long image exists the material reads as final. Each hit is printed with
-surrounding context so it can be judged; then pick one of two paths:
+**退出 1 表示它发现了问题，不是它坏了。** 流水线故意在 `render` 之前停下——长图一旦存在，材料读起来就是定稿。每个命中都带着周围上下文打印出来，好让人判断；然后选两条路之一：
 
 ```bash
-# fabricated → regenerate those jobs
+# 确系编造 → 重新生成那些岗位
 python scripts/gen_materials.py {run_dir} --only 1,3 --force
-# defensible (it *is* in the resume, just worded differently) → whitelist and continue
+# 站得住脚（它*确实*在简历里，只是措辞不同）→ 加白名单并继续
 python scripts/pipeline.py --run-dir {run_dir} --from verify --all --allow PyTorch,nginx
 ```
 
-**Never pass `--allow` or `--skip-verify` on your own initiative** — both are the user's call, since
-both end with材料 going out the door. Show the list and ask. (`apply.py` has its own unrelated
-`--skip-verify` for the *image* health check; don't carry a decision about one over to the other.)
+**绝不要自作主张传 `--allow` 或 `--skip-verify`**——两者都是用户的决定，因为两者都以材料出门告终。把列表展示出来并询问。（`apply.py` 有自己的、不相关的 `--skip-verify`，用于*图片*健康检查；别把关于一个的决定搬到另一个身上。）
 
-What it cannot catch: exaggeration. 「了解」 rewritten as 「精通」, three months of an internship
-stretched to a year, a tone that doesn't sound like the user — no term-matching finds any of that, so
-`gate:send` still means reading the material. Two more limits worth knowing: it only scores
-Latin-script terms (Chinese phrases like 多智能体面试系统 never register), and `optimization_suggestions`
-is deliberately out of scope, since proposing skills the resume lacks is that field's whole job.
+它抓不到的：夸大其词。「了解」被改写为「精通」、三个月实习被拉长到一年、一种不像用户的语气——任何术语匹配都发现不了这些，所以 `gate:send` 仍然意味着要读材料。还有两个值得知道的局限：它只评估拉丁字母词（像 多智能体面试系统 这样的中文短语永远不登记），而且 `optimization_suggestions` 刻意排除在外，因为给一份简历提出它缺的技能正是那个字段的全部工作。
 
-Exit codes: `0` clean · `1` findings, or no baseline / no materials to check (nothing checked is not
-the same as clean) · `2` bad `--only` · `3` finished but some materials were unreadable — those were
-never checked, so read them yourself.
+退出码：`0` 干净 · `1` 有发现，或没有基准 / 没有可检查的材料（没检查不等于干净）· `2` 坏的 `--only` · `3` 跑完了但有些材料不可读——那些从没被检查过，所以你自己读。
 
-It writes `verify_report.json` recording which files it checked and at what mtime, which is how
-`where_am_i.py` knows the stage ran — and knows a `✅` went stale when a material was regenerated.
-A `--only` run writes no report (a subset result would mark unchecked files as checked).
+它写 `verify_report.json`，记录它检查了哪些文件以及什么 mtime，这正是 `where_am_i.py` 知道该阶段跑没跑过的方式——也在一份材料被重新生成时知道某个 `✅` 已经过期。一次 `--only` 运行不写报告（子集结果会把没检查过的文件标记成已检查）。
 
-### render — resume long-images
+### render —— 简历长图
 
 ```bash
 python scripts/pipeline.py --from render --only 1,3,5
 ```
 
-**Serial by design — there is no `--workers`.** All resumes share one browser, one origin and one
-`localStorage`; concurrency only makes them trample each other. The script refuses to run when debug
-port 9333 is held by a browser whose `--user-data-dir` isn't `assets/showcv_profile` — that port may
-be an *adopted* browser holding the user's real resumes (see
-[references/resume-editor.md](references/resume-editor.md)). Never pass `--adopt-browser` on the
-user's behalf.
+**设计上就是串行——没有 `--workers`。** 所有简历共用一个浏览器、一个 origin 和一个 `localStorage`；并发只会让它们互相踩踏。脚本在调试端口 9333 被一个 `--user-data-dir` 不是 `assets/showcv_profile` 的浏览器占住时拒绝运行——那个端口可能是持有用户真实简历的*被接管的*浏览器。绝不要替用户传 `--adopt-browser`。
 
-Skip the stage entirely with `--no-images` when the user chose 不发送.
+当用户选了 不发送 时，用 `--no-images` 整个跳过该阶段。
 
-**The attachment filename is `<姓名>-<应聘岗位>`, so this stage needs a real name.** When
-`profile.json`'s `basic_info.name` is empty or a placeholder (`未提取` / `未知` / `无` / …) the script
-exits 1 rather than rendering `未提取-Python工程师.png` — HR would see that string. Pass
-`--name "真实姓名"` (the same flag exists on `apply.py`). Exit codes here: `0` every image rendered,
-`1` a precondition failed and nothing ran, `3` the stage finished but some jobs have no image — check
-which before `gate:send`.
+**附件文件名是 `<姓名>-<应聘岗位>`，所以这个阶段需要一个真名。** 当 `profile.json` 的 `basic_info.name` 为空或占位符（`未提取` / `未知` / `无` / …）时，脚本退出 1，而不是渲染一张 `未提取-Python工程师.png`——HR 会看到那个字符串。传 `--name "真实姓名"`（`apply.py` 上有同一个 flag）。这里的退出码：`0` 每张图都渲染了，`1` 前置条件失败且什么都没跑，`3` 阶段跑完但部分岗位没有图——在 `gate:send` 之前检查是哪些。
 
-### Materials on disk, then a look
+### 材料落盘，然后看一眼
 
 ```bash
 python scripts/write_application_md.py "{run_dir}" --all
 python scripts/verify_image.py "{run_dir}/applications" --all
 ```
 
-The first writes `applications/{company}-{position}/岗位信息+招呼语.md` per job — all crawled fields
-plus the greeting. Never hand-write it. The second is how you check the images: it returns a dozen
-lines of numbers instead of a 639k-token screenshot. If the user wants to see one, give them the
-path and let them open it.
+前者为每个岗位写 `applications/{company}-{position}/岗位信息+招呼语.md`——所有爬取字段加招呼语。绝不手写它。后者是你检查图片的方式：它返回十几行数字，而不是一张 639k token 的截图。如果用户想看某一张，把路径给他们，让他们自己打开。
 
-### gate:send — approve, then apply
+### gate:send —— 批准，然后投递
 
-One `AskUserQuestion`: 全部投递 / 返回修改 / 取消投递. Then, and only then:
+一次 `AskUserQuestion`：全部投递 / 返回修改 / 取消投递。然后，也只有在这之后：
 
 ```bash
-python scripts/apply.py "{run_dir}"                # dry run: prints the list, touches no browser
-python scripts/apply.py "{run_dir}" --yes          # sends
+python scripts/apply.py "{run_dir}"                # 干跑：打印列表，不碰浏览器
+python scripts/apply.py "{run_dir}" --yes          # 发送
 ```
 
-**`--yes` is the only irreversible step in this skill** — a sent message arrives instantly and cannot
-be recalled. Always dry-run first and show that list. `gate:send` is **not mergeable and not
-presetable**: it must see the materials that actually landed on disk, so it cannot move earlier, and
-no saved preference may stand in for it. `pipeline.py` never runs `apply.py`, not even with `--all`.
+**`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--all` 也不。
 
-Useful flags: `--only 1,3,5`, `--company 百度,棱镜数聚`, `--max N`, `--image <path>`, `--no-image`,
-`--name 张三`. Results land in `{run_dir}/apply_log.json`. Three checks refuse to send rather than
-warn — missing greeting, missing/blank attachment image, unreadable run directory.
+有用的参数：`--only 1,3,5`、`--company 百度,棱镜数聚`、`--max N`、`--image <path>`、`--no-image`、`--name 张三`。结果落在 `{run_dir}/apply_log.json`。三个检查拒绝发送而不是警告——缺招呼语、缺/空附件图片、运行目录不可读。
 
-Two of those flags bite:
+其中两个参数会咬人：
 
-- **`--company` is all-or-nothing.** One name that matches nothing (a typo, a full name where the
-  pool holds a 简称) exits 1 and sends to *nobody*, including the companies that did match. Names are
-  substring-matched against the pool; a dry run prints the exact menu of what you can pass.
-- **`--max N` takes the first N of `qualified_jobs.json` order, which is 符合 first then 需优化, and
-  unsorted by score inside each group** (`deep_analysis.py:377` writes the raw lists; only the report's
-  copies get sorted). So `--max 5` is not "the best 5". If the user wants the best N, pass explicit
-  `--only` indexes read off the report. The HR-activity-first ordering documented in
-  [auto-apply.md](references/auto-apply.md) belongs to the library entry point
-  `auto_apply.apply_to_jobs(max_applications=…)`, **not** to this CLI.
+- **`--company` 是全有或全无。** 一个匹配不到任何东西的名字（拼写错误、池子里存的是简称却给了全名）会退出 1 并发送给*零个人*，包括那些确实匹配上的公司。名字对池子做子串匹配；干跑会打印一份你能传的确切菜单。
+- **`--max N` 取 `qualified_jobs.json` 顺序的前 N 个，而那个顺序是 符合 在前、需优化 在后，每组内部不按分数排序**（`deep_analysis.py:377` 写的是原始列表；只有报告里的副本会被排序）。所以 `--max 5` 不是"最好的 5 个"。如果用户要最好的 N 个，传从报告读出来的显式 `--only` 下标。HR 活跃优先的排序属于库的入口点 `auto_apply.apply_to_jobs(max_applications=…)`，**不属于**这个 CLI。
 
-See [references/auto-apply.md](references/auto-apply.md) for the directory layout and the
-send-then-verify readback.
+## references/ —— 留下的那一份文档
 
-## references/ — who each file is for
+**一次运行需要的一切都在本文件里。** `references/` 下唯一的文档是 `cli.md`，命令行路径参考。如果你发现自己正要用 shell 命令去探一个*常量*——一个合法值、一个键名、一个退出码——它就在本文件，上面。
 
-**Everything a run needs is in this file.** The seven docs under `references/` are 2000+ lines of
-maintainer material: incident write-ups, design rationale, internal mechanics. If you find yourself
-about to probe with a shell command for a *constant* — a legal value, a key name, an exit code — it is
-in this file, above. Open a reference only for the trigger listed here.
-
-| file | reader / trigger |
+| 文件 | 读者 / 触发时机 |
 |---|---|
-| [cli.md](references/cli.md) | **Troubleshooting.** A command failed in a way this file doesn't explain, or you need a flag not listed above |
-| [crawl-commands.md](references/crawl-commands.md) | **Driving `boss_crawler` directly**, outside the pipeline |
-| [matching.md](references/matching.md) | **A score looks wrong** and you need the 6-dimension breakdown |
-| [resume-parsing.md](references/resume-parsing.md) | **The parser got a field wrong** and you need the `profile.json` schema |
-| [auto-apply.md](references/auto-apply.md) | **Send-time layout**, the readback protocol, or the library entry point |
-| [resume-editor.md](references/resume-editor.md) | **ShowCV only** (paths D / 0.5 / 0.6 / 0.7). Not resume-content rules |
-| [scripts.md](references/scripts.md) | **Maintainer index** of modules and functions. Grep it; don't read it |
+| [cli.md](references/cli.md) | **故障排查。** 一条命令以本文件无法解释的方式失败，或你需要一个上面没列出的 flag |
 
-## Key Principles
+## 关键原则
 
-1. **Rule-first, then LLM**: Python rule scoring pre-filters; the model deep-analyzes only top candidates
-2. **Never fabricate**: resume optimization must not invent experience or skills. The three
-   `basic_info.availability` fields — 到岗日期 / 可实习时长 / 每周出勤 — are stricter still: they are
-   scheduling *promises* an HR will act on, so they may only be copied from the resume. If they are
-   `null`, the greeting says nothing about timing and you ask the user; never derive a date from
-   enrolment or graduation year (`prompts/resume_parse.st:92`, `prompts/greeting.st:46`)
-3. **Safe applying**: 3-5s between applications, max 10-20 per session, pause on captcha
-4. **Always visualize**: generate and open the HTML report for every run
-5. **Artifacts on disk are the truth**: judge a stage by its files and exit code, never by a notification
+1. **规则优先，然后才是 LLM**：Python 规则打分预筛；模型只对顶部候选做深度分析
+2. **绝不编造**：简历优化不得发明经历或技能。三个 `basic_info.availability` 字段——到岗日期 / 可实习时长 / 每周出勤——更严格：它们是 HR 会据以行动的排期*承诺*，所以只能从简历复制。如果它们是 `null`，招呼语就什么也不说时间安排，并去问用户；绝不要从入学或毕业年份推导日期（`prompts/resume_parse.st:92`、`prompts/greeting.st:46`）
+3. **安全投递**：每次投递间隔 3-5 秒，每次会话最多 10-20 个，验证码时暂停
+4. **始终可视化**：每次运行都生成并打开 HTML 报告
+5. **磁盘上的产物才是真相**：用文件和退出码判断一个阶段，而不是凭通知

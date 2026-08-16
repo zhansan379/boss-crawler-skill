@@ -184,7 +184,7 @@ def infer_scene(profile):
 def build_generic_resume_text(profile):
     """profile → 通用简历正文，作为 resume_text.txt 缺失时的优化基底。
 
-    对应 references/auto-apply.md 那张表的 `不发送` 行：没有原文时也要有一份可优化的
+    对应投递选项里的 `不发送`：没有原文时也要有一份可优化的
     结构化底稿，而不是把空字符串喂给优化模板（那等于请模型凭空写一份简历）。
     """
     lines = []
