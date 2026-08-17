@@ -102,7 +102,12 @@ def get_optimize_prompt(
     salary: str, requirements: str, match_score: int,
     missing_items: str, optimization_points: str
 ) -> str:
-    """获取简历优化提示词"""
+    """获取简历优化提示词
+
+    NOTE: 已拆为 resume_optimize_plan.st + resume_optimize_apply.st（两阶段：
+    ①出调整计划、②照单输出）。本函数保留仅为兼容旧调用，gen_materials.py 已改用
+    get_optimize_plan_prompt / get_optimize_apply_prompt。
+    """
     template = load_prompt("resume_optimize")
     return template.format(
         resume_text=resume_text,
@@ -113,4 +118,47 @@ def get_optimize_prompt(
         match_score=match_score,
         missing_items=missing_items,
         optimization_points=optimization_points
+    )
+
+
+def get_optimize_plan_prompt(
+    resume_text: str, company: str, position: str,
+    salary: str, requirements: str, match_score: int,
+    missing_items: str, optimization_points: str
+) -> str:
+    """第一阶段：简历调整计划（只分析，不重排正文）。
+
+    产出 chapter_plan + optimization_suggestions。chapter_plan 是「原简历实有章节的
+    保留 + 排序」清单，作为第二阶段的硬锚点；gen_materials 会拿它跟原简历章节做
+    便宜校验，缺章就重跑本阶段。规则本体在 prompts/resume_optimize_plan.st。
+    """
+    template = load_prompt("resume_optimize_plan")
+    return template.format(
+        resume_text=resume_text,
+        company=company,
+        position=position,
+        salary=salary,
+        requirements=requirements,
+        match_score=match_score,
+        missing_items=missing_items,
+        optimization_points=optimization_points,
+    )
+
+
+def get_optimize_apply_prompt(
+    resume_text: str, company: str, position: str,
+    chapter_list: str, optimization_suggestions: str
+) -> str:
+    """第二阶段：按调整计划输出完整简历（照单执行）。
+
+    chapter_list 是第①阶段校验过的「必须输出的章节清单」，作为硬命令而非软性建议；
+    optimization_suggestions 序列化成多行 JSON 一并注入。规则在 resume_optimize_apply.st。
+    """
+    template = load_prompt("resume_optimize_apply")
+    return template.format(
+        resume_text=resume_text,
+        company=company,
+        position=position,
+        chapter_list=chapter_list,
+        optimization_suggestions=optimization_suggestions,
     )

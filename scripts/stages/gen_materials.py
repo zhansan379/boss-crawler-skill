@@ -34,9 +34,11 @@ _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
 import stage_timer
-from resume_matcher.prompts import get_greeting_prompt, get_optimize_prompt
+from resume_matcher.prompts import (
+    get_greeting_prompt, get_optimize_plan_prompt, get_optimize_apply_prompt,
+)
 from resume_matcher.config import ResumeProfile
-from resume_matcher import qualified_jobs_path, profile_path
+from resume_matcher import qualified_jobs_path, profile_path, resume_text_path
 from llm import (
     ConfigError, LLMError, chat, chat_json, map_concurrent, resolve,
     strip_fence, format_usage, reconfigure_stdout,
@@ -257,8 +259,12 @@ def build_generic_resume_text(profile):
 
 
 def load_resume_text(run_dir, profile, override=None):
-    """优化基底：--resume-text 指定的文件 > resume_text.txt > profile 生成的通用稿。"""
-    for path in (override, os.path.join(run_dir, 'resume_text.txt')):
+    """优化基底：--resume-text 指定的文件 > resume_text.txt > profile 生成的通用稿。
+
+    注意：resume_text.txt 位于 run_dir/state/（见 paths.py 的目录结构真源），
+    用 resume_text_path() 定位，不要自己拼 run_dir 根目录路径。
+    """
+    for path in (override, resume_text_path(run_dir)):
         if path and os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 text = f.read().strip()
@@ -317,29 +323,160 @@ def gen_greeting(job, profile, match, cfg, run_dir, scene, mode):
     return text, rewritten
 
 
+# 两阶段（①调整计划 / ②照单输出）各自的重试次数（首先尝试之外的次数）。
+# 两处都靠「章节覆盖度」做便宜校验，缺章就在原阶段重试，不走到下一阶段。
+_PLAN_RETRY = 2
+_APPLY_RETRY = 2
+
+
+# 章节名规范化：原简历(md) 与模型输出、chapter_plan 之间叫法可能不同
+# （如 txt 里「项目」「技能」，模板规范名「项目经历」「专业技能」），比对前归一到规范键。
+_CHAPTER_ALIASES = {
+    '个人简介': ('个人简介',),
+    '专业技能': ('专业技能', '技能'),
+    '工作经历': ('工作经历',),
+    '实习经历': ('实习经历',),
+    '项目经历': ('项目经历', '项目'),
+    '教育背景': ('教育背景', '教育'),
+    '荣誉奖项': ('荣誉奖项', '荣誉', '奖项'),
+    '开源经历': ('开源经历', '开源'),
+}
+
+
+def _norm_chapter(name):
+    """章节名 → 规范键。认不到就原样返回（保守：不误判为别的章节）。"""
+    name = (name or '').strip()
+    if not name:
+        return ''
+    for canon, aliases in _CHAPTER_ALIASES.items():
+        for a in aliases:
+            if name == a or a in name:
+                return canon
+    return name
+
+
+def _extract_chapters(md_text):
+    """从 Markdown 提取二级章节名（## 开头，排除 ###），归一到规范键集合。"""
+    out = []
+    for line in (md_text or '').splitlines():
+        s = line.strip()
+        if s.startswith('## ') and not s.startswith('### '):
+            key = _norm_chapter(s[3:].strip())
+            if key and key not in out:
+                out.append(key)
+    return out
+
+
+def _plan_chapters(plan):
+    """调整计划里 keep 的章节（规范键，去重）—— 是阶段②的硬命令来源。"""
+    out = []
+    for c in (plan or {}).get('chapter_plan') or []:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get('chapter') or '').strip()
+        if c.get('keep') and name:
+            key = _norm_chapter(name)
+            if key and key not in out:
+                out.append(key)
+    return out
+
+
+def _missing_chapters(src, present):
+    """"src（必带规范章节）里没出现在 present 中的。空 src 视为全通过/无法校验。"""
+    if not src:
+        return []
+    return [c for c in src if c not in present]
+
+
+def _build_chapter_list(plan):
+    """调整计划 → 「必须输出的章节清单」文本，作为阶段②的硬命令。"""
+    keep = [c for c in (plan or {}).get('chapter_plan') or []
+            if isinstance(c, dict) and c.get('keep')]
+    keep.sort(key=lambda c: c.get('order') if isinstance(c.get('order'), (int, float)) else 999)
+    return '\n'.join('%d. %s' % (i, str(c.get('chapter') or '').strip())
+                     for i, c in enumerate(keep, 1))
+
+
 def gen_resume(job, resume_text, match, cfg, run_dir):
-    """一个岗位的优化简历。返回 resume_optimize.st 的整个 JSON 对象。"""
-    prompt = get_optimize_prompt(
+    """一个岗位的优化简历 — 两阶段。
+
+    阶段①（resume_optimize_plan.st）：生成「调整计划」chapter_plan +
+    optimization_suggestions，并对 chapter_plan 是否覆盖原简历全部实有章节做便宜校验，
+    缺章就在本阶段重试。阶段②（resume_optimize_apply.st）：照计划输出完整简历，再校验
+    optimized_resume 的章节覆盖度，缺章也重试。返回的 JSON 与旧单阶段版形状一致：
+    {optimization_suggestions, optimized_resume, key_changes} —— 下游 render /
+    verify / write_application_md 只按这三个字段对齐，不受两阶段拆分影响。
+    """
+    jd = (job.get('岗位要求和职责', '') or job.get('技能标签', '') or '')[:2000]
+    match_score = match.get('match_score') or 0
+    missing_items = '、'.join(match.get('missing_items') or []) or '（无）'
+    optimization_points = '、'.join(match.get('optimization_points') or []) or '（无）'
+
+    # ── 阶段①：调整计划（只分析，不重排正文） ────────────────────
+    plan_prompt = get_optimize_plan_prompt(
         resume_text=resume_text,
         company=job.get('公司', '') or '',
         position=job.get('职位', '') or '',
         salary=job.get('薪资', '') or '',
-        requirements=(job.get('岗位要求和职责', '') or job.get('技能标签', '') or '')[:2000],
-        match_score=match.get('match_score') or 0,
-        missing_items='、'.join(match.get('missing_items') or []) or '（无）',
-        optimization_points='、'.join(match.get('optimization_points') or []) or '（无）',
+        requirements=jd,
+        match_score=match_score,
+        missing_items=missing_items,
+        optimization_points=optimization_points,
     )
-    data = chat_json(prompt, stage='resume', run_dir=run_dir, cfg=cfg)
-    if not isinstance(data, dict):
-        raise LLMError('返回的不是 JSON 对象')
+    src_chapters = _extract_chapters(resume_text)
+    plan = None
+    for attempt in range(_PLAN_RETRY + 1):
+        cand = chat_json(plan_prompt, stage='resume:plan', run_dir=run_dir, cfg=cfg)
+        if not isinstance(cand, dict):
+            if attempt == _PLAN_RETRY:
+                raise LLMError('阶段①（调整计划）多次调用返回的不是 JSON 对象')
+            continue
+        missing = _missing_chapters(src_chapters, _plan_chapters(cand))
+        if not missing:
+            plan = cand
+            break
+        if attempt == _PLAN_RETRY:
+            raise LLMError('阶段①（调整计划）重试 %d 次仍遗漏实有章节: %s'
+                           % (_PLAN_RETRY, '、'.join(missing)))
+    if plan is None:
+        raise LLMError('阶段①（调整计划）无法生成')
 
-    body = data.get('optimized_resume')
-    if not isinstance(body, str) or len(body.strip()) < 50:
-        # render 阶段直接渲染这个字段：空的话会渲染出一张空白简历图并被投出去
-        raise LLMError('optimized_resume 缺失或过短（%s）'
-                       % (len(body) if isinstance(body, str) else type(body).__name__))
+    # ── 阶段②：照计划输出完整简历 ──────────────────────────
+    suggestions = plan.get('optimization_suggestions') or {}
+    apply_prompt = get_optimize_apply_prompt(
+        resume_text=resume_text,
+        company=job.get('公司', '') or '',
+        position=job.get('职位', '') or '',
+        chapter_list=_build_chapter_list(plan),
+        optimization_suggestions=json.dumps(suggestions, ensure_ascii=False, indent=2),
+    )
+    data = None
+    for attempt in range(_APPLY_RETRY + 1):
+        cand = chat_json(apply_prompt, stage='resume', run_dir=run_dir, cfg=cfg)
+        if isinstance(cand, dict):
+            body = cand.get('optimized_resume')
+            if isinstance(body, str) and len(body.strip()) >= 50:
+                if _missing_chapters(src_chapters, _extract_chapters(body)):
+                    # 缺章 = 会随长图出门的定稿缺内容，宁可在本岗位失败也不放行
+                    if attempt == _APPLY_RETRY:
+                        raise LLMError('阶段②（完整简历）重试 %d 次仍遗漏实有章节，'
+                                       '已放弃该岗位以免缺段随图出门' % _APPLY_RETRY)
+                    continue
+                data = cand
+                break
+        if attempt == _APPLY_RETRY:
+            raise LLMError('阶段②（完整简历）多次输出缺失/过短，已放弃该岗位')
+    if not isinstance(data, dict):
+        raise LLMError('阶段②（完整简历）无法生成')
+
+    body = data['optimized_resume']
     if body.strip().startswith('```'):
         data['optimized_resume'] = strip_fence(body).strip()
+
+    # 组装最终产物，保持下游契约：optimization_suggestions 来自阶段①
+    data['optimization_suggestions'] = suggestions
+    if not isinstance(data.get('key_changes'), list):
+        data['key_changes'] = plan.get('key_changes') or []
     return data
 
 
@@ -408,7 +545,7 @@ def main():
                     help='ai=调模型（默认）；default=套规则模板不花钱；skip=不生成')
     ap.add_argument('--resume-mode', choices=('ai', 'skip'), default='ai',
                     help='ai=调模型优化简历（默认）；skip=不生成')
-    ap.add_argument('--resume-text', help='优化基底文件，默认用 <run_dir>/resume_text.txt')
+    ap.add_argument('--resume-text', help='优化基底文件，默认用 <run_dir>/state/resume_text.txt')
     ap.add_argument('--scene', help='投递场景提示（社招/校招/实习），默认按简历推断')
     ap.add_argument('--only', help='只处理这些 1-based 序号，如 1,3,5-7')
     ap.add_argument('--force', action='store_true', help='覆盖已有产物（默认跳过已有的）')
