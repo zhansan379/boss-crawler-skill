@@ -156,13 +156,20 @@ def job_dir_name(job, index):
 
 
 def run_stamp(run_dir, override):
-    """暂存名的唯一性来源。优先用运行目录名（同一轮多次渲染复用同一批简历名）。"""
+    """暂存名的唯一性来源：运行目录戳 + 本次调用毫秒戳。
+
+    必须是**每次调用都唯一**，靠运行目录戳不够：同一轮（同 run_dir）多次渲染时，
+    import_md.py 撞同名不会覆盖（前端自动加 (2) 后缀），而下游 export 按裸名精确匹配
+    只会命中最早那份 —— 于是反复渲染会一直导出最旧的简历，图片和最新的 md 对不上。
+    追加毫秒戳后每次净导入一份裸名，从根上消除撞名。
+    """
     if override:
         return sanitize(override)
     base = os.path.basename(os.path.normpath(run_dir))
+    run = ''
     if re.match(r'^\d{4}-\d{2}-\d{2}[_-]\d{2}', base):
-        return re.sub(r'[^0-9]', '', base)[:14] or time.strftime('%Y%m%d-%H%M%S')
-    return time.strftime('%Y%m%d-%H%M%S')
+        run = re.sub(r'[^0-9]', '', base)[:14]
+    return (run or time.strftime('%Y%m%d')) + '-' + time.strftime('%H%M%S')
 
 
 # ==================== 暂存 ====================
@@ -553,8 +560,17 @@ def main():
         try:
             with stage_timer.stage(run_dir, 'render_images', note='%d 份' % len(items)):
                 # ── 4. 导入 ──
-                ok, _ = run_step('import_md', import_cmd, args.timeout)
+                ok, imp_out = run_step('import_md', import_cmd, args.timeout)
                 if not ok:
+                    raise _StepFailed('import')
+                # 撞名护栏：import_md 无法覆盖同名，前端会把它存成 (2)/(3)；下游
+                # export 按裸名精确匹配只会命中最早那份，反复渲染就会导出旧图。
+                # 检测到就立刻中止，绝不带着猜测往下导出。
+                if re.search(r'\([2-9]\)', imp_out or ''):
+                    print('\n❌ 导入时撞上同名简历（ShowCV 存成了 (2)/(3) 另一份）。')
+                    print('   这是渲染会导出旧图的必现条件，已中止导出。')
+                    print('   清理 origin 上的同名临时件后重跑 render：')
+                    print('     python scripts/showcv/delete_resumes.py --url %s --all --dry-run' % url)
                     raise _StepFailed('import')
 
                 # ── 5. 导出 ──
