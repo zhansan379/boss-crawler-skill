@@ -5,8 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>简历匹配分析 - Bauhaus Style</title>
 
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <!-- async：此脚本来自墙外 CDN，同步加载会阻塞整页解析，一旦挂起（国内常发生），
+         682 行的数据渲染脚本永远跑不到 → 报告空白。async 让解析不停顿；
+         图标加载失败由下方 emoji 兜底 + safeIcons() 接管。 -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js" async></script>
     <script>
+    // 供全页各处 createIcons 使用：lucide 未加载（CDN 被墙/仍加载中）时静默不渲染图标，
+    // 绝不让缺图标这件事去抛 ReferenceError 中断数据渲染。
+    function safeIcons() {
+        if (typeof lucide !== "undefined" && typeof lucide.createIcons === "function") {
+            try { lucide.createIcons(); } catch (e) { /* 图标失败不影响数据 */ }
+        }
+    }
     // Lucide fallback: emoji when CDN blocked
     window.addEventListener("DOMContentLoaded", function() {
         if (typeof lucide === "undefined") {
@@ -717,7 +727,7 @@ function init() {
     }
     classificationData = REPORT_DATA;
     renderData(REPORT_DATA);
-    lucide.createIcons();
+    safeIcons();
     bindStaticHandlers();
 }
 
@@ -747,7 +757,7 @@ function showLoadingError() {
         '<p>无法加载报告数据，请重新运行分析。</p>' +
         '<button class="btn btn-primary" style="margin-top:1rem;" onclick="location.reload()">重新加载</button>' +
         '</div>';
-    lucide.createIcons();
+    safeIcons();
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
 document.addEventListener('DOMContentLoaded', function() {
     // 导航链接
@@ -778,7 +788,7 @@ function renderData(data) {
     renderJobList('qualified', data.classification.qualified);
     document.getElementById('generatedTime').textContent = data.generated_at;
     document.getElementById('modeTag').textContent = IS_DEEP_MODE ? '🧠 深度模式' : '🚀 快速模式';
-    lucide.createIcons();
+    safeIcons();
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
 document.addEventListener('DOMContentLoaded', function() {
     // 导航链接
@@ -852,7 +862,7 @@ function renderStats(stats) {
         '<i data-lucide="check-circle" style="width:24px;height:24px;color:white;"></i></div>' +
         '<div class="stat-number">' + stats.qualified_count + '</div>' +
         '<div class="stat-label">符合要求</div></div>';
-    lucide.createIcons();
+    safeIcons();
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
 document.addEventListener('DOMContentLoaded', function() {
     // 导航链接
@@ -960,7 +970,7 @@ function renderJobList(sectionId, jobs) {
             '</div></div></div>';
     }).join('');
 
-    lucide.createIcons();
+    safeIcons();
 // CSP 兼容：为静态 onclick 元素添加事件监听回退
 document.addEventListener('DOMContentLoaded', function() {
     // 导航链接
