@@ -46,6 +46,11 @@ from llm import (
 
 GEN_DIR = 'materials'
 
+# load_resume_text 在没有原文（resume_text.txt 缺失/不足 50 字）时，返回这个 source 标记
+# 表示基底退化成 profile 重述的通用稿。它是最容易被忽略的降级信号（和正常那行长得一样），
+# 主流程靠它决定要不要拦截 / 亮警告。
+GENERIC_BASE_SOURCE = 'profile.json（通用结构）'
+
 # Windows 文件名禁用字符 + 空白：公司名里出现 "（上海）有限公司/分公司" 这类写法很常见。
 # `[` `]` 不是文件名非法字符，但 write_application_md.resolve_greeting 用 glob 回找产物，
 # 而 glob 会把方括号当字符集 —— 名字里带 `[` 的文件会永远匹配不上。
@@ -273,7 +278,7 @@ def load_resume_text(run_dir, profile, override=None):
     text = build_generic_resume_text(profile)
     if len(text) < 30:
         raise LLMError('既没有 resume_text.txt，profile 也太空，无法生成优化基底')
-    return text, 'profile.json（通用结构）'
+    return text, GENERIC_BASE_SOURCE
 
 
 # ==================== 生成 ====================
@@ -546,6 +551,8 @@ def main():
     ap.add_argument('--resume-mode', choices=('ai', 'skip'), default='ai',
                     help='ai=调模型优化简历（默认）；skip=不生成')
     ap.add_argument('--resume-text', help='优化基底文件，默认用 <run_dir>/state/resume_text.txt')
+    ap.add_argument('--allow-generic-base', action='store_true',
+                    help='state/resume_text.txt 缺失时，允许用 profile 重述的通用稿作 AI 优化基底（默认拒绝）')
     ap.add_argument('--scene', help='投递场景提示（社招/校招/实习），默认按简历推断')
     ap.add_argument('--only', help='只处理这些 1-based 序号，如 1,3,5-7')
     ap.add_argument('--force', action='store_true', help='覆盖已有产物（默认跳过已有的）')
@@ -624,6 +631,15 @@ def main():
         except LLMError as exc:
             print('❌ %s' % exc)
             return 1
+        # AI 优化把简历改出个人风格，源头绝不能从原始简历悄悄换成 profile 通用稿——
+        # 那正是「最优化的简历没以原文为基底」的静默降级，命令行看不出区别。
+        # 默认拒绝；要用通用稿必须显式认一次。
+        if resume_source == GENERIC_BASE_SOURCE and not args.allow_generic_base:
+            print('❌ 没有可用的原始简历文本（state/resume_text.txt 缺失或不足 50 字）。')
+            print('  AI 简历优化的基底不能用 profile 重述的通用稿兜底。')
+            print('  处理：重跑 parse 补一份原文，或用 --resume-text 指定原文文件；')
+            print('        确要接受通用稿基底就加 --allow-generic-base。')
+            return 1
 
     scene = args.scene or infer_scene(profile)
     match_index = build_match_index(run_dir)
@@ -648,6 +664,10 @@ def main():
     print('招呼语 %s / 简历 %s%s' % (
         args.greeting_mode, args.resume_mode,
         '（基底：%s）' % resume_source if resume_source else ''))
+    if resume_source == GENERIC_BASE_SOURCE:
+        # 走到这说明 --allow-generic-base 被显式接受了；仍要明牌提醒：出门的是重述稿不是原文
+        print('⚠ 简历优化基底是 profile 重述的通用稿（非简历原文，已 --allow-generic-base 放行）。')
+        print('  投递/渲染前请核对优化稿与简历事实一致。')
     if needs_llm:
         models = []
         if cfg_greeting:
