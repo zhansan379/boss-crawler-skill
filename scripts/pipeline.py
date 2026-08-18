@@ -346,8 +346,6 @@ def build_cmd(name, args, ctx):
         cmd = [py, script('gen_materials.py'), run_dir,
                '--greeting-mode', args.greeting_mode,
                '--resume-mode', args.resume_mode]
-        if args.scene:
-            cmd += ['--scene', args.scene]
         if args.only:
             cmd += ['--only', args.only]
         if args.workers:
@@ -518,7 +516,6 @@ def parse_args(argv=None):
     g.add_argument('--greeting-mode', dest='greeting_mode',
                    choices=('ai', 'default', 'skip'), default='ai')
     g.add_argument('--resume-mode', dest='resume_mode', choices=('ai', 'skip'), default='ai')
-    g.add_argument('--scene', help='投递场景（社招/校招/实习），默认按简历推断')
     g.add_argument('--only', help='只处理这些 1-based 序号，如 1,3,5-7（materials 与 render 共用）')
     g.add_argument('--name', help='简历图文件名里的姓名，覆盖 profile.json')
     g.add_argument('--force', action='store_true', help='覆盖已有的 profile.json 与材料产物')
@@ -707,6 +704,16 @@ def main(argv=None):
                 print('  %s %s' % ('·' if level == 'info' else '❌', msg))
             if not ok:
                 return 1
+            # 爬取完成：告诉用户下一步 match 阶段可用的参数及含义，并给一条常用命令。
+            print('\n  ── 下一步：match → deep → merge（--from match 三阶段连跑）的参数 ──')
+            print('    --run-dir <路径>          定位运行目录。--from match 可省略（自动取 assets/LATEST.txt），')
+            print('                              这里显式给出，避免指错目录')
+            print('    --match-mode quick|deep   模式：deep=逐岗位调模型；不传则读 crawl_params，无预设时兜底 quick')
+            print('    --top-n <数字>            deep 模式的候选数，默认 15，传给 run_matcher.py --top')
+            print('    --workers|-w <数字>       deep 的并发数，透传给 deep_analyze.py；quick 模式无效')
+            print('    常用命令：python scripts/pipeline.py --run-dir "%s" --from match --match-mode deep --top-n 10 --workers 4' % run_dir)
+            print('    （其余参数如 --only / --name / --greeting-mode 在 match 阶段不读取；')
+            print('     --city/--keywords/--degree 等是 infer 参数，对 match 无影响）')
 
         elif name == 'match' and ctx['match_mode'] == 'quick':
             state, note = qualified_from_scored(run_dir)

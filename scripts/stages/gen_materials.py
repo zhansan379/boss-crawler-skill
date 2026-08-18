@@ -17,7 +17,6 @@ ShowCV 渲染都按它对齐：
     python scripts/stages/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
     python scripts/stages/gen_materials.py <run_dir> --only 1,3,5              # 只补这几个
     python scripts/stages/gen_materials.py <run_dir> --force                   # 覆盖已有产物
-    python scripts/stages/gen_materials.py <run_dir> --scene 实习 --dry-run
 
 退出码：0 = 需要的产物齐全，1 = 输入缺失/全部失败，3 = 部分失败。
 """
@@ -169,29 +168,6 @@ def format_availability(profile):
     return '、'.join(parts)
 
 
-def infer_scene(profile):
-    """猜投递场景（社招 / 校招 / 实习）。
-
-    仅供终端展示参考；招呼语模板已改为直接读完整简历原文、不再注入 scene_hint 槽，
-    由模型据简历自行判断场景，所以猜错不影响招呼语产出。
-    """
-    basic = profile.get('basic_info') or {}
-    status = str(basic.get('status') or '').strip()
-    if '实习' in status:
-        return '实习'
-    exp = profile.get('experience') or {}
-    try:
-        years = float(exp.get('total_years') or 0)
-    except (TypeError, ValueError):
-        years = 0
-    if years >= 1:
-        return '社招'
-    edu = profile.get('education') or {}
-    if edu.get('graduation_year'):
-        return '校招'
-    return ''
-
-
 def build_generic_resume_text(profile):
     """profile → 通用简历正文，作为 resume_text.txt 缺失时的优化基底。
 
@@ -314,7 +290,7 @@ _GREETING_FIX = (
 )
 
 
-def gen_greeting(job, profile, match, cfg, run_dir, scene, mode, resume=''):
+def gen_greeting(job, profile, match, cfg, run_dir, mode, resume=''):
     """一个岗位的招呼语。返回 (文本, 是否重写过)。"""
     if mode == 'default':
         # 不调模型：套 auto_apply 里的规则模板（离线、免费、质量一般）
@@ -575,7 +551,6 @@ def main():
     ap.add_argument('--resume-text', help='优化基底文件，默认用 <run_dir>/state/resume_text.txt')
     ap.add_argument('--allow-generic-base', action='store_true',
                     help='state/resume_text.txt 缺失时，允许用 profile 重述的通用稿作 AI 优化基底（默认拒绝）')
-    ap.add_argument('--scene', help='投递场景提示（社招/校招/实习），默认按简历推断')
     ap.add_argument('--only', help='只处理这些 1-based 序号，如 1,3,5-7')
     ap.add_argument('--force', action='store_true', help='覆盖已有产物（默认跳过已有的）')
     ap.add_argument('--workers', '-w', type=int, help='并发数，默认取配置里的 concurrency')
@@ -663,7 +638,6 @@ def main():
             print('        确要接受通用稿基底就加 --allow-generic-base。')
             return 1
 
-    scene = args.scene or infer_scene(profile)
     # 招呼语直接以完整简历原文为输入（不拆字段）。resume_mode=ai 时复用已加载的
     # resume_text；否则为 greeting 独立加载一次 —— 加载不到就传空串，模板兜底。
     greeting_resume = resume_text or ''
@@ -688,9 +662,8 @@ def main():
             tasks.append((index, job, kind))
 
     print('📂 %s' % run_dir)
-    print('岗位 %d 个 / 匹配信息命中 %d 个 / 场景提示 %s'
-          % (len(jobs), sum(1 for j in jobs if (j.get('link') or '') in match_index),
-             scene or '未判断'))
+    print('岗位 %d 个 / 匹配信息命中 %d 个'
+          % (len(jobs), sum(1 for j in jobs if (j.get('link') or '') in match_index)))
     print('招呼语 %s / 简历 %s%s' % (
         args.greeting_mode, args.resume_mode,
         '（基底：%s）' % resume_source if resume_source else ''))
@@ -736,7 +709,7 @@ def main():
         company = safe_name(job.get('公司'))
         if kind == 'greeting':
             text, rewritten = gen_greeting(job, profile, match, cfg_greeting, run_dir,
-                                           scene, args.greeting_mode, greeting_resume)
+                                           args.greeting_mode, greeting_resume)
             path = os.path.join(gen_dir, 'greeting_%d_%s.txt' % (index, company))
             _write_atomic(path, text)
         else:

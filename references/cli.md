@@ -266,7 +266,6 @@ python scripts/stages/gen_materials.py <run_dir> --greeting-mode default   # 套
 python scripts/stages/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
 python scripts/stages/gen_materials.py <run_dir> --only 1,3,5-7            # 只补这几个
 python scripts/stages/gen_materials.py <run_dir> --force                   # 覆盖已有产物
-python scripts/stages/gen_materials.py <run_dir> --scene 实习
 ```
 
 默认**跳过已有产物**，所以重跑一次就是「补齐缺的」，手工改过的招呼语不会被冲掉（要覆盖得显式 `--force`）。

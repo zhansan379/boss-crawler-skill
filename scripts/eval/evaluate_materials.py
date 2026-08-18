@@ -43,9 +43,9 @@ def reconfigure_stdout():
 # 也被 llm 配置挡住）。metrics 等纯函数子模块随时可 import。
 def _gm():
     from gen_materials import (load_profile, build_resume_summary, format_availability,
-                               infer_scene, gen_greeting, gen_resume, safe_name,
+                               gen_greeting, gen_resume, safe_name,
                                _write_atomic)
-    return (load_profile, build_resume_summary, format_availability, infer_scene,
+    return (load_profile, build_resume_summary, format_availability,
             gen_greeting, gen_resume, safe_name, _write_atomic)
 
 
@@ -168,9 +168,9 @@ def _make_availability(profile):
     return format_availability(profile)
 
 
-def generate_materials(run_dir, jobs, profile, scene, args, offline):
+def generate_materials(run_dir, jobs, profile, args, offline):
     """真调（非 offline）或 stub（offline）生成。返回 {index: {'greeting':…, 'resume_md':…}}。"""
-    (load_profile, build_resume_summary, format_availability, infer_scene,
+    (load_profile, build_resume_summary, format_availability,
      gen_greeting, gen_resume, safe_name, _write_atomic) = _gm()
     rt_path = _state_path(run_dir, 'resume_text.txt')
     with open(rt_path, 'r', encoding='utf-8') as f:
@@ -208,15 +208,12 @@ def generate_materials(run_dir, jobs, profile, scene, args, offline):
     except ConfigError as exc:
         print('❌ 配置错误：\n%s' % exc)
         return None
-    if not scene:
-        scene = infer_scene(profile)
-
     def work(i):
         job = jobs[i - 1]
         match = {}
         g_row = r_row = None
         try:
-            g_text, _ = gen_greeting(job, profile, match, cfg_g, run_dir, scene, 'ai')
+            g_text, _ = gen_greeting(job, profile, match, cfg_g, run_dir, 'ai')
         except Exception as exc:                                   # noqa: BLE001
             g_text = None
             print('  ⚠ 岗位 #%d 招呼语失败: %s' % (i, exc))
@@ -389,7 +386,7 @@ def main():
 
     # 3) 生成（可选）
     if args.generate:
-        generated = generate_materials(run_dir, jobs, profile, '', args, args.offline)
+        generated = generate_materials(run_dir, jobs, profile, args, args.offline)
         if generated is None:
             return 1
         if args.stub_registry and args.offline:

@@ -165,7 +165,7 @@ def test_offline_writes_eval_json(tmp_path):
 def test_generate_offline_stub_and_registry(tmp_path):
     run = make_run(tmp_path)
     args = argparse.Namespace(offline=True, workers=2)
-    records = EM.generate_materials(run, JOBS, PROFILE, '', args, offline=True)
+    records = EM.generate_materials(run, JOBS, PROFILE, args, offline=True)
     assert set(records) == {1, 2}
     assert os.path.exists(os.path.join(run, 'materials', 'greeting_1_甲公司.txt'))
     assert os.path.exists(os.path.join(run, 'materials', 'resume_1_甲公司.json'))

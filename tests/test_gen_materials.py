@@ -226,14 +226,6 @@ def main():
         check('availability 不是 dict 也不炸',
               GM.format_availability({'basic_info': {'availability': '随时'}}) == '')
 
-        check('有 1 年经验 → 社招', GM.infer_scene(PROFILE) == '社招',
-              GM.infer_scene(PROFILE))
-        check('状态含实习 → 实习',
-              GM.infer_scene({'basic_info': {'status': '在校-寻找实习'}}) == '实习')
-        check('无经验有毕业年份 → 校招',
-              GM.infer_scene({'education': {'graduation_year': 2026}}) == '校招')
-        check('什么都没有 → 空（让模板自己判断）', GM.infer_scene({}) == '')
-
         # ================================================================
         print('\n=== 4. 优化基底：resume_text.txt > profile 通用稿 ===')
         base_dir = os.path.join(tmp, 'base')
