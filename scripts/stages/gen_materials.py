@@ -172,8 +172,8 @@ def format_availability(profile):
 def infer_scene(profile):
     """猜投递场景（社招 / 校招 / 实习）。
 
-    只是给模板的 hint —— 模板明确写了「scene_hint 是提示不是命令，可据简历修正」，
-    所以猜错的代价是模型自己纠正一次，不是产出错误。
+    仅供终端展示参考；招呼语模板已改为直接读完整简历原文、不再注入 scene_hint 槽，
+    由模型据简历自行判断场景，所以猜错不影响招呼语产出。
     """
     basic = profile.get('basic_info') or {}
     status = str(basic.get('status') or '').strip()
@@ -290,20 +290,18 @@ _GREETING_FIX = (
 )
 
 
-def gen_greeting(job, profile, match, cfg, run_dir, scene, mode):
+def gen_greeting(job, profile, match, cfg, run_dir, scene, mode, resume=''):
     """一个岗位的招呼语。返回 (文本, 是否重写过)。"""
     if mode == 'default':
         # 不调模型：套 auto_apply 里的规则模板（离线、免费、质量一般）
         from resume_matcher.auto_apply import generate_greeting
         return generate_greeting(profile=_to_profile_obj(profile), job=job), False
 
+    # 直接喂完整简历原文，不拆字段 —— 姓名、到岗信息、经验年限都由模型从原文自取。
     prompt = get_greeting_prompt(
         job,
-        name=(profile.get('basic_info') or {}).get('name') or '',
-        resume_summary=build_resume_summary(profile),
+        resume=resume,
         match_reasons='；'.join(match.get('match_reasons') or []) or '',
-        availability=format_availability(profile),
-        scene_hint=scene,
     )
     text = chat(prompt, stage='greeting', run_dir=run_dir, cfg=cfg).strip()
 
@@ -642,6 +640,14 @@ def main():
             return 1
 
     scene = args.scene or infer_scene(profile)
+    # 招呼语直接以完整简历原文为输入（不拆字段）。resume_mode=ai 时复用已加载的
+    # resume_text；否则为 greeting 独立加载一次 —— 加载不到就传空串，模板兜底。
+    greeting_resume = resume_text or ''
+    if not greeting_resume:
+        try:
+            greeting_resume, _ = load_resume_text(run_dir, profile, args.resume_text)
+        except LLMError:
+            greeting_resume = ''
     match_index = build_match_index(run_dir)
     gen_dir = os.path.join(run_dir, GEN_DIR)
 
@@ -706,7 +712,7 @@ def main():
         company = safe_name(job.get('公司'))
         if kind == 'greeting':
             text, rewritten = gen_greeting(job, profile, match, cfg_greeting, run_dir,
-                                           scene, args.greeting_mode)
+                                           scene, args.greeting_mode, greeting_resume)
             path = os.path.join(gen_dir, 'greeting_%d_%s.txt' % (index, company))
             _write_atomic(path, text)
         else:

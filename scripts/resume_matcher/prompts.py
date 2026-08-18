@@ -39,19 +39,16 @@ def get_match_analysis_prompt(resume_info: str, job_requirements: str) -> str:
 
 def get_greeting_prompt(
     job: Dict[str, Any],
-    name: str = '',
-    resume_summary: str = '',
+    resume: str = '',
     match_reasons: str = '',
-    availability: str = '',
-    scene_hint: str = '',
 ) -> str:
     """获取招呼语提示词（gen_materials.py 的 greeting 阶段在用）
 
     规则本体在 prompts/greeting.st，不要在调用处复述 —— 这套口径（前 15 字预览框、
     校招不许提出勤、到岗信息不许编）以 greeting.st 为唯一来源。
 
-    availability 为空时传「简历未提供」而不是空串：模板里那条「没给就别猜日期」的
-    指令需要一个明确的取值才生效，留空会被模型读成「这栏我自己想」。
+    resume 直接传完整简历原文，不要先拆成摘要字段 —— 姓名、到岗信息、经验年限、
+    学校都由模型从原文自取。模型从这个字段读；这一份的空值说明「无原文」。
     """
     template = load_prompt("greeting")
     return template.format(
@@ -62,11 +59,8 @@ def get_greeting_prompt(
         education_req=job.get('学历', '') or '',
         skills_tags=job.get('技能标签', '') or '',
         jd=(job.get('岗位要求和职责', '') or '')[:1500],
-        name=name or '',
-        resume_summary=resume_summary or '',
+        resume=resume or '（简历原文未提供）',
         match_reasons=match_reasons or '（无）',
-        availability=availability or '简历未提供',
-        scene_hint=scene_hint or '未判断',
     )
 
 
