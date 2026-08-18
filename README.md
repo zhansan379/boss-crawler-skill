@@ -7,6 +7,7 @@
 > 🚀 **这是一个 Claude Code Skill** — 在 Claude Code 中输入 `/boss-crawler` 即可启动完整的求职自动化流程。
 
 【ai优化简历和招呼语存在bug（纯瞎编），项目以回滚。如需使用，建议手动上传招呼语/简历图片，等我再改改】
+
 【vibecoding害人，写代码一定要看代码！！！！】
 
 
