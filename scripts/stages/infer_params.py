@@ -352,8 +352,8 @@ def print_missing_hint(field, run_dir, profile_path, args, params):
     # 核心字段还没能写出 crawl_params.json，所以第一步是补参数：上面的补参命令填上
     # <城市>/<关键词> 后会触发 manual_core 跳过模型、直接把参数落盘。参数进
     # crawl_params.json 之后，就从**下一阶段**（crawl）接着跑 —— 而不是 `--from
-    # infer --all` 让模型把所有参数再推一遍：反复重推正是参数抖动的根源，而且 crawl
-    # 动辄几十分钟，跑之前人得自己先看一眼参数对不对，不该被一条 --all 顺手烧掉。
+    # infer --to render` 让模型把所有参数再推一遍：反复重推正是参数抖动的根源，而且
+    # crawl 动辄几十分钟，跑之前人得自己先看一眼参数对不对，不该一口气跑到底顺手烧掉。
     if os.environ.get('BOSS_PIPELINE_STAGE') and run_dir:
         print('\n  ② 补好后接着跑（从爬取这步继续，不会重推参数）：')
         print('    python scripts/pipeline.py --run-dir "%s" --from crawl' % run_dir)
@@ -587,7 +587,7 @@ def main():
     if run_dir:
         print('\n  跑完 infer 就停了（默认只跑这一个阶段）。接着跑：')
         print('    下一个阶段：python scripts/pipeline.py --run-dir "%s" --from crawl' % run_dir)
-        print('    余下全部  ：python scripts/pipeline.py --run-dir "%s" --from crawl --all' % run_dir)
+        print('    余下全部  ：python scripts/pipeline.py --run-dir "%s" --from crawl --to render' % run_dir)
 
     return 0
 

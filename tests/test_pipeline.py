@@ -5,8 +5,8 @@
 「阶段区间」「失败就停」「快速模式补投递池」「爬空了不许往下走」这几处编排逻辑，
 它们的共同特点是：错了不会报错，只会安静地少投几个岗位或多烧一轮 token。
 
-注意 `--all`：不给终点时 pipeline **只跑一个阶段**，所以要断言「九个阶段全跑」的用例
-必须显式给 `--all`。用例 11 专门盯这套区间语义。
+注意 `--to render`：不给终点时 pipeline **只跑一个阶段**，所以要断言「九个阶段全跑」的用例
+必须显式给 `--to render`。用例 11 专门盯这套区间语义。
 
 做法：换掉 pipeline.run_stage（真正 fork 子进程的地方），记录被调用的阶段与命令。
 阶段之后的产物核查照旧真跑（读真文件），因为那正是要测的东西。
@@ -130,7 +130,7 @@ def main():
                                     'mode': 'custom', 'match_mode': 'deep', 'top_n': 10})
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all', '--dry-run'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--dry-run'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('一个阶段都没执行', stages_ran() == [], str(stages_ran()))
     finally:
@@ -146,7 +146,7 @@ def main():
     dirs_before = set(os.listdir(pipeline.OUTPUT_DIR)) \
         if os.path.isdir(pipeline.OUTPUT_DIR) else set()
     CODES.clear()
-    code = run([resume, '--all', '--dry-run'])
+    code = run([resume, '--to', 'render', '--dry-run'])
     after = (open(latest_file, encoding='utf-8').read()
              if os.path.exists(latest_file) else None)
     dirs_after = set(os.listdir(pipeline.OUTPUT_DIR)) \
@@ -157,7 +157,7 @@ def main():
           '%r → %r' % (before, after))
     check('--dry-run 无 --run-dir 也是退出码 0', code == 0, '实际 %s' % code)
 
-    print('\n=== 2. 深度模式 --all：九个阶段全跑，顺序不能乱 ===')
+    print('\n=== 2. 深度模式 --to render：九个阶段全跑，顺序不能乱 ===')
     run_dir = build_run_dir(
         params={'keywords': ['Python'], 'cities': ['杭州'], 'mode': 'custom',
                 'match_mode': 'deep', 'top_n': 10, 'min_count': 20},
@@ -165,7 +165,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('阶段顺序完整',
               stages_ran() == ['parse', 'infer', 'crawl', 'match', 'deep',
@@ -193,7 +193,7 @@ def main():
                    ('greeting', 2, 'YY公司'), ('resume', 2, 'YY公司')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('deep/merge 没跑', 'deep' not in stages_ran() and 'merge' not in stages_ran(),
               str(stages_ran()))
@@ -264,7 +264,7 @@ def main():
     try:
         CODES.clear()
         CODES['deep'] = 1
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('退出码 1', code == 1, '实际 %s' % code)
         check('停在 deep', stages_ran() == ['parse', 'infer', 'crawl', 'match', 'deep'],
               str(stages_ran()))
@@ -278,7 +278,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all', '--no-images'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--no-images'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('render 没跑', 'render' not in stages_ran(), str(stages_ran()))
         # 不要长图 ≠ 不用查材料：招呼语照样会发出去，verify 必须还在计划里
@@ -294,7 +294,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])   # #2 的两份都缺
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all', '--no-images'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--no-images'])
         check('退出码 3（部分成功）', code == 3, '实际 %s' % code)
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -307,7 +307,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('退出码 0', code == 0, '实际 %s' % code)
         flat = ' '.join(' '.join(cmd) for _, cmd in RAN)
         check('没有 apply.py', 'apply.py' not in flat, flat)
@@ -331,7 +331,7 @@ def main():
         check('只跑了 parse', stages_ran() == ['parse'], str(stages_ran()))
         check('印出下一步命令（--from infer）',
               '--from infer' in out, out[-400:])
-        check('印出一次跑完余下的命令（--all）', '--all' in out, out[-400:])
+        check('印出一次跑完余下的命令（--to render）', '--to render' in out, out[-400:])
 
         CODES.clear()
         code = run([resume, '--run-dir', run_dir, '--from', 'infer'])
@@ -381,22 +381,7 @@ def main():
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
-    print('\n=== 14. --all 与 --to 同时给：用法错误（退出码 2） ===')
-    run_dir = build_run_dir(params={'keywords': ['Python'], 'cities': ['杭州']})
-    try:
-        CODES.clear()
-        code = 0
-        try:
-            with contextlib.redirect_stderr(io.StringIO()):
-                run([resume, '--run-dir', run_dir, '--all', '--to', 'match'])
-        except SystemExit as exc:      # argparse 互斥组直接 exit(2)
-            code = exc.code
-        check('退出码 2', code == 2, '实际 %s' % code)
-        check('一个阶段都没跑', stages_ran() == [], str(stages_ran()))
-    finally:
-        shutil.rmtree(run_dir, ignore_errors=True)
-
-    print('\n=== 15. verify 查出编造：停在 render 之前 ===')
+    print('\n=== 14. verify 查出编造：停在 render 之前 ===')
     # verify 的失败和别的阶段不同 —— 它「失败」正说明它干了活。所以要锁两件事：
     # render 一定不跑（图渲出来人就当材料定稿了），提示得说清是查出了东西。
     run_dir = build_run_dir(
@@ -406,7 +391,7 @@ def main():
     try:
         CODES.clear()
         CODES['verify'] = 1                     # 查出了简历原文没有的技术词
-        code, out = run_capture([resume, '--run-dir', run_dir, '--all'])
+        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render'])
         check('退出码 1', code == 1, '实际 %s' % code)
         check('render 没跑（图渲出来就等于材料定稿）',
               'render' not in stages_ran(), str(stages_ran()))
@@ -419,13 +404,13 @@ def main():
         # verify 退 3 = 有几份材料读不动：那是部分成功，不该拦住 render
         CODES.clear()
         CODES['verify'] = 3
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('verify 退 3 → 整轮 3 且 render 照跑',
               code == 3 and 'render' in stages_ran(), '%s / %s' % (code, stages_ran()))
 
         # --skip-verify：跳过但要留一句话，别让人以为查过了
         CODES.clear()
-        code, out = run_capture([resume, '--run-dir', run_dir, '--all', '--skip-verify'])
+        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render', '--skip-verify'])
         check('--skip-verify 退 0 且 verify 没跑',
               code == 0 and 'verify' not in stages_ran(), '%s / %s' % (code, stages_ran()))
         check('跳过时明确提醒要自己看', '自己逐份看' in out, out[:600])
@@ -433,7 +418,7 @@ def main():
 
         # --allow / --only 要透传下去，否则人在 pipeline 上加了参数却不生效
         CODES.clear()
-        run([resume, '--run-dir', run_dir, '--all', '--allow', 'PyTorch,nginx',
+        run([resume, '--run-dir', run_dir, '--to', 'render', '--allow', 'PyTorch,nginx',
              '--only', '1'])
         vcmd = cmd_of('verify')
         check('--allow 透传给 verify', '--allow' in vcmd and 'PyTorch,nginx' in vcmd,
@@ -446,7 +431,7 @@ def main():
         shutil.rmtree(run_dir, ignore_errors=True)
         os.remove(resume)
 
-    print('\n=== 16. write_application_md 在 materials 之后自动落盘 ===')
+    print('\n=== 15. write_application_md 在 materials 之后自动落盘 ===')
     run_dir = build_run_dir(
         params={'keywords': ['Python'], 'cities': ['杭州'], 'match_mode': 'quick'},
         qualified=[{'公司': 'XX科技', '职位': 'Java开发', 'link': 'https://x/1'}],
@@ -475,10 +460,10 @@ def main():
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
-    print('\n=== 17. LLM 阶段存在时先跑 llm_check 预检，配置缺就停 ===')
+    print('\n=== 16. LLM 阶段存在时先跑 llm_check 预检，配置缺就停 ===')
     # 计划里含 parse（LLM 阶段）→ 必须先跑 llm_check --no-call；预检失败 → 停，
     # 一个阶段都不跑。纯 quick 但计划里没有任何 LLM 阶段时不预检（省得白跑）。
-    resume = tempfile.mktemp(suffix='.md')      # 全局 resume 在用例 15 末尾被删了，这里重建
+    resume = tempfile.mktemp(suffix='.md')      # 全局 resume 在用例 14 末尾被删了，这里重建
     with open(resume, 'w', encoding='utf-8') as f:
         f.write('# 张三\nPython 后端开发，3 年经验。')
     run_dir = build_run_dir(
@@ -489,14 +474,14 @@ def main():
     try:
         CODES.clear()
         CODES['llm_check'] = 1                  # 配置缺失
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('预检失败 → 退出码 1', code == 1, '实际 %s' % code)
         check('配置缺就停在预检，一个阶段都不跑', stages_ran() == [], str(stages_ran()))
         check('预检用的 --no-call（不花钱）',
               '--no-call' in cmd_of('llm_check'), pipeline.show(cmd_of('llm_check')))
 
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('预检通过 → 整轮照常跑', code == 0, '实际 %s' % code)
         all_names = [n for n, _ in RAN]
         check('llm_check 在 parse 之前跑',
@@ -513,7 +498,7 @@ def main():
         shutil.rmtree(run_dir, ignore_errors=True)
         os.remove(resume)
 
-    print('\n=== 18. render 之后自动跑 verify_image 图检 ===')
+    print('\n=== 17. render 之后自动跑 verify_image 图检 ===')
     resume = tempfile.mktemp(suffix='.md')
     with open(resume, 'w', encoding='utf-8') as f:
         f.write('# 张三\nPython 后端开发，3 年经验。')
@@ -523,7 +508,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         names = [n for n, _ in RAN]
         check('退出码 0', code == 0, '实际 %s' % code)
         check('verify_image 在 render 之后跑',
@@ -537,12 +522,12 @@ def main():
         # 图检查出可疑项 → 记成部分成功（退 3），不硬拦
         CODES.clear()
         CODES['verify_image'] = 1
-        code = run([resume, '--run-dir', run_dir, '--all'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
         check('图检有可疑项 → 退出码 3（部分成功）', code == 3, '实际 %s' % code)
 
         # --no-images 不渲染 → 没有图可检，verify_image 也不该跑
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--all', '--no-images'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--no-images'])
         check('--no-images 下 verify_image 不跑', 'verify_image' not in [n for n, _ in RAN],
               str([n for n, _ in RAN]))
     finally:

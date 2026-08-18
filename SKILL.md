@@ -28,7 +28,7 @@ parse → infer → crawl → match → deep → merge → materials → verify 
 
 有一个阶段弯曲了 `1`：对 `verify` 来说，退出 `1` 表示检查**成功并发现了问题**。没有坏任何东西，重跑也不会改变什么——动手之前先读 [verify](#verify--模型有没有凭空造技能) 一节。
 
-**一次只驱动一个阶段。** `pipeline.py --from <stage>` 只运行那一个阶段（`match` 还会连带 `deep`+`merge`，因为停在 `match` 会留下一个下游谁也读不了的半成品），然后停下并打印下一条命令。**绝不用 `--all`**：下面的几道闸门处在阶段之间，而 `--all` 会直接冲过去，把用户的 token 花在一份他们还没看到的岗位列表上。
+**一次只驱动一个阶段。** `pipeline.py --from <stage>` 只运行那一个阶段（`match` 还会连带 `deep`+`merge`，因为停在 `match` 会留下一个下游谁也读不了的半成品），然后停下并打印下一条命令。**别用一条 `--to render` 把整轮一口气跑完**：下面的几道闸门处在阶段之间，而一口气跑到底会直接冲过去，把用户的 token 花在一份他们还没看到的岗位列表上。
 
 ## 前置条件：LLM 配置
 
@@ -372,7 +372,7 @@ python scripts/pipeline.py --from verify
 # 确系编造 → 重新生成那些岗位
 python scripts/stages/gen_materials.py {run_dir} --only 1,3 --force
 # 站得住脚（它*确实*在简历里，只是措辞不同）→ 加白名单并继续
-python scripts/pipeline.py --run-dir {run_dir} --from verify --all --allow PyTorch,nginx
+python scripts/pipeline.py --run-dir {run_dir} --from verify --to render --allow PyTorch,nginx
 ```
 
 **绝不要自作主张传 `--allow` 或 `--skip-verify`**——两者都是用户的决定，因为两者都以材料出门告终。把列表展示出来并询问。（`apply.py` 有自己的、不相关的 `--skip-verify`，用于*图片*健康检查；别把关于一个的决定搬到另一个身上。）
@@ -416,7 +416,7 @@ python scripts/deliver/apply.py "{run_dir}"                # 干跑：打印列�
 python scripts/deliver/apply.py "{run_dir}" --yes          # 发送
 ```
 
-**`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--all` 也不。
+**`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--to render` 也不。
 
 有用的参数：`--only 1,3,5`、`--company 百度,棱镜数聚`、`--max N`、`--image <path>`、`--no-image`、`--name 张三`。结果落在 `{run_dir}/apply_log.json`。三个检查拒绝发送而不是警告——缺招呼语、缺/空附件图片、运行目录不可读。
 

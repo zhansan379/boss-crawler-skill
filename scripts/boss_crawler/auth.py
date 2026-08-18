@@ -208,13 +208,13 @@ def _print_next_steps():
     ready = latest and os.path.exists(crawl_params_path(latest))
     if ready and not crawled:
         # 正是被爬取那一步打断的那一轮：参数都在，接着跑不会重复调模型。
-        # --all 不能省：pipeline 不给终点只跑一个阶段，这里的意图是「把后面跑完」。
+        # --to render 不能省：pipeline 不给终点只跑一个阶段，这里的意图是「把后面跑完」。
         print('  接着上一轮跑（简历解析和参数推断的结果都还在，不会再花模型钱）：')
         print('    %s' % script_cmd('pipeline.py', '--run-dir', latest,
-                                    '--from', 'crawl', '--all'))
+                                    '--from', 'crawl', '--to', 'render'))
     else:
         print('  从简历开始整轮跑：')
-        print('    %s' % script_cmd('pipeline.py', '你的简历.pdf', '--all'))
+        print('    %s' % script_cmd('pipeline.py', '你的简历.pdf', '--to', 'render'))
         print('  只想爬一批岗位看看：')
         print('    %s' % entry_cmd('-m', 'custom', '-p', 'Python', '-c', '西安',
                                    '-n', '20', '-d', '-y'))

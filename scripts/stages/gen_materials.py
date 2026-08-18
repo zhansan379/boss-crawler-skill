@@ -806,7 +806,7 @@ def main():
     print('\n下一步：')
     if os.environ.get('BOSS_PIPELINE_STAGE'):
         # 由 pipeline 启动：materials 阶段会自动落盘 岗位信息+招呼语.md，不用单独跑。
-        print('  python scripts/pipeline.py --run-dir "%s" --from verify --all'
+        print('  python scripts/pipeline.py --run-dir "%s" --from verify --to render'
               % run_dir)
     else:
         # 直接跑（不经 pipeline）：render_images.py 不写 岗位信息+招呼语.md，

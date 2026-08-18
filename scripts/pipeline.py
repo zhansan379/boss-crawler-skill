@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把九个阶段串起来跑，**默认只跑一个阶段**；整轮要显式 `--all`，且停在「材料已生成」。
+"""把九个阶段串起来跑，**默认只跑一个阶段**；整轮要显式 `--to render`，且停在「材料已生成」。
 
 九个阶段，每个阶段就是调一次已有的入口脚本（业务逻辑一行都不在本文件里）：
 
@@ -23,7 +23,7 @@
 下游那几步不是免费的：materials 按岗位调两次模型（招呼语 + 简历优化），deep 按岗位调一次。
 把整轮设成默认，等于让「我先跑跑看」顺手把钱花在一批你还没过目的岗位上。
 
-**投递更不在这条流水线上**，`--all` 也不含它。跑完只把 apply.py 的命令打印出来，要投得
+**投递更不在这条流水线上**，`--to render` 也不含它。跑完只把 apply.py 的命令打印出来，要投得
 自己敲，而且必须带 --yes。投递是整条链上唯一不可撤销的一步（消息一发对方立刻收到，撤不
 回来），不该由「我跑一下全流程」顺手完成。
 
@@ -33,13 +33,13 @@
     python scripts/pipeline.py --from match                 # match → deep → merge（见下）
     python scripts/pipeline.py --run-dir assets/2026-08-15_10-00-00 --from materials
 
-    python scripts/pipeline.py 简历.pdf --all               # parse … render 一次跑完
-    python scripts/pipeline.py --from crawl --all           # 从爬取起，一路跑到底
-    python scripts/pipeline.py 简历.pdf --all --no-images   # 整轮但不渲染简历长图
+    python scripts/pipeline.py 简历.pdf --to render         # parse … render 一次跑完
+    python scripts/pipeline.py --from crawl --to render     # 从爬取起，一路跑到底
+    python scripts/pipeline.py 简历.pdf --to render --no-images  # 整轮但不渲染简历长图
     python scripts/pipeline.py 简历.pdf --to crawl          # 显式区间：爬完就停
-    python scripts/pipeline.py 简历.pdf --all --dry-run     # 只打印每一步的命令，不执行
+    python scripts/pipeline.py 简历.pdf --to render --dry-run   # 只打印每一步的命令，不执行
 
-`--all` 就是 `--to render`（起点仍看 `--from`），两个只能给一个。`--from match` 是唯一
+`--to Y` 指终点（起点仍看 `--from`），`--to render` 就是整轮跑到底。`--from match` 是唯一
 一个「一个阶段」不止一步的地方：深度模式下单跑 match 只产出 deep_candidates.json，没有
 qualified_jobs.json，下游一步都走不了 —— 那是个半成品，不该是一条命令的终点。
 
@@ -454,8 +454,6 @@ def resume_cmd(run_dir, stage, end):
     """
     if end == _GROUP_END.get(stage, stage):
         tail = ''
-    elif end == 'render':
-        tail = ' --all'
     else:
         tail = ' --to %s' % end
     return ('python scripts/pipeline.py --run-dir "%s" --from %s%s'
@@ -478,11 +476,11 @@ def next_stage(last, match_mode):
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         prog='pipeline.py',
-        description='把整轮流程串起来跑。默认只跑一个阶段；整轮要显式 --all，'
+        description='把整轮流程串起来跑。默认只跑一个阶段；整轮要显式 --to render，'
                     '且停在「材料已生成」—— 投递是另一条命令。',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='阶段顺序：%s\n'
-               '不给 --to 就只跑 --from 那一个阶段；--all 等于 --to render。\n'
+               '不给 --to 就只跑 --from 那一个阶段；--to render 才一路跑到底。\n'
                '例外：--from match 会跑 match → deep → merge（单跑 match 产不出投递池）。\n'
                '深度模式才有 deep / merge 两步；快速模式会自动补写 qualified_jobs.json。\n'
                % ' → '.join(STAGES))
@@ -491,13 +489,9 @@ def parse_args(argv=None):
     ap.add_argument('--run-dir', help='复用已有运行目录；不给则新建（或 --from 时取 LATEST.txt）')
     ap.add_argument('--from', dest='from_stage', choices=STAGES, default='parse',
                     help='从哪个阶段开始（默认 parse）')
-    # --to 与 --all 互斥：两个都是「终点」，同时给必然有一个被无声忽略。
     # default=None 是为了区分「没给 --to」（隐含单阶段）和「显式 --to render」。
-    endpoint = ap.add_mutually_exclusive_group()
-    endpoint.add_argument('--to', dest='to_stage', choices=STAGES, default=None,
-                          help='跑到哪个阶段为止（不给则只跑 --from 那一个阶段）')
-    endpoint.add_argument('--all', dest='run_all', action='store_true',
-                          help='一路跑到 render（等于 --to render；仍然不含投递）')
+    ap.add_argument('--to', dest='to_stage', choices=STAGES, default=None,
+                    help='跑到哪个阶段为止（不给则只跑 --from 那一个阶段）')
     ap.add_argument('--no-images', action='store_true',
                     help='不渲染简历长图（终点是 render 时下压到 materials）')
     ap.add_argument('--dry-run', action='store_true', help='只打印每一步的命令，不执行')
@@ -549,8 +543,6 @@ def parse_args(argv=None):
 
 def resolve_end(args):
     """算出终点阶段，并说明是哪来的（终点决定花多少钱，不能悄悄定）。"""
-    if args.run_all:
-        return 'render', '--all'
     if args.to_stage:
         return args.to_stage, '--to'
     return _GROUP_END.get(args.from_stage, args.from_stage), '默认只跑这一个阶段'

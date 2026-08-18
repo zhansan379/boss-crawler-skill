@@ -4,7 +4,7 @@
 
 | | Skill 路径 | **命令行路径（本文）** |
 |---|---|---|
-| 入口 | Claude Code 里 `/boss-crawler` | `python scripts/pipeline.py 简历.pdf --all` |
+| 入口 | Claude Code 里 `/boss-crawler` | `python scripts/pipeline.py 简历.pdf --to render` |
 | LLM | 你自己配的 OpenAI 兼容接口 | 同一个（配置方式见第 2 节） |
 | 交互 | 逐阶段跑，投递范围与发送前各有一道确认 | 参数一次给全，或用 `--dry-run` 先看 |
 | 收窄投递范围 | 问你，然后翻译成 `--only` | 你自己写 `--only` / `--company` |
@@ -12,9 +12,9 @@
 
 两条路径**产物格式完全一致**，可以混着用：Skill 跑到一半，接着用命令行续跑同一个运行目录，反过来也行。区别只在谁来做决定 —— Skill 路径把每个阶段的参数问你确认，命令行路径要求你一次写全。
 
-> 📍 **如果你是 Skill（Claude Code），本文是参考资料，不是操作指南。** 本文按「一次给全参数、`--all` 一把跑完」来写，那是给人和定时任务的用法；Skill 路径必须一个阶段一条命令、**禁用 `--all`**，因为收窄投递范围和发送前的两道确认就卡在阶段之间。冲突时以 `SKILL.md` 为准。本文真正只此一份的内容是：第 2 节的模型配置排查、第 3 节的 `--from/--to` 区间表、第 7 节的退出码约定、第 8 节的故障排查。
+> 📍 **如果你是 Skill（Claude Code），本文是参考资料，不是操作指南。** 本文按「一次给全参数、`--to render` 一把跑完」来写，那是给人和定时任务的用法；Skill 路径必须一个阶段一条命令、**逐阶段驱动**，因为收窄投递范围和发送前的两道确认就卡在阶段之间。冲突时以 `SKILL.md` 为准。本文真正只此一份的内容是：第 2 节的模型配置排查、第 3 节的 `--from/--to` 区间表、第 7 节的退出码约定、第 8 节的故障排查。
 
-> ⚠️ **投递不在流水线上。** `pipeline.py --all` 跑完停在「材料已生成」，只把投递命令打印出来。投递要单独执行 `apply.py` 并显式带 `--yes` —— 那是整条链上唯一不可撤销的一步（消息一发对方立刻收到）。
+> ⚠️ **投递不在流水线上。** `pipeline.py --to render` 跑完停在「材料已生成」，只把投递命令打印出来。投递要单独执行 `apply.py` 并显式带 `--yes` —— 那是整条链上唯一不可撤销的一步（消息一发对方立刻收到）。
 
 ---
 
@@ -81,7 +81,7 @@ python scripts/utils/llm_check.py --json        # 额外验 JSON 模式能不能
 
 ## 3. 跑起来
 
-`pipeline.py` **默认只跑一个阶段**。一次跑一步、每步跑完自己看一眼再决定要不要往下 —— 下游那几步不是免费的：`materials` 按岗位调两次模型（招呼语 + 简历优化），`deep` 按岗位调一次。想一次跑完整轮，显式给 `--all`。
+`pipeline.py` **默认只跑一个阶段**。一次跑一步、每步跑完自己看一眼再决定要不要往下 —— 下游那几步不是免费的：`materials` 按岗位调两次模型（招呼语 + 简历优化），`deep` 按岗位调一次。想一次跑完整轮，给 `--to render`。
 
 ```bash
 # 一个阶段一个阶段来（每步跑完都会印出下一步的命令）
@@ -93,17 +93,17 @@ python scripts/pipeline.py --from materials      # 只生成材料
 python scripts/pipeline.py --from render         # 只渲染简历长图
 
 # 一次跑完：解析简历 → 推断参数 → 爬取 → 匹配 → 生成材料 → 渲染简历图
-python scripts/pipeline.py 简历.pdf --all
+python scripts/pipeline.py 简历.pdf --to render
 
 # 先看要执行什么，不动任何东西（不会新建运行目录，也不改 LATEST.txt）
-python scripts/pipeline.py 简历.pdf --all --dry-run
+python scripts/pipeline.py 简历.pdf --to render --dry-run
 
 # 常用组合
-python scripts/pipeline.py 简历.pdf --all --city "杭州,上海" --keywords "Python,后端开发" --count 30
-python scripts/pipeline.py 简历.pdf --all --match-mode deep --top-n 15   # 逐岗位调模型
-python scripts/pipeline.py 简历.pdf --all --match-mode quick             # 纯规则，零 token
-python scripts/pipeline.py 简历.pdf --all --no-images                    # 不渲染简历长图
-python scripts/pipeline.py 简历.pdf --all --greeting-mode default        # 招呼语套模板，不调模型
+python scripts/pipeline.py 简历.pdf --to render --city "杭州,上海" --keywords "Python,后端开发" --count 30
+python scripts/pipeline.py 简历.pdf --to render --match-mode deep --top-n 15   # 逐岗位调模型
+python scripts/pipeline.py 简历.pdf --to render --match-mode quick             # 纯规则，零 token
+python scripts/pipeline.py 简历.pdf --to render --no-images                    # 不渲染简历长图
+python scripts/pipeline.py 简历.pdf --to render --greeting-mode default        # 招呼语套模板，不调模型
 ```
 
 **首次运行需要登录**。爬虫检测到未登录时会正常退出（不是报错），流水线会停在 crawl 这一步。先单独把登录做掉：
@@ -121,7 +121,7 @@ python scripts/stages/boss_post_interactive.py --ensure-login
 ```bash
 python scripts/pipeline.py --run-dir "assets/2026-08-15_10-00-00" --from crawl        # 只重跑爬取
 python scripts/pipeline.py --from materials                # 不给 --run-dir 时取 assets/LATEST.txt
-python scripts/pipeline.py --from crawl --all              # 从爬取起，一路跑到底
+python scripts/pipeline.py --from crawl --to render        # 从爬取起，一路跑到底
 python scripts/pipeline.py --from match --to merge          # 显式区间
 ```
 
@@ -134,10 +134,8 @@ python scripts/pipeline.py --from match --to merge          # 显式区间
 | `--from X`（不给终点） | 只跑 `X` |
 | `--from match` | `match → deep → merge` |
 | `--from deep` | `deep → merge` |
-| `--all` | `--from` 起，一路到 `render` |
+| `--to render` | `--from` 起，一路到 `render` |
 | `--to Y` | `--from` 起到 `Y` 为止 |
-
-`--all` 就是 `--to render`，两个只能给一个（同时给按用法错误退出，码 2）。
 
 `--from match` 是唯一一个「一个阶段」不止一步的地方：深度模式下单跑 `match` 只产出 `deep_candidates.json`，没有 `qualified_jobs.json` —— 而下游（`materials` / `render` / `apply`）全都只认后者，停在那里是个谁都用不了的半成品。
 
@@ -202,7 +200,7 @@ python scripts/deliver/apply.py "assets/…" --yes --no-image               # �
 
 爬取那一行的 `--run-dir` 别省：`crawl_summary.json` 只在传了它的时候才写，而流水线正是靠这个文件判定「这一轮到底爬没爬」（爬虫检测到未登录时是**正常退出**的，光看退出码分不出来）。
 
-「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--all`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
+「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--to render`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
 
 同理还有两道自动子步骤：**`render` 之后自动跑 `verify_image.py <run_dir>/deliver --all`** 图检（图刚渲出来就把几十行数字打给模型看，替代 Read 一张 640k token 的 PNG）；**计划里含任何 LLM 阶段时，`parse` 之前自动跑 `llm_check.py --no-call` 预检配置**（缺了早停，不把最贵的爬取/匹配跑死在配置上）。
 
@@ -349,7 +347,7 @@ python scripts/check_artifacts.py <run_dir>        # 材料齐不齐（缺谁的
 判断 LLM 配置时按这套读，别套上面那张表。
 
 ```bash
-python scripts/pipeline.py 简历.pdf --all; code=$?
+python scripts/pipeline.py 简历.pdf --to render; code=$?
 if [ $code -eq 3 ]; then echo "部分产物缺失，检查后重跑"; fi
 ```
 
