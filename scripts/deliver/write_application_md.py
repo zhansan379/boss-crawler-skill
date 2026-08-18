@@ -41,6 +41,9 @@ sys.path.insert(0, _SCRIPTS)
 
 from resume_matcher import (qualified_jobs_path, match_analysis_path,
                             greeting_pattern, resume_pattern, deliver_dir)
+# --only 解析与 materials / render / apply 共用同一份（check_artifacts 无依赖），
+# 保证「投哪些」和「建哪些 deliver 文件夹」用的是同一个序号。
+from check_artifacts import parse_only
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
@@ -620,19 +623,27 @@ def main():
     ap.add_argument('--greeting-file', help='招呼语文件路径')
     ap.add_argument('--csv', help='指定原始爬取 CSV，跳过自动定位')
     ap.add_argument('--name', help='简历归属姓名，覆盖 profile.json 的 basic_info.name（写 <姓名>-<岗位>.md 用）')
+    ap.add_argument('--only', help='只给这些 1-based 序号建文件夹，如 1,3,5-7')
     args = ap.parse_args()
 
-    if not args.all and args.index is None:
-        ap.error('至少给一个：--all 或 --index N')
-    if args.all and (args.greeting or args.greeting_file):
-        ap.error('--all 时不能给 --greeting/--greeting-file（那是单个岗位的招呼语）')
+    if not args.all and args.index is None and not args.only:
+        ap.error('至少给一个：--all 或 --index N 或 --only 1,3,5-7')
+    if (args.all or args.only) and (args.greeting or args.greeting_file):
+        ap.error('--all/--only 时不能给 --greeting/--greeting-file（那是单个岗位的招呼语）')
 
     jobs = load_jobs(args.run_dir)
     if not jobs:
         print('qualified_jobs.json 里没有岗位')
         return 1
 
-    if args.all:
+    if args.only:
+        try:
+            only_set = parse_only(args.only, len(jobs))
+        except ValueError as exc:
+            print('❌ %s' % exc)
+            return 1
+        targets = [(i, jobs[i - 1]) for i in sorted(only_set)]
+    elif args.all:
         targets = list(enumerate(jobs, 1))
     else:
         if not 1 <= args.index <= len(jobs):

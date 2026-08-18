@@ -397,7 +397,7 @@ python scripts/pipeline.py --from render --only 1,3,5
 
 ### 投递.md 自动落盘，然后看一眼
 
-`投递.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py --all`，为每个岗位写 `deliver/{company}-{position}/投递.md`（所有爬取字段加招呼语；绝不手写），同时落盘 `优化建议.md` 和优化简历正文 md（`<姓名>-<岗位>.md`，取自该岗位 `materials/resume_#.json` 的 `optimized_resume`，与 render 出的长图同名同目录，只写给真正跑过 materials 的岗位）。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。简历正文想看薄格式就用 `read_thin.py` 读 `materials/resume_#.json`。
+`投递.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py`，为本次 `--only` 选中的岗位写 `deliver/{company}-{position}/投递.md`（所有爬取字段加招呼语；绝不手写），同时落盘 `优化建议.md` 和优化简历正文 md（`<姓名>-<岗位>.md`，取自该岗位 `materials/resume_#.json` 的 `optimized_resume`，与 render 出的长图同名同目录）。**只给要投的岗位建 deliver 文件夹**：`--only` 给了就只建那几家；没给才退回 `--all` 写全部 qualified 岗位。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。简历正文想看薄格式就用 `read_thin.py` 读 `materials/resume_#.json`。
 
 长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/deliver" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
 

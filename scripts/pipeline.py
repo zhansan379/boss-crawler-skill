@@ -668,8 +668,9 @@ def main(argv=None):
             print('\n▶ %s\n  %s' % (name, show(cmd)))
             if name == 'materials':
                 # write_application_md 是 materials 之后自动落盘的子步骤，dry-run 也要露出来
-                print('\n▶ write_application_md\n  %s'
-                      % show([sys.executable, script('write_application_md.py'), run_dir, '--all']))
+                _land = [sys.executable, script('write_application_md.py'), run_dir]
+                _land += ['--only', args.only] if args.only else ['--all']
+                print('\n▶ write_application_md\n  %s' % show(_land))
             elif name == 'render':
                 # verify_image 是 render 之后自动图检的子步骤 —— 见 render 的核查分支
                 print('\n▶ verify_image\n  %s' % show([sys.executable, script('verify_image.py'),
@@ -726,8 +727,14 @@ def main(argv=None):
             # ── materials 之后自动落盘 投递.md。原先这是 render 之后一道
             #    手工步骤（SKILL.md 里的「材料落盘」），现在并入 materials —— 材料生成
             #    后自动写出来，不依赖长图渲染，所以 --no-images / --resume-mode skip
-            #    （render 被跳过）时也照跑。`--all` 与旧行为一致：所有 qualified 岗位都写。
-            land = [sys.executable, script('write_application_md.py'), run_dir, '--all']
+            #    （render 被跳过）时也照跑。落盘目标跟随本次的 --only：只给要投的岗位
+            #    建 deliver 文件夹（写 投递.md / 优化建议.md / 优化简历 md）；没给
+            #    --only 才退回 --all 写全部 qualified 岗位。
+            land = [sys.executable, script('write_application_md.py'), run_dir]
+            if args.only:
+                land += ['--only', args.only]
+            else:
+                land += ['--all']
             code = run_stage('write_application_md', land, run_dir)
             if code != 0:
                 print('❌ write_application_md.py 失败（退出码 %d），流水线停在这里。' % code)
