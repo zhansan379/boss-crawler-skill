@@ -350,7 +350,7 @@ def main():
         check('没有自造字段名（否则 write_application_md 回查不到）',
               not stray, stray)
 
-        # ── match_analysis.json：投递.md 补齐匹配分析的来源 ──
+        # ── match_analysis.json：岗位信息+招呼语.md 补齐匹配分析的来源 ──
         ma_path = match_analysis_path(run_dir)
         check('match_analysis.json 写出来了', os.path.exists(ma_path), ma_path)
         match = read_json(ma_path)

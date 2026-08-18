@@ -16,7 +16,7 @@
 
 再往里挂了三道**自动子步骤**，跟着阶段跑、不是独立阶段：
     - 计划里含任何 LLM 阶段时，跑之前先 `llm_check.py --no-call` 预检配置，缺了早停
-    - materials 之后自动 `write_application_md.py --all` 落盘 投递.md
+    - materials 之后自动 `write_application_md.py --all` 落盘 岗位信息+招呼语.md
     - render 之后自动 `verify_image.py <deliver> --all` 把图检数字打给模型看
 
 **不给 `--to` 就只跑一个阶段。** 一次跑一步，每步跑完自己看一眼再决定要不要往下 ——
@@ -649,7 +649,7 @@ def main(argv=None):
             if name in _DEEP_ONLY:
                 print('\n○ %s：快速模式没有这一步，跳过' % name)
             elif name == 'render':
-                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（投递.md 已由 materials 落盘）')
+                print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（岗位信息+招呼语.md 已由 materials 落盘）')
             elif name == 'verify':
                 print('\n○ verify：--skip-verify 已跳过材料核查'
                       '（发送前请自己逐份看一遍是否有简历里没有的技术词）')
@@ -724,11 +724,11 @@ def main(argv=None):
                 return 1
 
         elif name == 'materials':
-            # ── materials 之后自动落盘 投递.md。原先这是 render 之后一道
+            # ── materials 之后自动落盘 岗位信息+招呼语.md。原先这是 render 之后一道
             #    手工步骤（SKILL.md 里的「材料落盘」），现在并入 materials —— 材料生成
             #    后自动写出来，不依赖长图渲染，所以 --no-images / --resume-mode skip
             #    （render 被跳过）时也照跑。落盘目标跟随本次的 --only：只给要投的岗位
-            #    建 deliver 文件夹（写 投递.md / 优化建议.md / 优化简历 md）；没给
+            #    建 deliver 文件夹（写 岗位信息+招呼语.md / 优化建议.md / 优化简历 md）；没给
             #    --only 才退回 --all 写全部 qualified 岗位。
             land = [sys.executable, script('write_application_md.py'), run_dir]
             if args.only:

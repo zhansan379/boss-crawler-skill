@@ -775,11 +775,11 @@ def main():
 
     print('\n下一步：')
     if os.environ.get('BOSS_PIPELINE_STAGE'):
-        # 由 pipeline 启动：materials 阶段会自动落盘 投递.md，不用单独跑。
+        # 由 pipeline 启动：materials 阶段会自动落盘 岗位信息+招呼语.md，不用单独跑。
         print('  python scripts/pipeline.py --run-dir "%s" --from verify --all'
               % run_dir)
     else:
-        # 直接跑（不经 pipeline）：render_images.py 不写 投递.md，
+        # 直接跑（不经 pipeline）：render_images.py 不写 岗位信息+招呼语.md，
         # 那份要么走 pipeline.py --from materials 让 materials 自动写，要么单独跑它。
         if args.resume_mode != 'skip':
             print('  python scripts/deliver/render_images.py "%s"        # 简历 JSON → PNG' % run_dir)

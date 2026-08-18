@@ -144,7 +144,7 @@ def job_dir_name(job, index):
     """`deliver/#N-<公司>-<岗位>` 目录名 + 岗位展示名。
 
     刻意走 write_application_md 的 resolve_csv_row + merge + job_dir_stem：那个脚本
-    写 `投递.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
+    写 `岗位信息+招呼语.md` 时就是这么定目录的，自己另算一套的下场是 md 和 png 落进两个
     只差几个字的目录里，而且要等用户翻文件夹才发现。序号前缀（见 job_dir_stem）
     保证同一批里「公司+岗位」撞名也不互相覆盖。
     """
@@ -177,7 +177,7 @@ def run_stamp(run_dir, override):
 def stage_all(run_dir, jobs, indexes, person, stamp):
     """把 materials/resume_*.json 渲染成 deliver/#N-<公司>-<岗位>/<姓名>-<岗位>.png。
 
-    只向岗位目录写最终要交的 PNG（和投递.md，那是 write_application_md 的事）。
+    只向岗位目录写最终要交的 PNG（和岗位信息+招呼语.md，那是 write_application_md 的事）。
     同时把完整优化简历正文以 <姓名>-<岗位>.md 落盘到同一岗位目录（与长图同名同目录，
     供人读/改；长图是投递给 HR 的附件，md 是给主人留存编辑的副本）。
 

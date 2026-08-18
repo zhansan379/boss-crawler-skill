@@ -61,7 +61,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
 │       │   └── resume_#_*.json       # 定制简历 JSON（含优化后简历 + 建议）
 │       ├── deliver/                  # 🎁 最终交付（人看的）
 │       │   ├── matching_report.html  # HTML 可视化报告
-│       │   └── #N-{公司}-{职位}/     # 每个岗位：简历图片 + 投递.md + 优化建议.md
+│       │   └── #N-{公司}-{职位}/     # 每个岗位：简历图片 + 岗位信息+招呼语.md + 优化建议.md
 │       └── intermediate/             # 跑完即无用：clean_run.py 可整体删
 │           ├── deep_candidates.json  # 深度模式候选
 │           ├── deep_results.json     # 深度分析结果
@@ -86,7 +86,7 @@ boss-crawler/                         # Skill 根目录 (~/.claude/skills/boss-c
     │   ├── gen_materials.py          # 招呼语 + 优化简历 → materials/
     │   └── validate_profile.py       # Profile 交叉校验
     ├── deliver/                      # 投递
-    │   ├── write_application_md.py   # 组装 deliver/ 下的投递.md + 优化建议.md
+    │   ├── write_application_md.py   # 组装 deliver/ 下的岗位信息+招呼语.md + 优化建议.md
     │   ├── render_images.py          # 简历 JSON → 简历长图（串行，共用一个浏览器）
     │   └── apply.py                  # 投递（必须显式 --yes，不加只演练）
     ├── verify/                       # 校验（图/内容质量门）

@@ -124,7 +124,7 @@ def save_deep_candidates(
                 '位置': job.get('位置', ''),
                 'source_file': job.get('source_file', ''),
                 # 投递决策信号：爬虫 (-d) 在 CSV 里采集了，这里必须透传，否则
-                # gate:jobs / apply / 投递.md 永远是「未采集」——它们读不到就无法
+                # gate:jobs / apply / 岗位信息+招呼语.md 永远是「未采集」——它们读不到就无法
                 # 拦截失效岗、识别代招、按 HR 活跃度排序。前三个是 tri-state
                 # （'是'/'否'/''，'' 才是未采集），后四个是原始文本。
                 '已失效': job.get('已失效', ''),
@@ -265,10 +265,10 @@ def merge_deep_results(
     qualified_raw = []
     need_optimization_raw = []
 
-    # 每个岗位的裁定结论，按 link 收集，稍后写 match_analysis.json（投递.md 生成时按
+    # 每个岗位的裁定结论，按 link 收集，稍后写 match_analysis.json（岗位信息+招呼语.md 生成时按
     # link 连回来）。qualified_jobs.json 只存原始爬取字段，裁定结论单独落这一个文件；
     # 放 state/ 而非 intermediate/ —— 后者文档明言「跑完即无用：可整体删除」，被清掉后
-    # 投递.md 的匹配分析就又要从 deep_results 反向拼了。
+    # 岗位信息+招呼语.md 的匹配分析就又要从 deep_results 反向拼了。
     match_by_link = {}
 
     for candidate in candidates_data.get('candidates', []):
@@ -353,7 +353,7 @@ def merge_deep_results(
             'is_deep': deep is not None,
         })
 
-        # 按 link 存下投递.md 要展示的全部裁定字段。键名就是 write_application_md
+        # 按 link 存下岗位信息+招呼语.md 要展示的全部裁定字段。键名就是 write_application_md
         # 在 render() 里 `job.get(...)` 直接读的那几个，连名都对上，不需要再映射。
         # 命中原因/技能（match_reasons/matched_skills）只有规则侧 rule_analysis 有，
         # deep_results 不含 —— 这两个键是 匹配分析 里 匹配理由/命中技能 小节的来源。
@@ -418,8 +418,8 @@ def merge_deep_results(
         json.dump(qualified_raw + need_optimization_raw, f, ensure_ascii=False, indent=2)
     print(f"  ✅ 已生成投递候选池: {qualified_path}（{len(qualified_raw) + len(need_optimization_raw)} 个岗位，含符合+需优化）")
 
-    # 逐岗匹配分析（按 link），write_application_md 生成投递.md 时靠它把空的
-    # 「匹配分析」补齐。没有 link 的岗位不落进来 —— 投递.md 本来也按 link 回查 CSV。
+    # 逐岗匹配分析（按 link），write_application_md 生成岗位信息+招呼语.md 时靠它把空的
+    # 「匹配分析」补齐。没有 link 的岗位不落进来 —— 岗位信息+招呼语.md 本来也按 link 回查 CSV。
     match_path = match_analysis_path(output_dir)
     os.makedirs(os.path.dirname(match_path), exist_ok=True)
     with open(match_path, 'w', encoding='utf-8') as f:

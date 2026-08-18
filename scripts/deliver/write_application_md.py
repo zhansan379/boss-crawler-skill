@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成每个岗位的 `投递.md`、`优化建议.md` 与优化简历 `优化简历正文 md`：把该岗位
-采到的**全部**字段和招呼语写进 投递.md，另在同一目录写一份只含优化建议的 优化建议.md，
+"""生成每个岗位的 `岗位信息+招呼语.md`、`优化建议.md` 与优化简历 `优化简历正文 md`：把该岗位
+采到的**全部**字段和招呼语写进 岗位信息+招呼语.md，另在同一目录写一份只含优化建议的 优化建议.md，
 并把 materials 里那份优化后简历正文（optimized_resume）以 `<姓名>-<岗位>.md` 一并落盘
 （与 render 出的长图同名同目录，本脚本在设计上就是 materials 阶段把它写齐的那一步）。
 
@@ -47,6 +47,10 @@ from check_artifacts import parse_only
 
 # CSV 是 utf-8-sig（boss_crawler/config.py:25）。'utf-8-sig' 同时能读无 BOM 的文件。
 ENCODING = 'utf-8-sig'
+
+# 供人核对/手动发送的那份岗位文档的文件名。apply.py 投递时也按这份名字回读招呼语，
+# 用户改的就是它 —— 所以它必须是单一常量，生成与读取走同一个来源。
+DELIVERY_MD_FILENAME = '岗位信息+招呼语.md'
 
 _SKILL_ROOT = os.path.dirname(_SCRIPTS)
 POST_DATA_DIR = os.path.join(_SKILL_ROOT, 'assets', 'post_data')
@@ -247,7 +251,7 @@ def job_dir_stem(index, company, position):
 
     序号前缀让同一批里「公司+岗位」撞名的两个岗位也各有独立目录。材料层
     （greeting_N、resume_N）从 gen_materials 起就以序号定位，交付层一度拿自然键
-    `<公司>-<岗位>` 当身份 —— 一撞名，两份材料的 PNG/投递.md 就写进同一目录
+    `<公司>-<岗位>` 当身份 —— 一撞名，两份材料的 PNG/岗位信息+招呼语.md 就写进同一目录
     互相覆盖（#5/#6 的病灶）。这里把自然键延续成「序号 + 自然键」，附件文件名
     仍是干净的 `<姓名>-<岗位>.png`，序号只进目录名。
     """
@@ -321,7 +325,7 @@ def load_optimized_resume_markdown(run_dir, index):
 
     和 load_resume_optimization 读同一个文件，但取完整正文而不是精简建议。文件缺失
     （--resume-mode skip、没走到 materials、或该岗位材料生成失败）时返回 None，
-    调用方就不写 <姓名>-<岗位>.md —— 投递.md / 优化建议.md 是给所有被列岗位的，
+    调用方就不写 <姓名>-<岗位>.md —— 岗位信息+招呼语.md / 优化建议.md 是给所有被列岗位的，
     而优化简历正文只属于真正跑过 materials 的岗位。
     """
     hits = sorted(glob.glob(resume_pattern(run_dir, index)))
@@ -570,13 +574,13 @@ def write_one(run_dir, job, index, args):
     position = sanitize(row.get('职位') or row.get('position') or '未知岗位')
     out_dir = os.path.join(deliver_dir(run_dir), job_dir_stem(index, company, position))
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, '投递.md')
+    out_path = os.path.join(out_dir, DELIVERY_MD_FILENAME)
 
     existed = os.path.exists(out_path)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(render(row, job, greeting, csv_path, index, csv_row))
 
-    # 单独的 优化建议.md：投递材料交给人看的那份是投递.md，这里是给「改简历」用的，
+    # 单独的 优化建议.md：投递材料交给人看的那份是岗位信息+招呼语.md，这里是给「改简历」用的，
     # 只含优化建议不重复整份简历。优先 LLM 出的优化 json，缺了就回退规则侧优化点。
     opt = load_resume_optimization(run_dir, index)
     opt_path = os.path.join(out_dir, '优化建议.md')
@@ -584,7 +588,7 @@ def write_one(run_dir, job, index, args):
         f.write(render_optimization(company, position, opt, job, index))
 
     # 优化简历正文 <姓名>-<岗位>.md：与长图同名同目录（render 渲染前那份）。
-    # 在 materials 一并落盘，让 投递.md / 优化建议.md / 优化简历 md 一次写齐。
+    # 在 materials 一并落盘，让 岗位信息+招呼语.md / 优化建议.md / 优化简历 md 一次写齐。
     # 无名（占位符）或该岗位没跑到 materials 时静默跳过，不写「未提取-岗位.md」。
     resume_md = load_optimized_resume_markdown(run_dir, index)
     person = sanitize(resolve_person_name(run_dir, getattr(args, 'name', None)))
@@ -615,7 +619,7 @@ def main():
         _stream.reconfigure(encoding='utf-8', errors='replace')
 
     ap = argparse.ArgumentParser(
-        description='生成 deliver/<公司>-<岗位>/投递.md（含全部爬取字段）')
+        description='生成 deliver/<公司>-<岗位>/岗位信息+招呼语.md（含全部爬取字段）')
     ap.add_argument('run_dir')
     ap.add_argument('--all', action='store_true', help='处理 qualified_jobs.json 里所有岗位')
     ap.add_argument('--index', type=int, help='只处理第 N 个岗位（1-based，与 greeting_N_ 对齐）')

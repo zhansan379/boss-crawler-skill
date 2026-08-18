@@ -233,12 +233,12 @@ def survey(run_dir):
                                 '不需要长图就跳过这一步：pipeline 加 --no-images'])
     done.append('render：%d 张简历长图' % pngs)
 
-    # ── 收尾一：各岗位的 投递.md（不在流水线里）──
-    ready = [d for d in job_dirs if os.path.exists(os.path.join(d, '投递.md'))]
+    # ── 收尾一：各岗位的 岗位信息+招呼语.md（不在流水线里）──
+    ready = [d for d in job_dirs if os.path.exists(os.path.join(d, '岗位信息+招呼语.md'))]
     if len(ready) < n:
-        return done, ('写各岗位的 投递.md（流水线之外）', [
+        return done, ('写各岗位的 岗位信息+招呼语.md（流水线之外）', [
             'python scripts/deliver/write_application_md.py "%s" --all' % run_dir,
-        ]), ['%d/%d 个岗位目录有 投递.md' % (len(ready), n)]
+        ]), ['%d/%d 个岗位目录有 岗位信息+招呼语.md' % (len(ready), n)]
     done.append('材料：%d/%d 个岗位目录齐全' % (len(ready), n))
 
     # ── 收尾二：gate:send → 投递（唯一不可撤销的一步）──

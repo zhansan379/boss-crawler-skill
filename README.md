@@ -91,7 +91,7 @@ python scripts/utils/llm_check.py                                # 验一下通�
 
 ## 📁 运行数据在哪里
 
-Skill 目录一般在 `C:\Users\用户名\.claude\skills` 或当前项目的 `.claude\skills`。所有运行产物落在 Skill 目录下，**每次运行隔离在一个时间戳子目录** `assets/<timestamp>/`（例如 `assets/2026-08-14_16-05-21/`）。对你最有用的是 `deliver/#N-{公司}-{职位}/` 三件套：**定制简历图片 + 投递.md + 优化建议.md**。
+Skill 目录一般在 `C:\Users\用户名\.claude\skills` 或当前项目的 `.claude\skills`。所有运行产物落在 Skill 目录下，**每次运行隔离在一个时间戳子目录** `assets/<timestamp>/`（例如 `assets/2026-08-14_16-05-21/`）。对你最有用的是 `deliver/#N-{公司}-{职位}/` 三件套：**定制简历图片 + 岗位信息+招呼语.md + 优化建议.md**。
 
 完整产物清单见 [docs/outputs.md](./docs/outputs.md)。
 

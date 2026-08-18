@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""write_application_md.py 的回归测试：匹配分析必须能在 投递.md 里看到。
+"""write_application_md.py 的回归测试：匹配分析必须能在 岗位信息+招呼语.md 里看到。
 
-历史 bug：投递.md 的「匹配分析」四列（匹配度/投递难度/投递结论/结论理由）全是
+历史 bug：岗位信息+招呼语.md 的「匹配分析」四列（匹配度/投递难度/投递结论/结论理由）全是
 「未裁定」，下方的 匹配理由/命中技能/亮点/风险/优化建议 小节整块缺失。根因是
 write_application_md 只读 qualified_jobs.json —— 那堆文件按设计只含原始爬取字段，
 不含任何匹配结论；裁定早在 merge_deep_results 的 job_result 里算完就丢了。
 
-修复：merge 按 link 把裁定结论落盘到 state/match_analysis.json，write_one 写投递.md 前
+修复：merge 按 link 把裁定结论落盘到 state/match_analysis.json，write_one 写岗位信息+招呼语.md 前
 按 link 连回 job dict。这里用真实 write_one + 手工构造的 match_analysis.json 验证：
 连上了就显示真实值，没连上（快速模式/没 merge）就回退「未裁定」且不崩。
 
@@ -99,7 +99,7 @@ def main():
 
         # ── A：按 link 连回了 match_analysis，匹配分析是真实值 ──
         out_a, missing_a = WAM.write_one(run_dir, JOB_A, 1, args)
-        check('写出了 A 的 投递.md（在 #N-公司-岗位 目录）', os.path.exists(out_a), out_a)
+        check('写出了 A 的 岗位信息+招呼语.md（在 #N-公司-岗位 目录）', os.path.exists(out_a), out_a)
         text = open(out_a, encoding='utf-8').read()
 
         check('回查原始 CSV 失败仍写出文件（csv_path 空，字段不全但文档在）',
@@ -159,7 +159,7 @@ def main():
         for item in failures:
             print('  - %s' % item)
         return 1
-    print('✅ write_application_md 测试全部通过（匹配分析已能落进 投递.md）')
+    print('✅ write_application_md 测试全部通过（匹配分析已能落进 岗位信息+招呼语.md）')
     return 0
 
 

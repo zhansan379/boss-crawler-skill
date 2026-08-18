@@ -32,6 +32,7 @@ import os
 import sys
 import json
 import glob
+import re
 import argparse
 import subprocess
 import unicodedata
@@ -40,7 +41,8 @@ from types import SimpleNamespace
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
-from write_application_md import sanitize, load_jobs, resolve_greeting, resolve_csv_row, merge
+from write_application_md import (sanitize, load_jobs, resolve_greeting,
+                                  resolve_csv_row, merge, DELIVERY_MD_FILENAME)
 from render_images import parse_only, resolve_name, job_dir_name
 from resume_matcher import profile_path, deliver_dir, apply_log_path
 
@@ -95,8 +97,45 @@ def load_profile(run_dir):
         return scrub_nulls(json.load(f))
 
 
-def find_greeting(run_dir, index):
-    """招呼语正文与来源。走 write_application_md.resolve_greeting，两边口径一致。"""
+def read_greeting_from_md(run_dir, dir_name):
+    """从该岗位的 岗位信息+招呼语.md 读招呼语。
+
+    岗位信息+招呼语.md 由 write_application_md.py 落盘，也是用户真正会去改的那份文件 —— 投递
+    时以它的「## 招呼语」段为准，覆盖 materials 里的同名 txt。找不到 md、或 md 里
+    没有该段时返回 (None, None)，由调用方回退到 txt。
+    """
+    md_path = os.path.join(deliver_dir(run_dir), dir_name, DELIVERY_MD_FILENAME)
+    if not os.path.isfile(md_path):
+        return None, None
+    try:
+        with open(md_path, encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return None, None
+    m = re.search(r'^##\s*招呼语.*$', text, re.MULTILINE)
+    if not m:
+        return None, None
+    # 标题之后的第一个非空段落即是招呼语正文，写到下一个顶层标题或文件末尾
+    body = []
+    for ln in text[m.end():].splitlines():
+        line = ln.strip()
+        if not line:
+            if body:
+                break
+            continue
+        if line.startswith('##'):
+            break
+        body.append(ln.rstrip())
+    greeting = '\n'.join(body).strip()
+    return (greeting, md_path) if greeting else (None, None)
+
+
+def find_greeting(run_dir, index, dir_name):
+    """招呼语正文与来源。目录名已定，优先读用户改过的 岗位信息+招呼语.md（那才是用户真正会
+    动手的文件），没有才回退 materials/greeting_#.txt—— 口径与上一步保持一致。"""
+    md_text, md_src = read_greeting_from_md(run_dir, dir_name)
+    if md_text:
+        return md_text, md_src
     args = SimpleNamespace(greeting=None, greeting_file=None)
     text, source = resolve_greeting(run_dir, index, args)
     return (text or '').strip(), source
@@ -267,7 +306,7 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
             blockers.append('#%d %s 没有 link，无法打开岗位页' % (index, dir_name))
             continue
 
-        greeting, source = find_greeting(run_dir, index)
+        greeting, source = find_greeting(run_dir, index, dir_name)
         if not greeting:
             blockers.append(
                 '#%d %s 没有招呼语（materials/greeting_%d_*.txt 缺失或为空）'

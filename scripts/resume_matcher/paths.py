@@ -15,7 +15,7 @@ run_dir 目录结构的**唯一真源**：所有脚本都从这里取产物路�
     │   └── resume_#_<公司>.json
     ├── deliver/       最终交付（人看的）
     │   ├── matching_report.html
-    │   └── #N-<公司>-<岗位>/<姓名>-<岗位>.png + 投递.md
+    │   └── #N-<公司>-<岗位>/<姓名>-<岗位>.png + 岗位信息+招呼语.md
     └── intermediate/  跑完即无用：可整体删除
         ├── deep_candidates.json / deep_results.json
         ├── llm_usage.jsonl / run_timings.jsonl
@@ -81,9 +81,9 @@ def match_analysis_path(run_dir):
     """按 link 存的裁定结论（merge_deep_results 在写 qualified_jobs 时一并产出）。
 
     qualified_jobs.json 按设计只含原始爬取字段（投递阶段按 link 回查 CSV），匹配
-    结论单独落在这里，供 write_application_md 生成 投递.md 时按 link 连回来。
+    结论单独落在这里，供 write_application_md 生成 岗位信息+招呼语.md 时按 link 连回来。
     放 state/（随 run 存在、删 run 即删）而不是 intermediate/（文档明言可整删），
-    否则 投递.md 在中间产物被清理后就没匹配分析了。
+    否则 岗位信息+招呼语.md 在中间产物被清理后就没匹配分析了。
     """
     return os.path.join(state_dir(run_dir), 'match_analysis.json')
 
