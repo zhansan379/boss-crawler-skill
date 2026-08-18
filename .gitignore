@@ -17,3 +17,7 @@ showcv_profile/
 showcv-resume.json
 
 看这个
+
+.python-version
+pyproject.toml
+uv.lock
