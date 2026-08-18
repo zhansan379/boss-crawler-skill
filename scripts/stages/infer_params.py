@@ -10,8 +10,7 @@
 用 --scale 显式给。
 
 用法：
-    python scripts/stages/infer_params.py <run_dir>                    # 推断并写 crawl_params.json
-    python scripts/stages/infer_params.py <run_dir> --save             # 同时存进 assets/preferences.json
+    python scripts/stages/infer_params.py <run_dir>  # 推断并写 crawl_params.json + assets/preferences.json
     python scripts/stages/infer_params.py --profile path/to/profile.json
     python scripts/stages/infer_params.py <run_dir> --city 杭州 --keywords "Python,后端开发"
     python scripts/stages/infer_params.py <run_dir> --scale 100-499人 --min-count 15
@@ -268,45 +267,101 @@ def enforce_budget(params, warnings, explicit=False):
     return params
 
 
-# 缺城市/关键词时的示例值。示例给两个是为了顺手示范逗号分隔的写法 ——
-# 只写一个的话，多城市怎么传还得去翻 --help。
+# 缺城市/关键词时的占位符。值只标记缺字段，不臆造：模型这次推不出它（简历里
+# 没有依据），再让模型推大概率还是空，所以命令里放占位符由候选人填。
 _MISSING_EXAMPLE = {
-    'cities': '--city "西安,北京"',
-    'keywords': '--keywords "AI应用开发,全栈开发"',
+    'cities': '--city <城市>',
+    'keywords': '--keywords <关键词>',
 }
 
+# 能给真值的字段 → flag 名。命令里的值一律取「模型这次真推断出来的 params」；
+# 没有任何推断依据的字段直接省略（不筛），绝不编一个「本科」。缺的那个核心字段
+# 由 _MISSING_EXAMPLE 兜底成占位符。
+_FLAG_FIELDS = (
+    ('cities', '--city'), ('keywords', '--keywords'),
+    ('degree', '--degree'), ('experience', '--experience'),
+    ('job_type', '--job-type'), ('salary', '--salary'),
+    ('count', '--count'),
+)
 
-def print_missing_hint(field, run_dir, profile_path, args):
-    """缺核心参数时印出能直接粘回终端的续跑命令。
 
-    只说「无法爬取」的话，人得自己想明白三件事：补哪个参数、补到哪条命令上、
-    以及补完为什么还要再等一次模型。这里一次说完 —— 上一次真实使用里，这三件
-    事各卡了一下。
+def _command_value(value):
+    """把 params 里的值转成命令行字符串：list 用逗号连，int 转 str。"""
+    if isinstance(value, list):
+        return ','.join(str(v) for v in value)
+    return str(value)
+
+
+def print_missing_hint(field, run_dir, profile_path, args, params):
+    """缺核心参数时，强调它是必填项，并给出补救方法。
+
+    城市 / 关键词是仅有的两个**硬性必填**字段：各占爬取命令的一段，任一为空就构造
+    不出爬取命令，流程只能停在这一步。「不筛」的说法只适用于学历/经验/薪资等可选
+    筛选项，这两个缺不得 —— 所以这里一次说清：为什么缺不得、怎么补救、以及为什么
+    别让模型再推一遍。
+
+    补救走「手动给全」而不是「再让模型推一次」：已由模型这次推出的字段直接用真值，
+    只有缺的那一个核心字段（模型就是推不出它）用 <占位符> 兜底，由候选人填上后
+    触发 manual_core 跳过模型、--save 一次落盘 —— 不再每次重推一遍引入抖动。上次
+    真实使用里，反复重推恰恰是参数不稳定的根源之一。
     """
-    example = _MISSING_EXAMPLE[field]
 
-    # 由 pipeline.py 启动时要给 pipeline 的形式：补完参数只重跑这一步的话，
-    # 后面的爬取/匹配/生成还得自己一个个敲。--all 是必须的 —— 不给终点
-    # pipeline 只跑 infer 这一个阶段，人以为续上了整轮，实际又停在原地。
-    if os.environ.get('BOSS_PIPELINE_STAGE') and run_dir:
-        cmd = ('python scripts/pipeline.py --run-dir "%s" --from infer --all %s'
-               % (run_dir, example))
-    elif run_dir:
-        cmd = 'python scripts/stages/infer_params.py "%s" %s' % (run_dir, example)
-    else:
-        cmd = ('python scripts/stages/infer_params.py --profile "%s" %s'
-               % (profile_path, example))
+    name = '城市' if field == 'cities' else '关键词'
+    counter = '关键词' if field == 'cities' else '城市'
+    # 命令里缺的那一项占位符文本：'--city <城市>' → '<城市>'
+    placeholder = _MISSING_EXAMPLE[field].rsplit(' ', 1)[-1]
 
-    print('  补上就能接着跑：\n    %s' % cmd)
+    # 补参命令：已推断出的字段用真值，只有缺的那项是占位符。cities / keywords 缺了
+    # 任何一个都无法爬：要么用这次真推出的值，要么给占位符由候选人来填 —— 绝不能
+    # 省略（省略会让命令靠模型重推，而模型这次恰好就是推不出它）。其余可选筛选项
+    # 没推断依据就直接省略，不编值。
+    argv = ['python', 'scripts/stages/infer_params.py']
+    if run_dir:
+        argv.append(run_dir)
+    elif profile_path:
+        argv += ['--profile', profile_path]
+    for key, flag in _FLAG_FIELDS:
+        if key in ('cities', 'keywords'):
+            if params.get(key):
+                argv += [flag, _command_value(params[key])]
+            else:
+                argv += _MISSING_EXAMPLE[key].split()
+        elif params.get(key):
+            argv += [flag, _command_value(params[key])]    # 有真推断值就用真值
+    argv.append('--save')
 
+    print('\n' + '═' * 62)
+    print('❌ 必填字段不可缺：%s' % name)
+    print('═' * 62)
+    print('  「%s」和「%s」是爬取的硬性必填字段：爬虫要靠它们决定去哪搜、搜什么。'
+          % (name, counter))
+    print('  缺任何一个都拼不出爬取命令，流程会停在这一步、不会继续往下走。'
+          '其余字段（学历/经验/薪资/类型/条数等）缺了只是「不筛」——但这两个缺不得。')
+
+    print('\n  补救方法：')
+    print('  ───────────────────────────────')
+    print('  ① 手动补齐（推荐）：把下面命令里的 %s 占位符替换成真实值后运行。' % placeholder)
+    print()
+    print('    %s' % ' '.join(argv))
+    print()
+    print('     命令里的其余参数已是本次推断出的真值；补齐 %s 后会跳过模型、' % name)
+    print('     一次性落盘（--save），不会让模型重推一遍 —— 模型这次恰恰就推不出 %s。' % name)
     print_field_help(field)
-    print_common_params()
 
-    # 关键词和城市必须**同时**由命令行给出才会跳过推断（manual_core）。只补一个
-    # 就得再等一轮模型，而模型这轮的学历/经验/工作类型判断也会跟着重来一遍。
-    other = '--keywords' if field == 'cities' else '--city'
-    print('  （这样重跑会再调一次模型；连 %s 一起给就完全跳过推断，'
-          '但学历/经验/工作类型也得自己填）' % other)
+    # 由 pipeline.py 启动时补一条「修完从下一步接着跑」的接续命令。这里 infer 因缺
+    # 核心字段还没能写出 crawl_params.json，所以第一步是补参数：上面的补参命令填上
+    # <城市>/<关键词> 后会触发 manual_core 跳过模型、直接把参数落盘。参数进
+    # crawl_params.json 之后，就从**下一阶段**（crawl）接着跑 —— 而不是 `--from
+    # infer --all` 让模型把所有参数再推一遍：反复重推正是参数抖动的根源，而且 crawl
+    # 动辄几十分钟，跑之前人得自己先看一眼参数对不对，不该被一条 --all 顺手烧掉。
+    if os.environ.get('BOSS_PIPELINE_STAGE') and run_dir:
+        print('\n  ② 补好后接着跑（从爬取这步继续，不会重推参数）：')
+        print('    python scripts/pipeline.py --run-dir "%s" --from crawl' % run_dir)
+        print('\n  参数落盘位置（修完可直接改它，或按下面的可选参数一起定）：')
+        print('    %s' % _crawl_params_path(run_dir))
+        print_common_params()
+    print()
+    
 
 
 def print_field_help(field):
@@ -351,7 +406,7 @@ def print_common_params():
     爬虫只印一行「未匹配」警告然后少爬一批，不会失败 —— 于是错的那次看起来
     跟成功一样。枚举一律从 valid_values() 取，跟爬虫的 FILTER_LABELS 同源。
     """
-    print('  其余参数不给就由模型推断，也可以直接指定（传空串 "" 表示不筛该项）：')
+    print('  如下参数也可以直接指定（传空串 "" 表示不筛该项）：')
     rows = [
         ('--count 30', '每个关键词每个城市爬多少条（0=不限）'),
         ('--degree 本科', ' / '.join(valid_values('degree'))),
@@ -377,8 +432,8 @@ def main():
     ap.add_argument('run_dir', nargs='?', help='运行目录（含 profile.json）')
     ap.add_argument('--profile', help='直接指定 profile.json 路径')
     ap.add_argument('--save', action='store_true',
-                    help='同时整份写入 assets/preferences.json（覆盖已有预设，'
-                         '供预设重放路径复用）')
+                    help='已废弃：现在总是整份写入 assets/preferences.json，无需再传。'
+                         '保留仅为向后兼容，传与不传行为一致')
     ap.add_argument('--dry-run', action='store_true', help='只打印提示词，不请求')
     ap.add_argument('--today', metavar='YYYY-MM-DD',
                     help='当作今天的日期传给模型（默认取系统日期）。模型靠它跟简历里的'
@@ -460,7 +515,7 @@ def main():
             print('❌ 配置错误：\n%s' % exc)
             return 1
 
-        print('🤔 推断爬取参数（模型 %s，按 %s 判断在校/已毕业）…' % (cfg.model, today))
+        print('🤔 推断爬取参数（模型 %s，当前日期 %s）…' % (cfg.model, today))
         try:
             raw = chat_json(prompt, stage='infer', run_dir=run_dir, cfg=cfg)
             params = normalize(raw, warnings)
@@ -470,7 +525,7 @@ def main():
             return 1
         reasoning = str((raw or {}).get('reasoning') or '').strip()
         if reasoning:
-            print('  理由：%s' % reasoning)
+            print('  理由：%s\n' % reasoning)
 
     try:
         params = apply_overrides(params, args, warnings)
@@ -479,63 +534,61 @@ def main():
         return 1
     params = enforce_budget(params, warnings, explicit=bool(args.keywords))
 
+    # 城市 / 关键词是仅有的硬性必填字段：缺任一个直接停下，绝不带病往下写文件。
+    # 缺参数的情况全部交给 print_missing_hint 说明（强调必填 + 补救方法），这里
+    # 不再重复打印报错，避免一份错误信息读两遍。
     if not params.get('keywords'):
-        print('❌ 没有推断出任何关键词，也没有 --keywords。无法爬取。')
-        print_missing_hint('keywords', run_dir, profile_path, args)
+        print_missing_hint('keywords', run_dir, profile_path, args, params)
         return 1
     if not params.get('cities'):
-        print('❌ 没有推断出城市，也没有 --city。无法爬取。')
-        print('  简历里没写期望城市，模型不会替你编一个。')
-        print_missing_hint('cities', run_dir, profile_path, args)
+        print_missing_hint('cities', run_dir, profile_path, args, params)
         return 1
 
+    # 走到这里说明两个核心字段都在，才打印参数表并落盘。缺参数时上面的分支已退出，
+    # 不会印这张「未给（不筛）」的表 —— 那张表会让缺参的人误以为参数已筛好、只是
+    # 某些项不筛，其实什么都没落盘。
+    rows = []
+    for key, flag in _FLAG_FIELDS:
+        if params.get(key):
+            value = _command_value(params[key])
+        else:
+            value = '未给（不筛）'
+        rows.append((preferences.LABELS.get(key, key), flag, value))
+    w_label = max(_cjk_width(r[0]) for r in rows)
+    w_flag = max(_cjk_width(r[1]) for r in rows)
+    print('\n')
+    print('  本次推断出的爬取参数（爬虫按此筛选）：')
+    print('    %s  %s  %s' % (_cjk_pad('参数', w_label), _cjk_pad('命令行选项', w_flag), '值'))
+    for label, flag, value in rows:
+        print('    %s  %s  %s' % (_cjk_pad(label, w_label), _cjk_pad(flag, w_flag), value))
+    print()
+
     # ── 输出 ──
-    print('\n%s' % ('=' * 60))
-    labels = preferences.LABELS
-    for key in ('cities', 'keywords', 'mode', 'count', 'match_mode', 'top_n',
-                'min_count', 'degree', 'experience', 'salary', 'job_type', 'scale'):
-        if key not in params:
-            continue
-        value = params[key]
-        print('  %-12s %s' % (labels.get(key, key),
-                              '、'.join(value) if isinstance(value, list) else value))
-    if 'scale' not in params:
-        print('  %-12s （未筛选，需要就加 --scale）' % labels['scale'])
-
-    for warning in warnings:
-        print('  ⚠ %s' % warning)
-
+   
     if run_dir:
         os.makedirs(os.path.dirname(_crawl_params_path(run_dir)), exist_ok=True)
         out_path = _crawl_params_path(run_dir)
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(params, f, ensure_ascii=False, indent=2)
-        print('\n  已写出: %s' % out_path)
+        print('\n  已写出（可手动打开文件进行编辑爬取参数）: %s' % out_path)
 
-    if args.save:
-        # _replace=True：这里刚把整份参数打给用户确认过，落盘必须和打印出来的一致。
-        # 合并会把上一轮的旧筛选偷偷带进来 —— 文件比屏幕多几个字段，最难查。
-        # 单字段补写走 `preferences.py save`（那边默认合并）。
-        saved = preferences.save(_replace=True, **params)
-        print('  已存入预设: %s（%d 个字段）' % (preferences.prefs_path(), len(saved) - 2))
+    # 整份写入全局预设，跟 crawl_params.json 一样无条件落盘：infer 跑出的这套参数
+    # 就是「当前确认的爬取/匹配配置」，供偏好重放（--from 续跑、crawl_argv 拼爬取
+    # 命令、preferences.py 单字段补写）复用。
+    # _replace=True：这里刚把整份参数打给用户确认过，落盘必须和打印出来的一致。
+    # 合并会把上一轮的旧筛选偷偷带进来 —— 文件比屏幕多几个字段，最难查。
+    # 单字段补写走 `preferences.py save`（那边默认合并）。
+    saved = preferences.save(_replace=True, **params)
+    print('  已存入预设: %s（%d 个字段）' % (preferences.prefs_path(), len(saved) - 2))
 
-    command = preferences.crawl_command(params)
-    print('\n下一步（确认参数后手动执行）：')
-    print('  %s%s' % (command, ' --run-dir "%s"' % run_dir if run_dir else ''))
-    if params.get('match_mode') == 'deep':
-        print('\n爬完之后（deep 模式）：')
-        print('  python scripts/stages/run_matcher.py --mode deep --profile "%s" --top %d --output-dir "%s"'
-              % (profile_path, params.get('top_n', 15), run_dir or '<run_dir>'))
-        print('  python scripts/stages/deep_analyze.py "%s"' % (run_dir or '<run_dir>'))
-        print('  python scripts/stages/run_matcher.py --mode deep --merge --output-dir "%s"'
-              % (run_dir or '<run_dir>'))
-    else:
-        print('\n爬完之后：')
-        print('  python scripts/stages/run_matcher.py --mode quick --profile "%s" --output-dir "%s"'
-              % (profile_path, run_dir or '<run_dir>'))
+    # 只有带 run_dir 才能续跑（爬虫/匹配都挂在某个运行目录下），所以接续命令也跟着
+    # run_dir 走。infer 是流水线的「起拍」阶段，跑完默认就停，得主动用 --from 才能把
+    # 参数接着喂给后面的爬取/匹配 —— 这里一次性给出「只跑下一步」和「一路跑到底」两条。
+    if run_dir:
+        print('\n  跑完 infer 就停了（默认只跑这一个阶段）。接着跑：')
+        print('    下一个阶段：python scripts/pipeline.py --run-dir "%s" --from crawl' % run_dir)
+        print('    余下全部  ：python scripts/pipeline.py --run-dir "%s" --from crawl --all' % run_dir)
 
-    if run_dir and not manual_core:
-        print('\n' + format_usage(run_dir))
     return 0
 
 

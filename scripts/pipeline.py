@@ -632,7 +632,7 @@ def main(argv=None):
     #    退出码：0 = 可用，1 = 配置缺失/非法（pipeline 停在这里，让用户去配）。
     llm_plan = [s for s in plan if s in _LLM_STAGES]
     if llm_plan:
-        pre = [sys.executable, script('llm_check.py'), '--no-call'] + llm_flags(args)
+        pre = [sys.executable, script('llm_check.py'), '--no-call', '--quiet'] + llm_flags(args)
         if args.dry_run:
             print('\n▶ llm_check（预检）\n  %s' % show(pre))
         else:
@@ -692,7 +692,6 @@ def main(argv=None):
                 print('  真不想查了：同一条命令加 --skip-verify（那就得自己逐份看材料）')
             else:
                 print('\n❌ %s 失败（退出码 %d），流水线停在这里。' % (name, code))
-                print('  修完接着跑：%s' % resume_cmd(run_dir, name, plan[-1]))
             return 1
 
         # ── 阶段后的核查 ──
@@ -788,8 +787,6 @@ def main(argv=None):
             print('  verify：有材料读不动、没查过（上面列了是哪几份），发送前自己看一眼')
         if [s for s in partial if s != 'verify']:
             print('  其余：下面的岗位数可能少于预期')
-    print('运行目录: %s' % run_dir)
-    print('耗时排行: python scripts/stage_timer.py report "%s"' % run_dir)
 
     nxt = next_stage(plan[-1], ctx['match_mode'])
     if nxt == 'render' and (args.no_images or args.resume_mode == 'skip'):

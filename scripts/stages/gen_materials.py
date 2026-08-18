@@ -245,22 +245,46 @@ def build_generic_resume_text(profile):
     publications = profile.get('publications') or []
     if awards or publications:
         lines.append('\n## 荣誉奖项')
+        seen_awards = set()
         for award in awards:
             if isinstance(award, dict):
-                award = '、'.join(str(v) for v in
-                                  (award.get('name'), award.get('level'),
-                                   award.get('year')) if v)
-            if award:
-                lines.append('- %s' % award)
+                award = _format_award(award)
+            if not award or award in seen_awards:
+                # 一行原文拆成多条奖项时，每条的 raw 都是那一行 —— 只输出一次
+                continue
+            seen_awards.add(award)
+            lines.append('- %s' % award)
         for pub in publications:
             if isinstance(pub, dict):
+                # 解析产出的键是 journal，venue 是早期结构，两个都认
                 pub = '、'.join(str(v) for v in
-                                (pub.get('title'), pub.get('venue'),
+                                (pub.get('title'),
+                                 pub.get('journal') or pub.get('venue'),
                                  pub.get('year')) if v)
             if pub:
                 lines.append('- %s' % pub)
 
     return '\n'.join(lines)
+
+
+def _format_award(award):
+    """一条奖项渲染成一行。
+
+    有 raw（原文整行）就直接用它 —— 参赛作品名与届次天然都在里面，重拼一遍只会漏。
+    没有 raw 才按字段拼，且必须带上 rank：丢了「二等奖」的奖项行等于没写奖。
+    """
+    raw = (award.get('raw') or '').strip()
+    if raw:
+        return raw
+    line = '、'.join(str(v) for v in (award.get('year'), award.get('name'),
+                                     award.get('level'), award.get('rank')) if v)
+    works = [str(w) for w in (award.get('works') or []) if w]
+    if works:
+        line += ' · 参赛作品%s' % '、'.join(works)
+    detail = award.get('detail')
+    if detail:
+        line += '（%s）' % detail
+    return line
 
 
 def load_resume_text(run_dir, profile, override=None):
