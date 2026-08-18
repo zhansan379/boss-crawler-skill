@@ -46,6 +46,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description='检查 LLM 配置与连通性')
     ap.add_argument('--stage', help='只看某个阶段的生效配置（parse/infer/deep/greeting/resume）')
     ap.add_argument('--no-call', action='store_true', help='只打印配置，不发请求')
+    ap.add_argument('--quiet', action='store_true',
+                    help='配置**正常**时只印一行确认；配置有错时照常完整打印（错误信息不影响静音）')
     ap.add_argument('--json', dest='check_json', action='store_true',
                     help='额外验一遍 JSON 模式（chat_json）能否拿到合法 JSON')
     ap.add_argument('--base-url')
@@ -65,6 +67,12 @@ def main() -> int:
     except ConfigError as exc:
         print('❌ 配置错误：\n%s' % exc)
         return 1
+
+    if args.quiet:
+        # 预检专用：配置正常只印一行。真正要排错时（非预检，或这里出错）那段完整
+        # describe 表不会出现 —— 错误走上面的 except / 下面的 api_key 分支全文打印。
+        print('✅ LLM 配置可用（model=%s）' % cfg.model)
+        return 0
 
     print('配置文件：%s%s' % (CONFIG_PATH, '' if _exists(CONFIG_PATH) else '  （不存在，仅用环境变量/默认值）'))
     print()
