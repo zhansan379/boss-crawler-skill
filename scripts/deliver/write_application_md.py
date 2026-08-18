@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""生成每个岗位的 `投递.md` 与 `优化建议.md`：把该岗位采到的**全部**字段和招呼语
-写进 投递.md，另在同一目录写一份只含优化建议的 优化建议.md。
+"""生成每个岗位的 `投递.md`、`优化建议.md` 与优化简历 `优化简历正文 md`：把该岗位
+采到的**全部**字段和招呼语写进 投递.md，另在同一目录写一份只含优化建议的 优化建议.md，
+并把 materials 里那份优化后简历正文（optimized_resume）以 `<姓名>-<岗位>.md` 一并落盘
+（与 render 出的长图同名同目录，本脚本在设计上就是 materials 阶段把它写齐的那一步）。
 
 为什么要有这个脚本，而不是让主 agent 按模板手写：
 
@@ -311,6 +313,53 @@ def load_resume_optimization(run_dir, index):
     }
 
 
+def load_optimized_resume_markdown(run_dir, index):
+    """读 materials/resume_{index}_*.json 的 optimized_resume（整份优化简历 markdown）。
+
+    和 load_resume_optimization 读同一个文件，但取完整正文而不是精简建议。文件缺失
+    （--resume-mode skip、没走到 materials、或该岗位材料生成失败）时返回 None，
+    调用方就不写 <姓名>-<岗位>.md —— 投递.md / 优化建议.md 是给所有被列岗位的，
+    而优化简历正文只属于真正跑过 materials 的岗位。
+    """
+    hits = sorted(glob.glob(resume_pattern(run_dir, index)))
+    if not hits:
+        return None
+    try:
+        with open(hits[0], encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    text = str(data.get('optimized_resume') or '').strip()
+    return text or None
+
+
+# 与 render 的 resolve_name 同款占位符集合：命中就当作「没有实名」。
+_PLACEHOLDER_NAMES = {'未提取', '未知', '无', '', None}
+
+
+def resolve_person_name(run_dir, name_override=None):
+    """简历归属姓名。写 <姓名>-<岗位>.md 必需：占位符会变成 HR 看到的
+    「未提取-岗位.md」，所以一套占位符就返回 None，不落这份 md。
+
+    优先 --name；没有才读 profile.json 的 basic_info.name。与 render 阶段共用
+    同一套取名字段，保证这里的附件名和 render 出的长图文件名一致。
+    """
+    name = (name_override or '').strip()
+    if name in _PLACEHOLDER_NAMES:
+        name = ''
+    if not name:
+        try:
+            with open(os.path.join(run_dir, 'state', 'profile.json'),
+                      encoding='utf-8') as f:
+                profile = json.load(f)
+            cand = ((profile.get('basic_info') or {}).get('name') or '').strip()
+            if cand not in _PLACEHOLDER_NAMES:
+                name = cand
+        except (OSError, ValueError):
+            pass
+    return name or None
+
+
 def _suggestion_bullets(items):
     """must_add / should_adjust 里的 {section, content|suggestion} → 子弹列表。"""
     out = []
@@ -531,6 +580,17 @@ def write_one(run_dir, job, index, args):
     with open(opt_path, 'w', encoding='utf-8') as f:
         f.write(render_optimization(company, position, opt, job, index))
 
+    # 优化简历正文 <姓名>-<岗位>.md：与长图同名同目录（render 渲染前那份）。
+    # 在 materials 一并落盘，让 投递.md / 优化建议.md / 优化简历 md 一次写齐。
+    # 无名（占位符）或该岗位没跑到 materials 时静默跳过，不写「未提取-岗位.md」。
+    resume_md = load_optimized_resume_markdown(run_dir, index)
+    person = sanitize(resolve_person_name(run_dir, getattr(args, 'name', None)))
+    if resume_md and person:
+        md_path = os.path.join(out_dir, '%s-%s.md' % (person, position))
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(resume_md if resume_md.endswith('\n') else resume_md + '\n')
+        print('    → %s' % md_path)
+
     missing = sorted(k for k in KNOWN_FIELDS if not (row.get(k) or '').strip())
 
     print('%s #%d %s-%s' % ('覆盖' if existed else '新建', index, company, position))
@@ -559,6 +619,7 @@ def main():
     ap.add_argument('--greeting', help='招呼语正文（自定义/默认分支用）')
     ap.add_argument('--greeting-file', help='招呼语文件路径')
     ap.add_argument('--csv', help='指定原始爬取 CSV，跳过自动定位')
+    ap.add_argument('--name', help='简历归属姓名，覆盖 profile.json 的 basic_info.name（写 <姓名>-<岗位>.md 用）')
     args = ap.parse_args()
 
     if not args.all and args.index is None:

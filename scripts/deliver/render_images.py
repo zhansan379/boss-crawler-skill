@@ -216,10 +216,10 @@ def stage_all(run_dir, jobs, indexes, person, stamp):
         with open(staged_path, 'w', encoding='utf-8') as f:
             f.write(markdown if markdown.endswith('\n') else markdown + '\n')
 
-        # 完整优化简历正文落盘到岗位目录，与长图同名：<姓名>-<岗位>.md
+        # 完整优化简历正文 <姓名>-<岗位>.md 由 write_application_md（materials 阶段）
+        # 落盘到同一岗位目录；render 只渲染 PNG，不再重复写这份 md。md_path 仅记录
+        # 其路径，供下方打印与 verify_image 的「png vs 相邻 md」互校定位。
         md_path = os.path.join(job_dir, base + '.md')
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(markdown if markdown.endswith('\n') else markdown + '\n')
 
         items.append({
             'index': index,
