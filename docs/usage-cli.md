@@ -40,7 +40,7 @@ python scripts/utils/where_am_i.py                           # 这一轮跑到�
 ## 单独跑某一步
 
 ```bash
-python scripts/stages/parse_resume.py 简历.pdf                  # → profile.json
+python scripts/pipeline.py "D:\Download\browserDownload\简历.md" --to parse                  # → profile.json
 python scripts/stages/run_matcher.py --mode quick --profile assets/<ts>/profile.json -o assets/<ts>
 python scripts/stages/deep_analyze.py assets/<ts> --limit 3     # 先拿 3 个试水，看质量和花费
 python scripts/stages/gen_materials.py assets/<ts> --only 1,3   # 只补这几个（默认跳过已有产物）
