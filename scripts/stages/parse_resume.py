@@ -261,9 +261,14 @@ def _print_validation(report):
 
     退出码语义照 validate_profile.py：**只有缺技能算问题**，hints 来自松散正则和
     集合差，简历与 profile 的用词不同就会触发，读一读就好，不要当成 gate。
+
+    这里故意不打 report['total_profile_skills']：它是 `skills ∪ keywords` 的集合
+    大小（去重、含 keywords），而上面 _profile_stats 打的技能数是各分类 list 长度
+    累加（不去重、不含 keywords）。两个口径在同一屏里差几个数，只会让人以为解析
+    出了问题。技能计数统一由 _profile_stats 一处负责，这行只打它独有的
+    total_extracted。字段本身仍写进 profile_validation.json，不受影响。
     """
-    print('  简历提取术语 %d / profile 已有技能 %d'
-          % (report['total_extracted'], report['total_profile_skills']))
+    print('  简历提取术语 %d 个（词典查表 + 驼峰识别）' % report['total_extracted'])
     if report['missing_skills']:
         print('  ⚠ profile 里缺这些技能词（词典查表，值得看）：')
         print('     %s' % '、'.join(report['missing_skills']))
