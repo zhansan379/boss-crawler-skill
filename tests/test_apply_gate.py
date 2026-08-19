@@ -245,6 +245,42 @@ def main():
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
+    print('\n=== 10. --greeting / --greeting-file：整批统一覆盖打招呼语 ===')
+    run_dir = build_run_dir()
+    try:
+        TEXT = '统一定稿：26届可实习6个月，做过百万并发服务重构，盼面聊。'
+        code = run([run_dir, '--yes', '--greeting', TEXT], apply_module)
+        check('退出码 0', code == 0, '实际 %s' % code)
+        check('投了 1 次', len(CALLS) == 1, '实际 %d 次' % len(CALLS))
+        if CALLS:
+            texts = set(CALLS[0]['greetings'].values())
+            check('两个岗位都用整批这一条', texts == {TEXT},
+                  '实际 %s' % texts)
+
+        # --greeting-file：正文从文件读，同样整批覆盖
+        gf = os.path.join(run_dir, 'batch_greeting.txt')
+        with open(gf, 'w', encoding='utf-8') as f:
+            f.write('文件版统一定稿：盼面聊。')
+        code = run([run_dir, '--yes', '--greeting-file', gf], apply_module)
+        check('--greeting-file 退出码 0', code == 0, '实际 %s' % code)
+        if CALLS:
+            texts = set(CALLS[0]['greetings'].values())
+            check('--greeting-file 也整批覆盖', texts == {'文件版统一定稿：盼面聊。'},
+                  '实际 %s' % texts)
+
+        # 防御：空招呼语必须拦下，不能把空话发出去
+        code = run([run_dir, '--yes', '--greeting', '   '], apply_module)
+        check('空 --greeting 拒绝', code == 1 and not CALLS,
+              '实际 code=%s calls=%d' % (code, len(CALLS)))
+
+        # 防御：两个开关都给就拒绝，不做任何投机取巧
+        code = run([run_dir, '--yes', '--greeting', TEXT, '--greeting-file', gf],
+                   apply_module)
+        check('--greeting 与 --greeting-file 同给拒绝', code == 1 and not CALLS,
+              '实际 code=%s calls=%d' % (code, len(CALLS)))
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
     print('\n' + '=' * 60)
     if failures:
         print('❌ %d 项失败：%s' % (len(failures), '；'.join(failures)))

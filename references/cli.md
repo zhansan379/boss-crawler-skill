@@ -165,9 +165,14 @@ python scripts/deliver/apply.py "assets/2026-08-15_10-00-00" --yes        # 真�
 python scripts/deliver/apply.py "assets/…" --yes --company 百度,棱镜数聚   # 只投这两家
 python scripts/deliver/apply.py "assets/…" --yes --only 1,3,5 --max 3     # 按序号只投这几个、最多 3 个
 python scripts/deliver/apply.py "assets/…" --yes --no-image               # 不发简历图
+python scripts/deliver/apply.py "assets/…" --yes --image my_resume.png    # 整批统一用自己这张图
+python scripts/deliver/apply.py "assets/…" --yes --greeting "统一定稿招呼语"            # 整批统一一条招呼语
+python scripts/deliver/apply.py "assets/…" --yes --greeting-file greeting.txt           # 整批统一用文件里的招呼语
 ```
 
 不加 `--yes` 时**不做任何浏览器操作**，只把「有哪些公司可选」「要投谁、用哪条招呼语、发哪张图」列出来。建议先演练一次，确认名单和招呼语，再加 `--yes`。
+
+`--image` / `--greeting` / `--greeting-file` 都是**整批统一一份**：给了就对选中的每个岗位用它，覆盖 `render` 渲染的长图和各岗位自带的招呼语；不逐岗位给不同值（要逐岗位不同，图就替换 `deliver/<公司>-<岗位>/<姓名>-<岗位>.png`，招呼语就改 `岗位信息+招呼语.md`）。演练时每条 `招呼语` / `附件` 行会标出来源（如 `整批统一 --greeting`），一眼能确认有没有覆盖进去。
 
 挑公司投有两种写法，可以叠加使用（取交集）：
 

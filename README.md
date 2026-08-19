@@ -92,6 +92,90 @@ python scripts/utils/llm_check.py                                # 验一下通�
 - 📖 方式一（Skill）完整图文走查 → [docs/usage-skill.md](./docs/usage-skill.md)
 - ⌨️ 方式二（命令行）上手 → [docs/usage-cli.md](./docs/usage-cli.md) · 完整参数参考 → [references/cli.md](./references/cli.md)
 
+> 💡 命令行完整流程，按下表的执行顺序排好。下面每个 `python …` 里的运行目录
+> `D:\…\assets\2026-08-18_22-10-50` 是**你某次运行的时间戳子目录**（`assets/<ts>/`），
+> 请换成你自己的实际目录。所有命令把同一个运行目录作为输入，一环扣一环、依赖前一步的产物。
+
+```bash
+# ════════════════════════════════════════════════════════════
+# 0. 配置环境（一次性；前四行严格按「建项目→建 venv→激活→装 pip」来）
+# ════════════════════════════════════════════════════════════
+uv init -p 3.12
+uv venv
+.venv\Scripts\activate                       # 激活虚拟环境（是 activate，别漏 e）
+uv add pip
+uv pip install -r requirements.txt           # 装齐运行依赖
+```
+
+```bash
+# ════════════════════════════════════════════════════════════
+# 1. 保存登录状态 —— 爬取和投递都复用这次登录，不用重复扫码
+# ════════════════════════════════════════════════════════════
+python scripts/stages/boss_post_interactive.py --ensure-login
+
+# ════════════════════════════════════════════════════════════
+# 2. 指定简历 → 解析出结构化信息（产出 profile.json，供下面 infer 用）
+# ════════════════════════════════════════════════════════════
+python scripts/pipeline.py "D:\Download\browserDownload\简历.md" --to parse
+
+# ════════════════════════════════════════════════════════════
+# 3. 依据简历推断爬取参数 → 产出 state/crawl_params.json
+#    （step 4 的爬取就照着这份参数去搜，所以它必须排在这之前）
+# ════════════════════════════════════════════════════════════
+python scripts/pipeline.py --run-dir "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50" --from infer
+
+# ════════════════════════════════════════════════════════════
+# 4. 照着 crawl_params.json 爬取岗位数据（一次几十分钟，靠前段已登录身份）
+# ════════════════════════════════════════════════════════════
+python scripts/pipeline.py --run-dir "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50" --from crawl
+
+# ════════════════════════════════════════════════════════════
+# 5. 深度匹配 —— 大模型逐岗位分析「规则评分最高的前 20 名」：
+#    --match-mode deep  调用大模型（不写就是纯规则 quick）
+#    --top-n 20         进模型的候选岗位数
+#    --workers 4        并发线程数（越大越快，也越易触发限流）
+# ════════════════════════════════════════════════════════════
+python scripts/pipeline.py --run-dir "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50" --from match --match-mode deep --top-n 20 --workers 4
+
+# ════════════════════════════════════════════════════════════
+# 6. AI 生成「招呼语 + 优化简历」（默认即 AI，会按岗位调模型）
+#    --force 覆盖已有产物；只想生成其中一种就跳过另一种：
+#       --resume-mode skip   只生成招呼语（不动简历 JSON）
+#       --greeting-mode skip 只生成简历（不动招呼语）
+#    ⚠ 两个 skip 不能同时给——都跳了就没活干，命令会报错
+# ════════════════════════════════════════════════════════════
+python scripts/stages/gen_materials.py "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50" --force
+
+# ════════════════════════════════════════════════════════════
+# 6b. 渲染简历长图 —— 把上一步的 resume JSON 变成可看的 PNG
+#     （可整批：直接跑下面的；想要挑几个就加 --only 1,3,5-7）
+# ════════════════════════════════════════════════════════════
+python scripts/deliver/render_images.py "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50"
+
+# ════════════════════════════════════════════════════════════
+# 7. 投递（真发不可撤回；不加 --yes 只徒演、把要投的清单列出来）
+#    --image <path>     整批统一用你自己这张图（建议绝对路径）
+#    --greeting <文本>  整批统一用这条招呼语（覆盖各岗位自己的）
+#    ⚠ 想用 AI 生成的图/话就删掉这两个开关 —— 不用它们时 apply 直接用渲染好的
+# ════════════════════════════════════════════════════════════
+python scripts/deliver/apply.py "D:\Project\pythonProject\boss-crawler-skill\assets\2026-08-18_22-10-50" --yes \
+    --image "D:\绝对路径\my_resume.png" \
+    --greeting "26届本科可实习6个月，做过百万并发服务重构，盼面聊。"
+```
+
+**🔎 AI 生成的内容（步骤 6 / 6b）去哪看** —— 全在运行目录 `assets/<ts>/` 下：
+
+| 内容 | 位置 | 说明 |
+|---|---|---|
+| 招呼语正文 | `materials/greeting_{i}_{公司}.txt` | 每条一个文件，`{i}` 是岗位 1-based 序号 |
+| 优化简历 JSON | `materials/resume_{i}_{公司}.json` | AI 改稿的原始结构（含 `optimized_resume` 全文） |
+| 岗位信息 + 招呼语（人眼可读汇总） | `deliver/#N-公司-岗位/岗位信息+招呼语.md` | 每个岗位一份的最终投递文案 |
+| 优化建议（给 AI 改的要点） | `deliver/#N-公司-岗位/优化建议.md` | — |
+| 简历长图 | `deliver/#N-公司-岗位/姓名-岗位.png` | 步骤 6b 渲出的，HR 看到的就是这个文件 |
+
+> 上面这几份 md/图在走**整条 `--to render`** 会自动落好；如果只单跑 `gen_materials.py`（步骤 6），`岗位信息+招呼语.md` 不会自动生成，需要另跑
+> `python scripts/deliver/write_application_md.py "<run_dir>" --all` 才有那份人眼可读汇总。
+
 ---
 
 ## 📁 运行数据在哪里

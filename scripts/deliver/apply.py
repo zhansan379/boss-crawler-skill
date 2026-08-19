@@ -293,8 +293,14 @@ def print_company_menu(jobs, groups):
     print('\n  两个参数可以一起用（取交集），再加 --max N 限制总条数。')
 
 
-def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
-    """每个岗位的投递计划。返回 (plan, blockers, warnings)。"""
+def build_plan(run_dir, jobs, indexes, person, want_image, shared_image,
+               greeting_override=None):
+    """每个岗位的投递计划。返回 (plan, blockers, warnings)。
+
+    greeting_override 是 (正文, 来源) 或 None：给了就在每个岗位上都用它
+    （整批统一一份），否则照旧按 岗位信息+招呼语.md → materials/greeting_{i}_*.txt
+    逐岗位找。与 --image 的整批逻辑对齐：批量覆盖，不逐岗位。
+    """
     plan, blockers, warnings = [], [], []
     for index in indexes:
         job = jobs[index - 1]
@@ -305,7 +311,10 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image):
             blockers.append('#%d %s 没有 link，无法打开岗位页' % (index, dir_name))
             continue
 
-        greeting, source = find_greeting(run_dir, index, dir_name)
+        if greeting_override:
+            greeting, source = greeting_override
+        else:
+            greeting, source = find_greeting(run_dir, index, dir_name)
         if not greeting:
             blockers.append(
                 '#%d %s 没有招呼语（materials/greeting_%d_*.txt 缺失或为空）'
@@ -390,6 +399,9 @@ def main():
     ap.add_argument('--name', help='<姓名>-<应聘岗位> 里的姓名，覆盖 profile.json')
     ap.add_argument('--no-image', action='store_true', help='不发简历附件')
     ap.add_argument('--image', help='整批共用这一张图（用户自己上传的那张）')
+    ap.add_argument('--greeting', help='整批统一用这条招呼语（覆盖各岗位已有的）')
+    ap.add_argument('--greeting-file',
+                    help='整批统一用这个文件里的招呼语（覆盖已有）')
     ap.add_argument('--skip-verify', action='store_true',
                     help='跳过 verify_image.py 体检（不建议：空白图发出去比不发更糟）')
     ap.add_argument('--headless', action='store_true',
@@ -422,6 +434,29 @@ def main():
         if not os.path.exists(shared_image):
             print('❌ --image 指定的文件不存在: %s' % shared_image)
             return 1
+
+    # 整批统一的招呼语：--greeting（内联文本）或 --greeting-file（正文文件），两者只给一个。
+    # 给了就在每个岗位上都用它（覆盖 md / materials 里的），和 --image 的整批口径一致。
+    greeting_override = None
+    if args.greeting and args.greeting_file:
+        print('❌ --greeting 与 --greeting-file 只能给一个（都是完整招呼语）')
+        return 1
+    if args.greeting:
+        greeting_override = (args.greeting.strip(), '整批统一 --greeting')
+        if not greeting_override[0]:
+            print('❌ --greeting 是空的，没有招呼语可发')
+            return 1
+    elif args.greeting_file:
+        gpath = os.path.abspath(args.greeting_file)
+        if not os.path.exists(gpath):
+            print('❌ --greeting-file 指定的文件不存在: %s' % gpath)
+            return 1
+        with open(gpath, encoding='utf-8') as f:
+            text = f.read().strip()
+        if not text:
+            print('❌ --greeting-file 是空的，没有招呼语可发')
+            return 1
+        greeting_override = (text, '整批统一 --greeting-file')
 
     # 姓名只在需要按岗位找图时才是必需的
     person = ''
@@ -473,7 +508,7 @@ def main():
         print_company_menu(jobs, groups)
 
     plan, blockers, warnings = build_plan(
-        run_dir, jobs, indexes, person, want_image, shared_image)
+        run_dir, jobs, indexes, person, want_image, shared_image, greeting_override)
 
     for note in warnings:
         print('  ⚠ %s' % note)
@@ -521,6 +556,10 @@ def main():
             cmd += ' --no-image'
         if args.image:
             cmd += ' --image "%s"' % args.image
+        if args.greeting:
+            cmd += ' --greeting "%s"' % args.greeting
+        if args.greeting_file:
+            cmd += ' --greeting-file "%s"' % args.greeting_file
         print('    %s' % cmd)
         if not args.company and groups and len(groups) > 1:
             print('\n  只投其中几家：在上面这条命令后面加 --company "公司名[,公司名…]"')

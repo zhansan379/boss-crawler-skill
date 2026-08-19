@@ -421,7 +421,7 @@ python scripts/deliver/apply.py "{run_dir}" --yes          # 发送
 
 **`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--to render` 也不。
 
-有用的参数：`--only 1,3,5`、`--company 百度,棱镜数聚`、`--max N`、`--image <path>`、`--no-image`、`--name 张三`。结果落在 `{run_dir}/apply_log.json`。三个检查拒绝发送而不是警告——缺招呼语、缺/空附件图片、运行目录不可读。
+有用的参数：`--only 1,3,5`、`--company 百度,棱镜数聚`、`--max N`、`--image <path>`、`--greeting <文本>`、`--greeting-file <文件>`、`--no-image`、`--name 张三`。`--image` / `--greeting` / `--greeting-file` 都是**整批统一一份**：给了就对选中的每个岗位用它，覆盖各自的长图和招呼语；不逐岗位给不同值。结果落在 `{run_dir}/apply_log.json`。三个检查拒绝发送而不是警告——缺招呼语、缺/空附件图片、运行目录不可读。
 
 其中两个参数会咬人：
 
