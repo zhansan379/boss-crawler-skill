@@ -91,6 +91,26 @@ def get_crawl_params_prompt(
     )
 
 
+def get_verify_prompt(
+    resume_text: str,
+    material: str,
+    kind: str = '',
+) -> str:
+    """verify 阶段：让模型通读全文，判定材料里的技术词在原简历里有没有依据。
+
+    规则体在 prompts/verify.st。模型读**完整原简历 + 完整材料**，自己识别所有
+    技术词（多词复合名如 `Vibe Coding` 当作整体）、逐个判 supported —— 处理缩写 /
+    同义词 / 中英等价这些字符串比对做不到的语义等价。`kind` 只是给材料打个标签
+    （简历/招呼语），帮助模型理解它在读什么。
+    """
+    template = load_prompt("verify")
+    return template.format(
+        resume_text=resume_text,
+        material=material,
+        material_kind=kind or '（未标注）',
+    )
+
+
 def get_optimize_prompt(
     resume_text: str, company: str, position: str,
     salary: str, requirements: str, match_score: int,

@@ -93,7 +93,7 @@ VALID_MATCH_MODES = ('quick', 'deep')
 
 # 阶段名 → 传给下游的 LLM 覆盖参数。写在一处，免得漏掉某个阶段导致
 # 「--model 明明给了，某一步却还在用默认模型」。
-_LLM_STAGES = ('parse', 'infer', 'deep', 'materials')
+_LLM_STAGES = ('parse', 'infer', 'deep', 'materials', 'verify')
 
 
 def show(cmd):
@@ -358,12 +358,13 @@ def build_cmd(name, args, ctx):
         if args.skip_verify:
             return None
         # 招呼语也要查，所以 --resume-mode skip 时这一步照跑（那时只剩招呼语）。
+        # verify 现在含 LLM 语义判定（缩写/同义词），是 _LLM_STAGES 一员，带模型参数。
         cmd = [py, script('verify_no_fabrication.py'), run_dir]
         if args.only:
             cmd += ['--only', args.only]
         for term in args.allow:
             cmd += ['--allow', term]
-        return cmd
+        return cmd + extra
 
     if name == 'render':
         if args.resume_mode == 'skip':
@@ -673,12 +674,13 @@ def main(argv=None):
             if name == 'verify':
                 # 这一步的失败不是「坏了」，是它查出了东西 —— 该看的是上面那份清单。
                 # 泛泛地说「修完接着跑」会让人以为是脚本出错，直接重跑一遍绕过去。
-                print('\n⛔ verify 查出了简历原文里没有的技术词，流水线停在 render 之前。')
-                print('  上面每条都带了上下文，逐条判断后二者选一：')
-                print('    确属编造 → 按上面的 gen_materials.py --only ... --force 重生成')
-                print('    有据可依 → 放行后续跑：%s'
-                      % resume_cmd(run_dir, 'verify', plan[-1]) + ' --allow <词表>')
-                print('  真不想查了：同一条命令加 --skip-verify（那就得自己逐份看材料）')
+                # print('\n⛔ verify 查出了简历原文里没有的技术词，流水线停在 render 之前。')
+                # print('  上面每条都带了上下文，逐条判断后二者选一：')
+                # print('    确属编造 → 按上面的 gen_materials.py --only ... --force 重生成')
+                # print('    有据可依 → 放行后续跑：%s'
+                #       % resume_cmd(run_dir, 'verify', plan[-1]) + ' --allow <词表>')
+                # print('  真不想查了：同一条命令加 --skip-verify（那就得自己逐份看材料）')
+                pass
             else:
                 print('\n❌ %s 失败（退出码 %d），流水线停在这里。' % (name, code))
             return 1

@@ -425,7 +425,8 @@ def main():
               pipeline.show(vcmd))
         check('--only 透传给 verify', '--only' in vcmd and '1' in vcmd,
               pipeline.show(vcmd))
-        check('verify 不带 LLM 参数（它是纯 stdlib 的）',
+        # 不手敲模型参数时，verify 的命令里不该凭空冒出 --model（extra 为空才干净）
+        check('verify 无多余 LLM 参数',
               '--model' not in vcmd and '--api-key' not in vcmd, pipeline.show(vcmd))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

@@ -92,6 +92,17 @@ def verify_report_path(run_dir):
     return os.path.join(state_dir(run_dir), 'verify_report.json')
 
 
+def verify_known_path(run_dir):
+    """verify 阶段由 LLM 确认、累计进缓存的技术词（run-dir 级，删 run 即删）。
+
+    与 verify_report.json 的区别：这是「学习结果」不是「单次检查结论」。LLM 判定一个
+    写法（缩写/同义词/中英等价）在本轮简历里有依据后，它的归一形存进这里；下次同一轮
+    目录再跑 verify 时直接命中、不再调模型。只认本轮 baseline，换简历/换目录就重判，
+    避免把「A 简历有依据」误当「永远有依据」导致的假阴性泄漏。
+    """
+    return os.path.join(state_dir(run_dir), 'verify_known.json')
+
+
 def apply_log_path(run_dir):
     return os.path.join(state_dir(run_dir), 'apply_log.json')
 

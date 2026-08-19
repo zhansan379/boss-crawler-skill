@@ -9,32 +9,34 @@
 根本没有的技术词，全靠当场警觉才发现，用 16 条一行流 + 手写正则清理，其中一次替换
 还没命中、留了残留。发出去的是简历长图和招呼语，这类错误一旦投递就收不回来。
 
+判定方式是**纯 LLM 全文判定**：把完整原简历 + 完整待查材料交给模型，让它通读全文、
+自己识别材料里**所有**技术名词（多词复合名如 `Vibe Coding`、`GitHub Copilot` 当作
+一个整体），逐个对照原简历判「有没有依据」——处理缩写 / 同义词 / 中英等价这些字符串
+比对做不到的语义问题。脚本不再维护任何本地词表/正则折词器；复合词被拆碎成 `Vibe`+`Coding`
+这类误报，正是这套方案要消灭的。人仍可用 `--allow` 放行模型误判的词，作为最终纠错。
+
+为什么要让模型**列全技术词**而不是只报编造：纯 LLM 判定最大的隐患是模型偷懒一口回
+「全干净」却一个词没真查。强制它把识别出的**全部**技术词连同判断一起输出，你看到
+「没报词」时也能看清它到底审了多少词，防静默放水。已配不到 LLM 时（无 key / 离线）
+本脚本**直接报错退 1**，绝不静默放行，也不退回旧规则。脚本不替代 gate:send —— 它只
+挡「原文没有」这一类；语气、夸大、把「了解」写成「精通」仍要人发送前逐条过一遍。
+
 范围（刻意收窄）：
   查   `materials/resume_{i}_*.json` 的 **optimized_resume** 字段 —— render 只渲染这一个
   查   `materials/greeting_{i}_*.txt` 全文
   不查 **optimization_suggestions** —— 那是给人看的改进建议，本来就该出现简历里
-       还没有的技术词。复盘时的误判正是从这里来的。
-  不查 中文表述。「多智能体面试系统」那次误判说明中文语义判断不可靠：那个词在简历
-       第 28 行（中国软件杯《AI模拟面试系统》）和第 34 行（期刊论文）都有依据。
-       本脚本只认**拉丁字母技术词**，那也正是六个真阳性的形态。
-
-判定方式是**白名单式**：基底里出现过的词一律放过，没出现过的一律报出来。
-反过来（维护一份「危险词库」）永远追不上模型的想象力。代价是会有误报，
-所以留了 `--allow` —— 有据可依的词一次性放行，而不是让人去改脚本。
-
-这个脚本**不替代 gate:send**。它只挡住「原文没有」这一类，语气、夸大、
-把「了解」写成「精通」都查不出来，人仍然要在发送前逐条过一遍。
+       还没有的技术词。
+  不查 中文表述的判断 —— 由模型语义判定处理，脚本层不猜语义。
 
 退出码：
-  0  干净（或没有可查的材料且未要求严格）
-  1  查出可疑词，或基底/材料缺失 —— 两种都该阻断 render
-  2  用法错误（序号越界、参数写错）
-  3  部分：查过的都干净，但有岗位没有材料可查
+  0  干净（模型确认没有编造的技术词）
+  1  模型查出编造 / LLM 配置缺失 / 部分材料不可判定 —— 阻断 render
+  3  部分：查过的都干净，但有岗位没有材料可查（模型没查全的岗位）
 
 用法:
   python scripts/verify/verify_no_fabrication.py <run_dir>
   python scripts/verify/verify_no_fabrication.py <run_dir> --only 1,3,5-7
-  python scripts/verify/verify_no_fabrication.py <run_dir> --allow PyTorch,nginx
+  python scripts/verify/verify_no_fabrication.py <run_dir> --allow Vibe Coding,PyTorch
   python scripts/verify/verify_no_fabrication.py <run_dir> --resume-text path/to/base.txt
 """
 
@@ -53,6 +55,9 @@ import check_artifacts
 from check_artifacts import parse_only          # 与 materials/核对侧共用同一份严格解析
 from resume_matcher import (resume_text_path, profile_path as _profile_path,
                             materials_dir, verify_report_path, deliver_dir)
+from resume_matcher.prompts import get_verify_prompt
+from llm import (ConfigError, LLMError, chat_json, map_concurrent, resolve)
+import threading
 
 
 def reconfigure_stdout():
@@ -81,81 +86,7 @@ def open_in_file_manager(path):
         return False
 
 
-# ==================== 取词 ====================
-
-# 拉丁字母开头的连续技术词形：Node.js / C++ / C# / scikit-learn / PyTorch / K8s
-# 都能整体取到。中文之间的英文词也能取到，因为中文字符不在字符集里。
-#
-# `/` **不在**字符集里，它在简历里是分隔符不是词的一部分 ——「MySQL/Redis 存储」
-# 若整体成词就会归一成 mysqlredis，两个明明在原文里的技能被报成编造（实测踩到过）。
-_TOKEN = re.compile(r'[A-Za-z][A-Za-z0-9+#._-]*')
-
-# 与技术能力无关的通用词。宁可短也不要长 —— 每加一个词就少一次提醒的机会，
-# 而误报有 --allow 兜着，漏报没有任何兜底。
-_GENERIC = frozenset(x.lower() for x in (
-    'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'by',
-    'is', 'are', 'be', 'as', 'it', 'no', 'not', 'all', 'any', 'my', 'me', 'i',
-    'ok', 'hr', 'jd', 'qq', 'id', 'url', 'http', 'https', 'www', 'com', 'cn', 'net',
-    'e', 'g', 'etc', 'vs', 'via', 'per', 'top', 'n', 'x', 'y', 'z',
-))
-
-# 同一个东西的不同写法。左边出现在基底里就等于右边也出现过。
-# 只放**确定同义**的，「会 Java 所以会 Kotlin」这种推断不属于这里。
-_ALIASES = {
-    'k8s': ('kubernetes',),
-    'kubernetes': ('k8s',),
-    'js': ('javascript',),
-    'javascript': ('js',),
-    'ts': ('typescript',),
-    'typescript': ('ts',),
-    'nodejs': ('node',),
-    'node': ('nodejs',),
-    'postgres': ('postgresql',),
-    'postgresql': ('postgres',),
-    'py': ('python',),
-    'golang': ('go',),
-    'go': ('golang',),
-    'tf': ('tensorflow',),
-    'tensorflow': ('tf',),
-    'ml': ('machinelearning',),
-    'dl': ('deeplearning',),
-    'llm': ('llms',),
-    'llms': ('llm',),
-}
-
-
-def _norm(token):
-    """比较用的归一形。大小写、点、连字符、下划线都不算区别。
-
-    Node.js / nodejs / Node-JS 归一到同一个 key；C++ 的 + 和 C# 的 # 保留，
-    因为 c / c++ / c# 是**三种不同**的技能，抹掉就分不出来了。
-    斜杠不在这里，它已经在 _TOKEN 那层当分隔符切开了。
-    """
-    return re.sub(r'[._\-]', '', token).strip().lower()
-
-
-def _tokens(text):
-    """一段文本里的技术词候选（归一形 → 原文首次出现的写法）。"""
-    found = {}
-    for raw in _TOKEN.findall(text or ''):
-        key = _norm(raw)
-        if len(key) < 2 or key in _GENERIC:
-            continue
-        if key.isdigit():
-            continue
-        found.setdefault(key, raw)
-    return found
-
-
-def _baseline_keys(text):
-    """基底文本 → 归一后的词集合（含别名展开）。"""
-    keys = set(_tokens(text))
-    for key in list(keys):
-        keys.update(_ALIASES.get(key, ()))
-    return keys
-
-
-# ==================== 基底 ====================
+# ==================== 原简历来源 ====================
 
 def _walk_strings(node):
     """任意嵌套结构里的所有字符串。profile.json 的技能/项目/经历都在里面。"""
@@ -171,15 +102,14 @@ def _walk_strings(node):
                 yield s
 
 
-def load_baseline(run_dir, override=None):
-    """(基底词集合, 来源说明列表)。
+def _load_sources(run_dir, override=None):
+    """(原文片段列表, 来源说明列表, 拼接的全文)。
 
-    优先级与 gen_materials.load_resume_text 保持一致（--resume-text >
-    resume_text.txt），但这里是**并集而不是择一**：profile.json 里的技能列表、
-    项目、获奖也都是有据可依的原文，漏掉它们会把真技能报成编造。
+    原简历全文 = resume_text.txt（或 --resume-text 覆盖）+ profile.json 的全部字符串。
+    这就是喂给 LLM 做判定依据的原文；两个来源取**并集**，漏掉 profile 里的技能/项目
+    会把真技能当成编造报出来。
     """
     parts, sources = [], []
-
     for path in (override, resume_text_path(run_dir)):
         if path and os.path.isfile(path):
             try:
@@ -190,8 +120,7 @@ def load_baseline(run_dir, override=None):
             if text.strip():
                 parts.append(text)
                 sources.append(os.path.basename(path))
-                break                       # 与 gen_materials 一致：择一，不叠加
-
+                break                       # 择一：override 或 resume_text.txt
     profile_path = _profile_path(run_dir)
     if os.path.isfile(profile_path):
         try:
@@ -201,8 +130,19 @@ def load_baseline(run_dir, override=None):
             sources.append('profile.json')
         except (ValueError, OSError):
             pass
+    return parts, sources, '\n'.join(parts)
 
-    return _baseline_keys('\n'.join(parts)), sources
+
+def load_context_text(run_dir, override=None):
+    """给 LLM 判定用的原简历全文。"""
+    _, _, text = _load_sources(run_dir, override)
+    return text
+
+
+def load_sources(run_dir, override=None):
+    """(原简历全文, 来源说明列表)。"""
+    parts, sources, _ = _load_sources(run_dir, override)
+    return '\n'.join(parts), sources
 
 
 # ==================== 待查材料 ====================
@@ -227,7 +167,7 @@ def collect_targets(run_dir, only=None):
         except (ValueError, OSError) as e:
             broken.append((os.path.basename(path), str(e)))
             continue
-        # 只看 optimized_resume。optimization_suggestions 是给人看的建议，
+        # 只查 optimized_resume。optimization_suggestions 是给人看的建议，
         # 出现新技术词是它的本职工作，查它就是制造误报。
         body = (data or {}).get('optimized_resume')
         if isinstance(body, str) and body.strip():
@@ -250,46 +190,86 @@ def collect_targets(run_dir, only=None):
     return targets, broken
 
 
-def _context(text, raw_token, width=36):
-    """可疑词出现的上下文，给人判断用 —— 光给一个词看不出是不是真编造。"""
-    pos = text.find(raw_token)
+def _context(material, term, width=36):
+    """term 在材料里的上下文，给人核对用 —— 光给一个词看不出是不是真编造。"""
+    pos = material.find(term)
     if pos < 0:
         return ''
     start = max(0, pos - width)
-    end = min(len(text), pos + len(raw_token) + width)
-    snippet = text[start:end].replace('\n', ' ').replace('\r', ' ')
-    return ('…' if start else '') + re.sub(r'\s+', ' ', snippet) + ('…' if end < len(text) else '')
+    end = min(len(material), pos + len(term) + width)
+    snippet = material[start:end].replace('\n', ' ').replace('\r', ' ')
+    return ('…' if start else '') + re.sub(r'\s+', ' ', snippet) + ('…' if end < len(material) else '')
 
 
-# ==================== 检查 ====================
+# ==================== --allow 归一 ====================
 
-def verify(run_dir, baseline, only=None, allow=()):
-    """返回 (findings, targets, broken)。
+def _normalize(term):
+    """归一形：去空格/点/连字符/下划线，转小写，保留 `+#`（C++/C# 各不相同）。
 
-    findings: [(序号, 标签, [(原文写法, 上下文), ...])]
-    `baseline` 由 load_baseline() 给出 —— 传进来而不是在这里算，是为了让调用方
-    先判断「有没有基底」：没有基底时一个词都查不出，那是假阴性而不是干净。
+    用于把模型报出的词跟 `--allow` 名单对上。复合名词 `Vibe Coding` 归一成
+    `vibecoding`，放行时两个等价的下划线/连字符写法也能对上。
     """
-    allowed = set()
-    for term in allow:
-        # 走 _tokens 而不是 _norm：放行名单和检出用同一套取词规则，
-        # 才不会出现「--allow MySQL/Redis 写了却没生效」这种对不上的情况。
-        for key in _tokens(term):
-            allowed.add(key)
-            allowed.update(_ALIASES.get(key, ()))
+    return re.sub(r'[\s._\-]', '', str(term or '')).strip().lower()
 
-    targets, broken = collect_targets(run_dir, only)
 
-    findings = []
-    for index, label, text in targets:
-        hits = []
-        for key, raw in sorted(_tokens(text).items()):
-            if key in baseline or key in allowed:
-                continue
-            hits.append((raw, _context(text, raw)))
-        if hits:
-            findings.append((index, label, hits))
-    return findings, targets, broken
+# ==================== LLM 判定 ====================
+
+# verify.st 让模型把**全部**技术词连同 reason 引证一起列出，输出量随材料规模线性
+# 上涨 —— 这是方案一（列全词防偷懒）的固有代价。默认 max_tokens 只有 4096，塞不
+# 下会以 stop_reason=max_tokens 截断、返回空正文。所以 verify 单独抬高预算。
+_VERIFY_MAX_TOKENS = 16384
+
+
+def judge_target(index, label, material, resume_ctx, cfg, run_dir, kind):
+    """对一份材料做模型全文判定。
+
+    返回 (label, kept)：
+      kept = [(term, reason), ...] —— 模型判「没有依据」的技术词（含空 reason 兜底）。
+    模型调用失败（LLMError/ConfigError）时返回 kept=[FALLBACK]，把整份材料当作
+    「不可判定」阻断 —— 无法确认就比假干净安全，绝不静默放过。
+    """
+    try:
+        prompt = get_verify_prompt(resume_text=resume_ctx or '（原文未提供）',
+                                   material=material or '（材料未提供）',
+                                   kind=kind)
+        data = chat_json(prompt, stage='verify', run_dir=run_dir, cfg=cfg,
+                         max_tokens=_VERIFY_MAX_TOKENS)
+    except (LLMError, ConfigError) as exc:
+        print('  ⚠ %s 判定失败，按「不可判定」阻断：%s' % (label, str(exc)[:200]))
+        return label, [('（%s 模型评审失败，需人工核查）' % label, '')]
+
+    kept = []
+    entries = data.get('terms') if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        print('  ⚠ %s 模型返回结构不对，按「不可判定」阻断' % label)
+        return label, [('（%s 模型返回结构异常，需人工核查）' % label, '')]
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        term = str(entry.get('term') or '').strip()
+        if not term:
+            continue
+        supported = bool(entry.get('supported'))
+        reason = str(entry.get('reason') or '').strip()
+        # 判「有依据」却没有引证的空理由，按无效处理（懒模型全标通过等于放水）。
+        # 判「无依据」的保留；reason 可为空（附上下文兜底，见 main 打印）。
+        if not supported or (supported and not reason):
+            if supported and not reason:
+                # 空理由的 supported 也升格为嫌疑：模型可能偷懒全标通过。
+                reason = reason or '（模型判有依据但没给引证，按无依据保留）'
+                kept.append((term, reason))
+            else:
+                kept.append((term, '无' if not reason else reason))
+    return label, kept
+
+
+def apply_allow(kept, allowed):
+    """用 --allow 名单过滤模型报出的词。命中（归一形）即剔除。"""
+    if not allowed:
+        return kept
+    return [(term, reason) for term, reason in kept
+            if _normalize(term) not in allowed]
 
 
 # ==================== 留痕 ====================
@@ -312,12 +292,13 @@ def write_report(run_dir, sources, targets, findings, broken, allow):
             checked[label] = None
 
     report = {
-        'baseline_sources': list(sources),
+        'sources': list(sources),
         'allow': list(allow),
         'checked': checked,                       # 文件名 → mtime
         'unreadable': [name for name, _ in broken],
         'findings': [
-            {'index': index, 'file': label, 'terms': [raw for raw, _ in hits]}
+            {'index': index, 'file': label,
+             'terms': [{'term': term, 'reason': reason} for term, reason in hits]}
             for index, label, hits in findings
         ],
         'clean': not findings,
@@ -368,29 +349,110 @@ def report_is_stale(run_dir):
     return None, report
 
 
+# ==================== 本地取词（仅供 eval/* 评估工具用，verify 主流程不用） ====================
+
+# verify 闸门（方案一）已弃用本地折词，改纯 LLM 全文判定。但 offline 评估工具
+# eval/metrics.py（term_stats / added_block_stats / greeting_stats）和
+# eval/evaluate_materials.py 要靠**词表差异**量化「优化简历/招呼语新增了哪些原文没有的
+# 技术词」当 KPI —— 那是跑分需要，不是投递闸门；拆词在那里的作用是精确计数。
+# 因此以下函数保留给它们 import，verify 的 main/judge 路径一概不依赖（可参考头部注释）。
+
+_TOKEN = re.compile(r'[A-Za-z][A-Za-z0-9+#._-]*')
+
+# 与技术能力无关的通用词。宁可短也不要长 —— 每加一个词就少一次提醒的机会。
+_GENERIC = frozenset(x.lower() for x in (
+    'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'by',
+    'is', 'are', 'be', 'as', 'it', 'no', 'not', 'all', 'any', 'my', 'me', 'i',
+    'ok', 'hr', 'jd', 'qq', 'id', 'url', 'http', 'https', 'www', 'com', 'cn', 'net',
+    'e', 'g', 'etc', 'vs', 'via', 'per', 'top', 'n', 'x', 'y', 'z',
+))
+
+# 同一个东西的不同写法。左边出现在源里就等于右边也出现过。
+# 只放**确定同义**的，「会 Java 所以会 Kotlin」这种推断不属于这里。
+_ALIASES = {
+    'k8s': ('kubernetes',),
+    'kubernetes': ('k8s',),
+    'js': ('javascript',),
+    'javascript': ('js',),
+    'ts': ('typescript',),
+    'typescript': ('ts',),
+    'nodejs': ('node',),
+    'node': ('nodejs',),
+    'postgres': ('postgresql',),
+    'postgresql': ('postgres',),
+    'py': ('python',),
+    'golang': ('go',),
+    'go': ('golang',),
+    'tf': ('tensorflow',),
+    'tensorflow': ('tf',),
+    'ml': ('machinelearning',),
+    'dl': ('deeplearning',),
+    'llm': ('llms',),
+    'llms': ('llm',),
+}
+
+
+def _norm(token):
+    """归一形：大小写、点、连字符、下划线都不算区别。
+    C++ 的 + 和 C# 的 # 保留，因为 c / c++ / c# 是三种不同技能。"""
+    return re.sub(r'[._\-]', '', token).strip().lower()
+
+
+def _tokens(text):
+    """一段文本里的技术词候选（归一形 → 原文首次出现的写法）。仅供评估工具。"""
+    found = {}
+    for raw in _TOKEN.findall(text or ''):
+        key = _norm(raw)
+        if len(key) < 2 or key in _GENERIC:
+            continue
+        if key.isdigit():
+            continue
+        found.setdefault(key, raw)
+    return found
+
+
+def _baseline_keys(text):
+    """基底文本 → 归一后的词集合（含别名展开）。仅供评估工具。"""
+    keys = set(_tokens(text))
+    for key in list(keys):
+        keys.update(_ALIASES.get(key, ()))
+    return keys
+
+
+def load_baseline(run_dir, override=None):
+    """(归一词集合, 来源说明列表)。仅供评估工具：原文可选 --resume-text，且并集 profile.json。"""
+    _, sources, text = _load_sources(run_dir, override)
+    return _baseline_keys(text), sources
+
+
+# ==================== main ====================
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description='检查生成材料里有没有简历原文没有的技术词（verify 阶段）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='只查 optimized_resume 和 greeting_*.txt；不查 optimization_suggestions，'
-               '也不判断中文表述。详见脚本头部注释。')
+        epilog='模型通读完整原简历 + 完整材料，识别并逐条判断所有技术词。'
+               '不支持前缀词表，复合名词（Vibe Coding）由模型当一个整体判断。'
+               '详见脚本头部注释。')
     ap.add_argument('run_dir')
     ap.add_argument('--only', help='只查这些序号（1,3,5-7），与 materials/render 同一套序号')
     ap.add_argument('--allow', action='append', default=[],
-                    help='放行这些词（逗号分隔，可重复）—— 有据可依但不在基底文本里时用')
-    ap.add_argument('--resume-text', help='基底文件，默认 <run_dir>/resume_text.txt')
+                    help='放行这些词（逗号分隔，可重复）—— 模型误判、但人核实有依据时用')
+    ap.add_argument('--resume-text', help='原简历基底文件，默认 <run_dir>/resume_text.txt')
     ap.add_argument('--quiet', action='store_true', help='只打结论，不打上下文')
+    ap.add_argument('--model', help='覆盖模型（透传自 pipeline，一般不用手敲）')
+    ap.add_argument('--base-url', dest='base_url', help='覆盖 base_url（透传自 pipeline）')
+    ap.add_argument('--api-key', dest='api_key', help='覆盖 api_key（透传自 pipeline）')
     args = ap.parse_args(argv)
 
     if not os.path.isdir(args.run_dir):
-        # 1 不是 2：命令本身没写错，是前置条件（目录还没跑出来）不满足。
-        # 口径跟 gen_materials.py:400、read_thin.py:215 保持一致。
         print('[错误] 运行目录不存在: %s' % args.run_dir)
         return 1
 
     allow = []
     for chunk in args.allow:
         allow.extend(p.strip() for p in str(chunk).split(',') if p.strip())
+    allowed = {_normalize(t) for t in allow}
 
     # 序号范围拿 qualified_jobs.json 的条数来卡，跟 materials 核对侧同一份严格解析：
     # 越界是调用方写错了，静默忽略会让人以为查过了。
@@ -407,19 +469,28 @@ def main(argv=None):
             print('[错误] %s' % e)
             return 2
 
-    baseline, sources = load_baseline(args.run_dir, args.resume_text)
-
-    if not sources:
-        # 没有基底就没有「原文」可比，此时「一个可疑词都没查出」是假阴性，
-        # 比报错危险得多 —— 所以这里退 1 阻断，而不是当干净放过。
-        print('[缺基底] 既没有 resume_text.txt 也没有 profile.json，无法判断哪些词是原文里的')
-        print('  给基底：--resume-text <文件>')
+    # 原简历全文必须有，否则模型没有「原文」可比；没有原文时无法判定，退 1。
+    resume_ctx, sources = load_sources(args.run_dir, args.resume_text)
+    if not sources or not resume_ctx.strip():
+        print('[缺原文] 既没有 resume_text.txt 也没有 profile.json，无法判断材料里的技术词有没有依据')
+        print('  给原文：--resume-text <文件>')
         return 1
 
-    findings, targets, broken = verify(
-        args.run_dir, baseline, only=picked, allow=allow)
+    overrides = {'model': args.model, 'base_url': args.base_url,
+                 'api_key': args.api_key}
+    try:
+        cfg = resolve(stage='verify', **overrides)
+        cfg.require_key()
+    except ConfigError as exc:
+        # 纯 LLM 判定没有本地规则可退化：配不到模型就直接阻断，绝不静默放行。
+        print('\n[错误] verify 需要 LLM 来通读全文判定，但没配到模型：%s'
+              % str(exc).splitlines()[0])
+        print('  配法：scripts/llm_config 相关，或 --model/--base-url/--api-key')
+        return 1
 
-    print('基底: %s（%d 个词）' % ('、'.join(sources), len(baseline)))
+    targets, broken = collect_targets(args.run_dir, picked)
+
+    print('原简历: %s' % ('、'.join(sources)))
 
     for name, err in broken:
         print('  ⚠ 读不动，已跳过: %s（%s）' % (name, err))
@@ -430,8 +501,53 @@ def main(argv=None):
 
     print('待查: %d 份材料' % len(targets))
 
-    # 报告在判定之前写：查出编造时也要留痕，否则重跑一次就「看起来没查出问题」。
-    # --only 跑的是子集，写全量报告会把没查的那几份也标成查过 —— 所以不写。
+    # ── 并发逐份判定：只输出开始提示 + 每完成一条打一行计数，不做 verbose 进度条 ──
+    workers = cfg.concurrency if cfg else 4
+    print('开始判定 %d 份材料（并发 %d）...' % (len(targets), workers))
+
+    _lock = threading.Lock()
+    _done = [0]
+
+    def _track_label(item):
+        return '优化简历' if item[1].startswith('resume_') else '招呼语'
+
+    def _count_line(ok_str):
+        with _lock:
+            _done[0] += 1
+            print('  [%d/%d] %s' % (_done[0], len(targets), ok_str), flush=True)
+
+    def _track(item):
+        try:
+            value = judge_target(item[0], item[1], item[2],
+                                 resume_ctx, cfg, args.run_dir, _track_label(item))
+            _count_line('完成')
+            return value
+        except Exception:
+            _count_line('失败')
+            raise                       # map_concurrent 捕获并记为 ok=False，不崩全批
+
+    outcomes = map_concurrent(
+        targets, _track,
+        workers=workers,
+        quiet=True,
+    )
+
+    ok_n = sum(1 for o in outcomes if o.ok)
+    fail_n = len(outcomes) - ok_n
+    tail = '' if not fail_n else '，%d 条判定失败（保持原样）' % fail_n
+    print('判定完成: %d 份材料处理完（%d 成功%s)' % (len(outcomes), ok_n, tail))
+
+    findings = []
+    for oc in outcomes:
+        if not oc.ok:
+            continue
+        label, kept = oc.value                 # judge_target 返回 (label, kept)
+        kept = apply_allow(kept, allowed)
+        if kept:
+            index = next((i for i, l, _ in targets if l == label), -1)
+            findings.append((index, label, kept))
+
+    # 全量报告在判定之后写；--only 子集不写全量报告（会把没查的标成查过）。
     if picked is None:
         err = write_report(args.run_dir, sources, targets, findings, broken, allow)
         if err:
@@ -440,20 +556,24 @@ def main(argv=None):
         print('  （--only 子集，不写 verify_report.json）')
 
     if not findings:
-        print('\n✅ 没查出简历原文之外的技术词')
+        print('\n✅ 模型通读后没有查出简历原文之外的技术词')
         if broken:
             print('  （但有 %d 份材料读不动，那几份没查过）' % len(broken))
             return 3
         return 0
 
-    total = sum(len(h) for _, _, h in findings)
+    total = sum(len(hits) for _, _, hits in findings)
     print('\n❌ %d 份材料里查出 %d 处简历原文没有的技术词：' % (len(findings), total))
+    text_of = {label: text for _, label, text in targets}
     for index, label, hits in findings:
         print('\n  #%d  %s' % (index, label))
-        for raw, ctx in hits:
-            print('    • %s' % raw)
+        for term, reason in hits:
+            print('    • %s' % term)
+            if reason and reason != '无':
+                print('       模型评语: %s' % reason)
+            ctx = _context(text_of.get(label, ''), term)
             if ctx and not args.quiet:
-                print('      %s' % ctx)
+                print('       上下文: %s' % ctx)
 
     # 提示用户投递材料在哪、并自动打开该目录，方便逐份核对被标记的内容。
     dlv_dir = os.path.normpath(os.path.abspath(deliver_dir(args.run_dir)))
@@ -461,18 +581,29 @@ def main(argv=None):
     print('   已为你打开: %s' % dlv_dir)
     open_in_file_manager(dlv_dir)
 
-    # 两个提示都要能直接粘出去跑，所以：序号去重（同一个岗位的简历和招呼语
-    # 各算一条 finding，不去重会打出 --only 1,1,2）；放行名单按**词**截断而不是
-    # 按字符截断 —— 截在词中间会得到一条看着能用、其实放行了别的词的命令。
+    # 三条命令都走 pipeline、都能直接粘出去跑。序号去重（同一岗位的简历和招呼语
+    # 各算一条 finding，不去重会打出 --only 1,1,2）；放行名单按 **词** 原样写。
+    base = 'python scripts/pipeline.py --run-dir "%s"' % args.run_dir
     indices = sorted({i for i, _, _ in findings})
-    terms = sorted({raw for _, _, hits in findings for raw, _ in hits}, key=str.lower)
-    shown, extra = terms[:20], len(terms) - 20
+    allow_terms = ','.join(allow) or '<在此填上你核实的词>'
 
-    print('\n下一步（二者选一，别直接跑 render）：')
-    print('  有据可依 → 放行后重跑本条：--allow %s%s'
-          % (','.join(shown), ('   （另有 %d 个词未列出）' % extra) if extra > 0 else ''))
-    print('  确属编造 → 重生成这几个岗位：python scripts/stages/gen_materials.py "%s" --only %s --force'
-          % (args.run_dir, ','.join(str(i) for i in indices)))
+    # 这道闸门只在「带 --to render 的整轮 pipeline」里成立：verify 排在 render 之前，
+    # 查出疑点词时退出 1 会先拦住 render。单独运行 verify.py 只是自检，它不拦截任何
+    # 下游 —— 所以 --allow / --skip-verify 这两个开关，也只在你**之后**跑 `--to render`
+    # 那一遍时才有意义；单独跑 verify，放不放了结都是一次检测，拦不到 anything。
+    print('\n说明：本次检查只在整轮 pipeline（`--to render`）里构成闸门 ——')
+    print('  verify 排在 render 之前，查出问题会用退出码拦住 render。')
+    print('  单独运行 verify.py 只是自检，不拦任何下游；因此下面命令里的')
+    print('  --allow / --skip-verify，也都只作用于 `--to render` 那一遍。')
+
+    print('\n下一步（三个方向，都能直接粘出去跑；render 会把材料原样发出去）：')
+    print('  1) 模型误判、词其实有据 → 放行这些词，重验通过后走到 render：')
+    print('       %s --from verify --to render --allow %s' % (base, allow_terms))
+    print('  2) 确属编造 → 只重生成这几份材料后走到 render（--force 覆盖，--only 只动它们）：')
+    print('       %s --from materials --to render --only %s --force'
+          % (base, ','.join(str(i) for i in indices)))
+    print('  3) 跳过本检查直接渲染（不查了，材料里可能有编造，发送前自己逐份过一遍）：')
+    print('       %s --from verify --to render --skip-verify' % base)
     print('\n注意：本脚本只查「原文没有的技术词」。夸大、把「了解」写成「精通」、'
           '语气不当都查不出来 —— 发送前仍要逐条过一遍。')
     return 1

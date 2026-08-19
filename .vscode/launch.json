@@ -1,0 +1,23 @@
+{
+    // 为 `python scripts/pipeline.py --from verify` 生成的调试配置
+    // 需要 VS Code 的 Python 扩展（ms-python.python）。
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "pipeline: --from verify",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/pipeline.py",
+            "args": [
+                "--from", "verify"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            // 缺省解释器是下拉选的。若要显式指定，把下面注释打开。
+            // "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            // 需要更多参数（如 --run-dir）时，追加到 args 里，例如：
+            // "--run-dir", "assets/2026-08-15_10-00-00"
+        }
+    ]
+}
