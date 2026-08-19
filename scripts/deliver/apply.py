@@ -64,8 +64,6 @@ try:
 except ImportError:                                  # pragma: no cover
     has_wasted_preview = None
 
-_SKILL_ROOT = os.path.dirname(_SCRIPTS)
-
 # verify_image.py 缺 Pillow 时是 `sys.exit('需要 Pillow：…')`，退出码同样是 1。
 # 不区分的话，「没装 Pillow」会被报成「每张图都有问题」，然后拦下一次本该正常的投递。
 _PILLOW_MISSING = '需要 Pillow'
@@ -151,7 +149,8 @@ def find_image(run_dir, job, person, index):
 
 def verify_images(paths):
     """跑 verify_image.py 体检。返回 (ok, 输出, 是否因缺 Pillow 而没检)。"""
-    script = os.path.join(_SKILL_ROOT, 'scripts', 'verify_image.py')
+    # 脚本按阶段归到 scripts/verify/ 子目录；别再拼 scripts/verify_image.py 这个旧平铺路径。
+    script = os.path.join(_SCRIPTS, 'verify', 'verify_image.py')
     bad, lines = [], []
     for path in paths:
         proc = subprocess.run([sys.executable, script, path],

@@ -225,11 +225,14 @@ python scripts/pipeline.py --from materials --only 2,4 --force              # �
 
 ## 6. verify —— 模型有没有凭空造技能？
 
-只用标准库、不调模型、几秒跑完。它收集真正会送出去的文本（`optimized_resume` + 招呼语）里的每个技术术语，报告在 `resume_text.txt` / `profile.json` 里没有依据的。
+**默认关闭**：整轮 `--to render` 不会自动查材料。要查就显式加 `--verify`，或把起点设成它（`--from verify` 本身就带查的意图）。把 `--verify` 加进 `--to render` 整轮：
 
 ```bash
-python scripts/pipeline.py --from verify
+python scripts/pipeline.py {简历.pdf} --to render --verify     # 整轮连材料核查一起跑
+python scripts/pipeline.py --from verify                        # 只查这一环（自检，不拦下游）
 ```
+
+它既做字符串比对，也调模型处理缩写 / 同义词 / 中英等价这些比对做不到的语义问题（所以按词烧模型，才默认关闭）。它收集真正会送出去的文本（`optimized_resume` + 招呼语）里的每个技术术语，报告在 `resume_text.txt` / `profile.json` 里没有依据的。
 
 **退出 `1` 表示它发现了问题，不是它坏了。** 每个命中都带上下文打印。两条路之一：
 
@@ -238,8 +241,8 @@ python scripts/pipeline.py --run-dir {run_dir} --from verify --to render --allow
 python scripts/stages/gen_materials.py {run_dir} --only 1,3 --force   # 确系编造 → 重新生成那些岗位
 ```
 
-- **绝不要自作主张传 `--allow` 或 `--skip-verify`**——两者都以材料出门告终，得让用户决定。
-- `--skip-verify`（verify 阶段）= 跳过“原文没有的技术词”核查（跳过就得自己逐份看材料）。
+- **绝不要自作主张传 `--allow`**——它以材料出门告终，得让用户决定。
+- 不传 `--verify` 时 verify 不跑，但 `--to render` 会打一行「默认关闭」，提醒发送前自己逐份看材料。
 - 退出码：`0` 干净 · `1` 有发现或没有基准/可检查材料 · `2` 坏的 `--only` · `3` 跑完但有些材料不可读（那些从没被检查过，自己读）。
 - 抓不到：夸大其词（“了解”→“精通”）、中文短语（只评拉丁字母词）、`optimization_suggestions`（刻意排除）。
 

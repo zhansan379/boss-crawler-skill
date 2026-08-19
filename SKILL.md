@@ -360,11 +360,14 @@ python scripts/stages/gen_materials.py {run_dir} --only 4        # 只补那个�
 
 ### verify —— 模型有没有凭空造技能？
 
+**默认关闭**：整轮 `--to render` 不会自动查材料。要查就显式加 `--verify`，或把起点设成它（`--from verify` 本身就带查的意图）。一条带核查的整轮：
+
 ```bash
-python scripts/pipeline.py --from verify
+python scripts/pipeline.py {简历.pdf} --to render --verify     # 整轮连材料核查一起跑
+python scripts/pipeline.py --from verify                        # 只查这一环（自检，不拦下游）
 ```
 
-只用标准库，不调模型，几秒跑完。它收集真正会被送出去的文本里的每个技术术语——`optimized_resume` 和招呼语——并报告那些在 `resume_text.txt` / `profile.json` 里没有依据的。一次悄悄加进 PyTorch 或 Kubernetes 的简历改写是本 skill 最糟糕的失败模式：用户带着它去面试，却答不上来。
+它既做字符串比对，也调模型处理缩写 / 同义词 / 中英等价这些比对做不到的语义问题——所以按词烧模型，才默认关闭。它收集真正会被送出去的文本里的每个技术术语——`optimized_resume` 和招呼语——并报告那些在 `resume_text.txt` / `profile.json` 里没有依据的。一次悄悄加进 PyTorch 或 Kubernetes 的简历改写是本 skill 最糟糕的失败模式：用户带着它去面试，却答不上来。
 
 **退出 1 表示它发现了问题，不是它坏了。** 流水线故意在 `render` 之前停下——长图一旦存在，材料读起来就是定稿。每个命中都带着周围上下文打印出来，好让人判断；然后选两条路之一：
 
@@ -375,7 +378,7 @@ python scripts/stages/gen_materials.py {run_dir} --only 1,3 --force
 python scripts/pipeline.py --run-dir {run_dir} --from verify --to render --allow PyTorch,nginx
 ```
 
-**绝不要自作主张传 `--allow` 或 `--skip-verify`**——两者都是用户的决定，因为两者都以材料出门告终。把列表展示出来并询问。（`apply.py` 有自己的、不相关的 `--skip-verify`，用于*图片*健康检查；别把关于一个的决定搬到另一个身上。）
+**不要自作主张打开 `--verify` 或传 `--allow`**——两者都是用户的决定：前者让这文件 1 道闸门真的去烧模型拦 render，后者以材料出门告终。把列表展示出来并询问。（`apply.py` 有一个不相关又同名充满歧义的 `--skip-verify`，用于*图片*健康检查；别把关于一个的决定搬到另一个身上。）
 
 它抓不到的：夸大其词。「了解」被改写为「精通」、三个月实习被拉长到一年、一种不像用户的语气——任何术语匹配都发现不了这些，所以 `gate:send` 仍然意味着要读材料。还有两个值得知道的局限：它只评估拉丁字母词（像 多智能体面试系统 这样的中文短语永远不登记），而且 `optimization_suggestions` 刻意排除在外，因为给一份简历提出它缺的技能正是那个字段的全部工作。
 

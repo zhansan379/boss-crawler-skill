@@ -28,6 +28,7 @@ for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')
 
 import pipeline
+from resume_matcher import paths
 
 RAN = []            # [(阶段名, argv), ...]
 CODES = {}          # 阶段名 → 让它返回的退出码
@@ -40,31 +41,33 @@ def _fake_run_stage(name, cmd, run_dir, timed=False):
 
 def build_run_dir(scored=None, qualified=None, profile=True, params=None,
                   crawl_summary=True, materials=()):
+    # 四桶重构后产物不再平铺在 run_dir 根，统一走 paths 助手落进 state/、materials/。
+    # 写测试也照 production 路径取，别自己拼 —— 手拼路径正是这文件曾经红一片的原因。
     run_dir = tempfile.mkdtemp(prefix='pipeline_')
+
+    def _write(path, data):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        json.dump(data, open(path, 'w', encoding='utf-8'), ensure_ascii=False)
+
     if profile:
-        json.dump({'basic_info': {'name': '张三'}},
-                  open(os.path.join(run_dir, 'profile.json'), 'w', encoding='utf-8'),
-                  ensure_ascii=False)
+        _write(paths.profile_path(run_dir), {'basic_info': {'name': '张三'}})
     if params is not None:
-        json.dump(params, open(os.path.join(run_dir, 'crawl_params.json'), 'w',
-                               encoding='utf-8'), ensure_ascii=False)
+        _write(paths.crawl_params_path(run_dir), params)
     if scored is not None:
-        json.dump(scored, open(os.path.join(run_dir, 'scored_jobs.json'), 'w',
-                               encoding='utf-8'), ensure_ascii=False)
+        _write(paths.scored_jobs_path(run_dir), scored)
     if qualified is not None:
-        json.dump(qualified, open(os.path.join(run_dir, 'qualified_jobs.json'), 'w',
-                                  encoding='utf-8'), ensure_ascii=False)
+        _write(paths.qualified_jobs_path(run_dir), qualified)
     if crawl_summary:
-        json.dump({'written': 40, 'total': 40, 'skipped': 0, 'run_dups': 0},
-                  open(os.path.join(run_dir, 'crawl_summary.json'), 'w',
-                       encoding='utf-8'), ensure_ascii=False)
+        _write(paths.crawl_summary_path(run_dir),
+               {'written': 40, 'total': 40, 'skipped': 0, 'run_dups': 0})
     if materials:
-        gen = os.path.join(run_dir, 'generated')
-        os.makedirs(gen, exist_ok=True)
+        # 契约：greeting_{i}_{公司}.txt / resume_{i}_{公司}.json，都在 materials/ 桶。
         for kind, index, tag in materials:
-            with open(os.path.join(gen, '%s_%d_%s.txt' % (kind, index, tag)),
-                      'w', encoding='utf-8') as f:
-                f.write('内容')
+            if kind == 'greeting':
+                _write(paths.greeting_path(run_dir, index, tag), '内容')
+            else:
+                _write(os.path.join(paths.materials_dir(run_dir),
+                                    'resume_%d_%s.json' % (index, tag)), '内容')
     return run_dir
 
 
@@ -165,7 +168,7 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--verify'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('阶段顺序完整',
               stages_ran() == ['parse', 'infer', 'crawl', 'match', 'deep',
@@ -199,7 +202,7 @@ def main():
               str(stages_ran()))
         check('match 走 quick', 'quick' in cmd_of('match'), pipeline.show(cmd_of('match')))
 
-        path = os.path.join(run_dir, 'qualified_jobs.json')
+        path = paths.qualified_jobs_path(run_dir)
         pool = json.load(open(path, encoding='utf-8')) if os.path.exists(path) else None
         check('qualified_jobs.json 被补出来了', isinstance(pool, list))
         if isinstance(pool, list):
@@ -225,7 +228,7 @@ def main():
         CODES.clear()
         code = run([resume, '--run-dir', run_dir, '--to', 'match'])
         check('退出码 0', code == 0, '实际 %s' % code)
-        pool = json.load(open(os.path.join(run_dir, 'qualified_jobs.json'), encoding='utf-8'))
+        pool = json.load(open(paths.qualified_jobs_path(run_dir), encoding='utf-8'))
         check('文件原样保留', pool == kept, str(pool))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -278,11 +281,13 @@ def main():
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
         CODES.clear()
-        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--no-images'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--no-images', '--verify'])
         check('退出码 0', code == 0, '实际 %s' % code)
         check('render 没跑', 'render' not in stages_ran(), str(stages_ran()))
-        # 不要长图 ≠ 不用查材料：招呼语照样会发出去，verify 必须还在计划里
-        check('verify 仍然跑了', 'verify' in stages_ran(), str(stages_ran()))
+        # 不要长图 ≠ 不用查材料：招呼语照样会发出去。--verify 显式开才查；
+        # --no-images 把终点压到 verify，正好在核查后停下、不渲染。
+        check('--no-images 配上 --verify 后 verify 仍跑',
+              'verify' in stages_ran(), str(stages_ran()))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -374,52 +379,70 @@ def main():
         check('deep/merge 没跑（快速模式里它们不存在）',
               stages_ran() == ['match'], str(stages_ran()))
         check('qualified_jobs.json 被补出来了',
-              os.path.exists(os.path.join(run_dir, 'qualified_jobs.json')))
+              os.path.exists(paths.qualified_jobs_path(run_dir)))
         # 下一步不能指向 deep/merge —— 快速模式下那条命令只会印「跳过」。
         check('下一步指向 materials', '--from materials' in out, out[-500:])
         check('提醒 materials 会按岗位调两次模型', '两次模型' in out, out[-500:])
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
-    print('\n=== 14. verify 查出编造：停在 render 之前 ===')
-    # verify 的失败和别的阶段不同 —— 它「失败」正说明它干了活。所以要锁两件事：
+    print('\n=== 14. verify：默认关闭，--verify 才跑；查出编造时停在 render 之前 ===')
+    # verify 默认不跑：整轮 --to render 不自动查材料。只有 --verify（或 --from verify）
+    # 才开。这台闸门开了之后，它「失败」正说明它干了活 —— 要锁两件事：
     # render 一定不跑（图渲出来人就当材料定稿了），提示得说清是查出了东西。
     run_dir = build_run_dir(
         params={'keywords': ['Python'], 'cities': ['杭州'], 'match_mode': 'quick'},
         scored={'tier1': [scored_job('XX科技', 'Java开发', 'https://x/1')], 'tier2': []},
         materials=[('greeting', 1, 'XX科技'), ('resume', 1, 'XX科技')])
     try:
+        # ── 默认关闭：不传 --verify 就不跑；哪怕 verify 本来会退 1，没开也不会拦
+        CODES.clear()
+        CODES['verify'] = 1
+        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render'])
+        check('默认关闭：verify 不跑、render 照跑、整轮退 0',
+              code == 0 and 'verify' not in stages_ran() and 'render' in stages_ran(),
+              '%s / %s' % (code, stages_ran()))
+        check('默认关闭时打行提醒：发送前自己逐份看',
+              '默认关闭' in out and '自己逐份看' in out, out[:600])
+
+        # ── --verify 开启后 verify 真跑一次（查不出编造 → 一路走到 render）
+        CODES.clear()
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--verify'])
+        check('--verify 开启后 verify 真跑', 'verify' in stages_ran(), str(stages_ran()))
+
+        # ── verify 查出编造 → 停在 render 之前，退出 1
+        # 排查指引（逐条词 + gen_materials.py 重生成 + --allow 放行）由
+        # verify_no_fabrication.py 子进程打在它自己的 stdout 上；这里 run_stage 被
+        # 换成桩、不真起子进程，所以那些文字不在 out 里。pipeline 层只负责两件事：
+        # 1) 把 verify 的退出码 1 原样传出去；2) 不再跑比 verify 更靠后的 render。
         CODES.clear()
         CODES['verify'] = 1                     # 查出了简历原文没有的技术词
-        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render'])
+        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render', '--verify'])
         check('退出码 1', code == 1, '实际 %s' % code)
         check('render 没跑（图渲出来就等于材料定稿）',
               'render' not in stages_ran(), str(stages_ran()))
-        check('提示说的是查出了东西，不是脚本坏了',
-              '查出' in out and '修完接着跑' not in out, out[-400:])
-        check('给了放行和重生成两条路',
-              '--allow' in out and 'gen_materials.py' in out, out[-400:])
-        check('也说了怎么彻底跳过', '--skip-verify' in out, out[-400:])
+        # verify 的退出 1 不是「脚本坏了」：pipeline 不该套上那套通用失败话术
+        check('verify 退出 1 不套用通用「脚本坏了」话术',
+              '脚本坏了' not in out, out[-400:])
 
         # verify 退 3 = 有几份材料读不动：那是部分成功，不该拦住 render
         CODES.clear()
         CODES['verify'] = 3
-        code = run([resume, '--run-dir', run_dir, '--to', 'render'])
+        code = run([resume, '--run-dir', run_dir, '--to', 'render', '--verify'])
         check('verify 退 3 → 整轮 3 且 render 照跑',
               code == 3 and 'render' in stages_ran(), '%s / %s' % (code, stages_ran()))
 
-        # --skip-verify：跳过但要留一句话，别让人以为查过了
+        # ── 起点就是 verify（--from verify）也开这台闸门：补查/续查的固有语义
         CODES.clear()
-        code, out = run_capture([resume, '--run-dir', run_dir, '--to', 'render', '--skip-verify'])
-        check('--skip-verify 退 0 且 verify 没跑',
-              code == 0 and 'verify' not in stages_ran(), '%s / %s' % (code, stages_ran()))
-        check('跳过时明确提醒要自己看', '自己逐份看' in out, out[:600])
-        check('render 照跑', 'render' in stages_ran(), str(stages_ran()))
+        CODES['verify'] = 1
+        code = run([resume, '--run-dir', run_dir, '--from', 'verify'])
+        check('--from verify 也触发 verify（并退 1 拦下来）',
+              code == 1 and 'verify' in stages_ran(), '%s / %s' % (code, stages_ran()))
 
         # --allow / --only 要透传下去，否则人在 pipeline 上加了参数却不生效
         CODES.clear()
-        run([resume, '--run-dir', run_dir, '--to', 'render', '--allow', 'PyTorch,nginx',
-             '--only', '1'])
+        run([resume, '--run-dir', run_dir, '--to', 'render', '--verify', '--allow',
+             'PyTorch,nginx', '--only', '1'])
         vcmd = cmd_of('verify')
         check('--allow 透传给 verify', '--allow' in vcmd and 'PyTorch,nginx' in vcmd,
               pipeline.show(vcmd))
@@ -516,8 +539,8 @@ def main():
               'verify_image' in names and 'render' in names
               and names.index('verify_image') > names.index('render'), str(names))
         vcmd = cmd_of('verify_image')
-        check('verify_image 指向 applications 目录并 --all',
-              any('applications' in c for c in vcmd) and '--all' in vcmd,
+        check('verify_image 指向 deliver 目录并 --all',
+              any('deliver' in c for c in vcmd) and '--all' in vcmd,
               pipeline.show(vcmd))
 
         # 图检查出可疑项 → 记成部分成功（退 3），不硬拦

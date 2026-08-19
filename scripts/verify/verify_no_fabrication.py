@@ -589,21 +589,22 @@ def main(argv=None):
 
     # 这道闸门只在「带 --to render 的整轮 pipeline」里成立：verify 排在 render 之前，
     # 查出疑点词时退出 1 会先拦住 render。单独运行 verify.py 只是自检，它不拦截任何
-    # 下游 —— 所以 --allow / --skip-verify 这两个开关，也只在你**之后**跑 `--to render`
+    # 下游 —— 所以 --allow / --verify 这两个开关，也只在你**之后**跑 `--to render`
     # 那一遍时才有意义；单独跑 verify，放不放了结都是一次检测，拦不到 anything。
     print('\n说明：本次检查只在整轮 pipeline（`--to render`）里构成闸门 ——')
     print('  verify 排在 render 之前，查出问题会用退出码拦住 render。')
-    print('  单独运行 verify.py 只是自检，不拦任何下游；因此下面命令里的')
-    print('  --allow / --skip-verify，也都只作用于 `--to render` 那一遍。')
+    print('  单独运行 verify.py 只是自检，不拦任何下游；因此下面命令')
+    print('  里的 --verify / --allow，也都只作用于 `--to render` 那一遍。')
+    print('  （verify 整体默认关闭：这里已经跑过一遍，下面的路径才自带 --verify。）')
 
     print('\n下一步（三个方向，都能直接粘出去跑；render 会把材料原样发出去）：')
     print('  1) 模型误判、词其实有据 → 放行这些词，重验通过后走到 render：')
     print('       %s --from verify --to render --allow %s' % (base, allow_terms))
-    print('  2) 确属编造 → 只重生成这几份材料后走到 render（--force 覆盖，--only 只动它们）：')
-    print('       %s --from materials --to render --only %s --force'
+    print('  2) 确属编造 → 只重生成这几份材料后重新核查+走到 render：')
+    print('       %s --from materials --to render --verify --only %s --force'
           % (base, ','.join(str(i) for i in indices)))
     print('  3) 跳过本检查直接渲染（不查了，材料里可能有编造，发送前自己逐份过一遍）：')
-    print('       %s --from verify --to render --skip-verify' % base)
+    print('       %s --from render' % base)
     print('\n注意：本脚本只查「原文没有的技术词」。夸大、把「了解」写成「精通」、'
           '语气不当都查不出来 —— 发送前仍要逐条过一遍。')
     return 1

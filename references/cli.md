@@ -143,15 +143,15 @@ python scripts/pipeline.py --from match --to merge          # 显式区间
 
 ### verify 阶段
 
-`materials` 之后、`render` 之前插了一步 `verify_no_fabrication.py`：把要发出去的文本（`optimized_resume` + 招呼语）里的技术词，跟 `resume_text.txt` / `profile.json` 对一遍，报出没有出处的那些。纯标准库，不调模型，几秒钟。
+`materials` 之后、`render` 之前插了一步 `verify_no_fabrication.py`：把要发出去的文本（`optimized_resume` + 招呼语）里的技术词，跟 `resume_text.txt` / `profile.json` 对一遍，报出没有出处的那些。既做字符串比对，也调模型处理缩写 / 同义词 / 中英等价这些比对做不到的语义问题 —— 正因按词烧模型，这一步**默认关闭**：整轮 `--to render` 不自动跑它，除非显式 `--verify`，或起点就是 `--from verify`。
 
 | 参数 | 作用 |
 |---|---|
+| `--verify` | 开启这一步（默认关闭）。开了之后查出编造词会拦住 `render` |
 | `--allow 词表` | 放行这些技术词，逗号分隔，可重复给。透传给 `verify_no_fabrication.py` |
-| `--skip-verify` | 整步跳过（跳过就得自己逐份看材料） |
 | `--only` | 与 `materials` / `render` 共用同一份序号 |
 
-> `--skip-verify` 在两个脚本里是**两件不同的事**：`pipeline.py --skip-verify` 跳过的是这里的技术词核查；`apply.py --skip-verify` 跳过的是附件图的 `verify_image.py` 体检。两条命令从不同时出现，但别把结论互相搬。
+> `apply.py` 有一个同名但不同语义的 `--skip-verify`，用于附件图的 `verify_image.py` 体检，和这里的 `--verify` 是两件不同的事，别把结论互相搬。
 
 **退出码 1 在这一步的含义不一样：它是「查出来了」，不是「坏了」。** 流水线会停在 `render` 之前 —— 长图一渲出来，材料在人眼里就定稿了。逐条看完上下文后二选一：确属编造就 `gen_materials.py --only <序号> --force` 重生成；有据可依就加 `--allow` 续跑。
 

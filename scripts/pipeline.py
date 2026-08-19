@@ -33,7 +33,8 @@
     python scripts/pipeline.py --from match                 # match → deep → merge（见下）
     python scripts/pipeline.py --run-dir assets/2026-08-15_10-00-00 --from materials
 
-    python scripts/pipeline.py 简历.pdf --to render         # parse … render 一次跑完
+    python scripts/pipeline.py 简历.pdf --to render --verify  # 整轮含材料核查
+    python scripts/pipeline.py 简历.pdf --to render         # 整轮，但 verify 默认关闭、需要 --verify 才跑
     python scripts/pipeline.py --from crawl --to render     # 从爬取起，一路跑到底
     python scripts/pipeline.py 简历.pdf --to render --no-images  # 整轮但不渲染简历长图
     python scripts/pipeline.py 简历.pdf --to crawl          # 显式区间：爬完就停
@@ -45,6 +46,11 @@ qualified_jobs.json，下游一步都走不了 —— 那是个半成品，不�
 
 失败就停，不跳过、不硬着头皮往下跑。屏幕上会给出接着跑的命令（`--from <失败的阶段>`），
 因为最贵的两步 —— crawl 动辄几十分钟、deep 按岗位烧 token —— 不该因为下游一个小错重来。
+
+`verify` 默认不开启：整轮 `--to render` 不会自动查材料。要查就显式加 `--verify`，
+或把起点设成它（`--from verify` 续查时本来就带 `--verify` 的语义）。它按词烧模型、
+走 LLM 语义判定，不该默认跑到所有普通整轮里。没开 `--verify` 时，计划里虽有 verify
+这一步也不执行，只打一行「默认关闭」提醒你要自己看材料。
 
 `verify` 的失败是个例外：它退 1 表示**查出了东西**，不是脚本坏了。那时流水线停在 render
 之前（长图一渲出来，材料在人眼里就定稿了），提示走的是「重生成 or --allow 放行」两条路，
@@ -355,7 +361,7 @@ def build_cmd(name, args, ctx):
         return cmd + extra
 
     if name == 'verify':
-        if args.skip_verify:
+        if not verify_enabled(args):
             return None
         # 招呼语也要查，所以 --resume-mode skip 时这一步照跑（那时只剩招呼语）。
         # verify 现在含 LLM 语义判定（缩写/同义词），是 _LLM_STAGES 一员，带模型参数。
@@ -492,7 +498,7 @@ def parse_args(argv=None):
     ap.add_argument('--to', dest='to_stage', choices=STAGES, default=None,
                     help='跑到哪个阶段为止（不给则只跑 --from 那一个阶段）')
     ap.add_argument('--no-images', action='store_true',
-                    help='不渲染简历长图（终点是 render 时下压到 materials）')
+                    help='不渲染简历长图（终点是 render 时下压到 verify；配 --verify 正好核查后停）')
     ap.add_argument('--dry-run', action='store_true', help='只打印每一步的命令，不执行')
 
     g = ap.add_argument_group('爬取与匹配（透传给 infer_params.py）')
@@ -526,10 +532,10 @@ def parse_args(argv=None):
                    help='接管端口 9333 上已有的浏览器（清楚风险再用）')
 
     g = ap.add_argument_group('材料核查（verify 阶段）')
+    g.add_argument('--verify', action='store_true',
+                   help='开启「原文没有的技术词」核查（默认关闭；开启后造假词会拦住 render）')
     g.add_argument('--allow', action='append', default=[], metavar='词表',
                    help='放行这些技术词，逗号分隔可重复；透传给 verify_no_fabrication.py')
-    g.add_argument('--skip-verify', dest='skip_verify', action='store_true',
-                   help='跳过「原文没有的技术词」核查（跳过就得自己逐份看材料）')
 
     g = ap.add_argument_group('模型（覆盖 assets/llm_config.json 与环境变量）')
     g.add_argument('--model')
@@ -537,6 +543,13 @@ def parse_args(argv=None):
     g.add_argument('--api-key')
 
     return ap.parse_args(argv)
+
+
+def verify_enabled(args):
+    """verify 是否真跑。默认关闭，只有两条路打开：
+    显式 `--verify`，或起点就是 verify（`--from verify` 意为补查/续查，本就带着查的意图）。
+    其它——包括 `--to render` 的整轮——都不会自动跑它。"""
+    return args.verify or args.from_stage == 'verify'
 
 
 def resolve_end(args):
@@ -620,7 +633,9 @@ def main(argv=None):
     #    这套 CLI 最高频的失败方式就是「key/model 配错，跑到爬取/匹配中段才发现」——
     #    那正是最贵的时候。--no-call 只查配置、不发请求，连通性留到真调用时再看。
     #    退出码：0 = 可用，1 = 配置缺失/非法（pipeline 停在这里，让用户去配）。
-    llm_plan = [s for s in plan if s in _LLM_STAGES]
+    #    verify 默认关闭 —— 关着就不发请求，也就没必要为它预检。
+    llm_plan = [s for s in plan if s in _LLM_STAGES
+                and not (s == 'verify' and not verify_enabled(args))]
     if llm_plan:
         pre = [sys.executable, script('llm_check.py'), '--no-call', '--quiet'] + llm_flags(args)
         if args.dry_run:
@@ -641,7 +656,8 @@ def main(argv=None):
             elif name == 'render':
                 print('\n○ render：--resume-mode skip 没产出简历 JSON，跳过（岗位信息+招呼语.md 已由 materials 落盘）')
             elif name == 'verify':
-                print('\n○ verify：--skip-verify 已跳过材料核查'
+                print('\n○ verify：默认关闭，本轮不查材料。'
+                      '要查就加 --verify 重新跑到这里'
                       '（发送前请自己逐份看一遍是否有简历里没有的技术词）')
             elif name == 'crawl' and args.dry_run:
                 # infer 还没跑，crawl_params.json 自然不在。dry-run 只是给人看命令，
@@ -679,7 +695,7 @@ def main(argv=None):
                 # print('    确属编造 → 按上面的 gen_materials.py --only ... --force 重生成')
                 # print('    有据可依 → 放行后续跑：%s'
                 #       % resume_cmd(run_dir, 'verify', plan[-1]) + ' --allow <词表>')
-                # print('  真不想查了：同一条命令加 --skip-verify（那就得自己逐份看材料）')
+                # print('  真不想查了：不传 --verify 再跑到 render 就行（那就得自己逐份看材料）')
                 pass
             else:
                 print('\n❌ %s 失败（退出码 %d），流水线停在这里。' % (name, code))
