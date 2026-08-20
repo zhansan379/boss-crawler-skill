@@ -273,12 +273,26 @@ def run_variants(samples, rule_results, deep_records, args):
 
 # ==================== 报告落盘 ====================
 
-def write_report(out_dir, recommend_result, jobs_view, meta, gold_sources):
+def build_resume_view(profile):
+    """简历概览（报告顶部区块）：技能/经验/学历/期望薪资，纯展示。"""
+    p = profile or {}
+    skills = _profile_skills(p) or []
+    sal = (p.get('salary_expectation') or {})
+    return {
+        'skills': skills,
+        'experience': (p.get('experience') or {}).get('total_years'),
+        'degree': (p.get('education') or {}).get('degree', ''),
+        'salary_min': sal.get('min'),
+        'salary_max': sal.get('max'),
+    }
+
+
+def write_report(out_dir, recommend_result, jobs_view, meta, gold_sources, resume_view=None):
     from eval.matcher.matcher_report_html import render_html, write_eval_json
     os.makedirs(out_dir, exist_ok=True)
     html_path = os.path.join(out_dir, 'report.html')
     with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(render_html(recommend_result, jobs_view, meta, gold_sources))
+        f.write(render_html(recommend_result, jobs_view, meta, gold_sources, resume_view))
     json_path = write_eval_json(os.path.join(out_dir, 'eval.json'),
                                 recommend_result, jobs_view, meta)
     return html_path, json_path
@@ -290,15 +304,32 @@ def build_jobs_view(samples, rule_results, deep_records, variants, mode):
     for i, sample in enumerate(samples, 1):
         rule = rule_results.get(i) or {}
         gold = sample.get('gold') or {}
+        job = sample.get('job', {})
         row = {
             'index': i,
-            'company': sample.get('job', {}).get('公司', ''),
-            'position': sample.get('job', {}).get('职位', ''),
+            'company': job.get('公司', ''),
+            'position': job.get('职位', ''),
             'link': sample.get('link', ''),
-            'gold': {'category': gold.get('category'), 'score': gold.get('score')},
+            # 完整岗位信息，供详情展开
+            'job': {'公司': job.get('公司', ''), '职位': job.get('职位', ''),
+                    '薪资': job.get('薪资', ''), '经验': job.get('经验', ''),
+                    '学历': job.get('学历', ''), '技能标签': job.get('技能标签', ''),
+                    '岗位要求和职责': job.get('岗位要求和职责', '')},
+            'gold': {'category': gold.get('category'), 'score': gold.get('score'),
+                     'reason': gold.get('reason', ''),
+                     'matched_skills': gold.get('matched_skills') or [],
+                     'missing_skills': gold.get('missing_skills') or []},
             'rule': {'category': rule.get('application_category'),
                      'score100': round(min(100, float(rule.get('match_score', 0)) / RULE_MAX * 100)),
-                     'score_native': rule.get('match_score')},
+                     'score_native': rule.get('match_score'),
+                     'match_reasons': rule.get('match_reasons') or [],
+                     'category_reason': rule.get('application_category_reason', ''),
+                     'salary_score': rule.get('salary_score'),
+                     'experience_score': rule.get('experience_score'),
+                     'degree_score': rule.get('degree_score'),
+                     'skills_score': rule.get('skills_score'),
+                     'position_score': rule.get('position_score'),
+                     'ai_bonus': rule.get('ai_bonus')},
             'deep': {'category': None, 'score': None},
             'blended': {'category': None, 'score': None},
             'matched_rule': rule.get('matched_skills') or [],
@@ -311,7 +342,9 @@ def build_jobs_view(samples, rule_results, deep_records, variants, mode):
             from resume_matcher.deep_analysis import _normalize_category
             dc = _normalize_category(str(deep.get('category') or '')) \
                 or rule.get('application_category')
-            row['deep'] = {'category': dc, 'score': deep.get('score')}
+            row['deep'] = {'category': dc, 'score': deep.get('score'),
+                           'reason': deep.get('reason', ''),
+                           'missing_items': deep.get('missing_items') or []}
             bl = _blend(rule, deep, dc)
             row['blended'] = {'category': bl['category'], 'score100': bl['score100']}
         view.append(row)
@@ -333,7 +366,8 @@ def main():
                '          --judge-gold（对 {{--jobs-csv|--jobs-ai|--jobs-existing}} 的真实岗位 LLM judge）\n'
                '离线确定性：规则纯函数恒离线；AI/judge 触网并落 gold_manifest.json，--offline 重放。')
     ap.add_argument('run_dir', help='工作运行目录')
-    ap.add_argument('--profile', required=True, help='简历 profile.json 路径')
+    ap.add_argument('--profile', help='简历 profile.json 路径（--gold-ai / --judge-gold 必需；'
+                                      '--gold-fixtures 禁止，评分用数据集内置简历）')
     g = ap.add_mutually_exclusive_group()
     g.add_argument('--gold-fixtures', action='store_true', help='用代码内手工 fixture 当 gold')
     g.add_argument('--gold-ai', type=int, metavar='N', help='AI 造 N 个岗位并内嵌 gold（触网）')
@@ -370,13 +404,25 @@ def main():
     if args.judge_gold and not (args.jobs_csv or args.jobs_ai or args.jobs_existing):
         print('❌ --judge-gold 需要一个岗位来源：--jobs-csv / --jobs-ai / --jobs-existing。', file=sys.stderr)
         return 1
+    # --gold-fixtures 是「内置简历 + 内置数据集」密封对：评分禁止外部自定义简历，否则 gold
+    # 标注（针对内置简历校准）与运行时简历错位，测出的准度失真。
+    if args.gold_fixtures and args.profile:
+        print('❌ --gold-fixtures 模式只允许使用内置简历，请勿提供 --profile '
+              '（评分会自动采用数据集内联的内置简历）。', file=sys.stderr)
+        return 1
+    if not args.gold_fixtures and not args.profile:
+        print('❌ --gold-ai / --judge-gold 需要 --profile 简历路径。', file=sys.stderr)
+        return 1
 
     # 1) gold（及样本自带的岗位）
-    try:
-        profile = load_profile(args.profile)
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        print('❌ profile 读取失败：%s' % exc, file=sys.stderr)
-        return 1
+    #    profile：--gold-fixtures 下由数据集内联（稍后从样本提取）；否则读用户 --profile。
+    profile = None
+    if not args.gold_fixtures:
+        try:
+            profile = load_profile(args.profile)
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            print('❌ profile 读取失败：%s' % exc, file=sys.stderr)
+            return 1
     try:
         samples, gold_sources = resolve_gold(run_dir, profile, args, out_dir)
     except Exception as exc:                                   # noqa: BLE001
@@ -385,6 +431,12 @@ def main():
     if not samples:
         print('❌ 没有任何 gold 样本。', file=sys.stderr)
         return 1
+    if args.gold_fixtures:
+        # 评分一律采用数据集内置简历（所有样本内联同一份）。
+        profile = next((s.get('profile') for s in samples if s.get('profile')), None)
+        if profile is None:
+            print('❌ 内置数据集缺少内联简历，--gold-fixtures 无法运行。', file=sys.stderr)
+            return 1
     if args.jobs_csv and args.gold_fixtures:
         print('ℹ --jobs-csv 对 --gold-fixtures 不生效（fixture 自带岗位），忽略。')
 
@@ -472,14 +524,20 @@ def _run(run_dir, out_dir, profile, samples, args, gold_sources):
             print('⚠ LLM 点评跳过: %s' % exc)
     rec = recommend(payload, llm_comment=llm_comment)
 
-    meta = 'run_dir: %s · gold=%s · mode=%s · relevance=%s · profile=%s' % (
-        run_dir, gold_sources, args.mode, args.relevance,
-        os.path.basename(args.profile or ''))
+    _mode_word = {'rule': '只用规则分', 'deep': '只用AI分', 'both': '规则+AI分'}
+    _rel_word = {'category': '按分档比对', 'score': '按具体分数比对'}
+    _profile_label = '内置简历(fixtures)' if args.gold_fixtures \
+        else os.path.basename(args.profile or 'profile.json')
+    meta = '%s · 简历 %s · %s · %s' % (
+        os.path.basename(run_dir or ''), _profile_label,
+        _mode_word.get(args.mode, args.mode),
+        _rel_word.get(args.relevance, args.relevance))
 
     jobs_view = build_jobs_view(samples, rule_results, deep_records,
                                 {'rule': None, 'deep': None, 'blended': None}, args.mode)
     try:
-        html_path, json_path = write_report(out_dir, rec, jobs_view, meta, gold_sources)
+        html_path, json_path = write_report(out_dir, rec, jobs_view, meta, gold_sources,
+                                            resume_view=build_resume_view(profile))
     except Exception as exc:                                   # noqa: BLE001
         print('❌ 报告写出失败：%s' % exc, file=sys.stderr)
         return 1

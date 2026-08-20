@@ -10,7 +10,8 @@
   · 刻意错例：把某条 fixture 的 gold 翻转 → 同一流水线 accuracy<1 且混淆对角线外有值。
   · --deep-results 回填 → deep/blended 变体出现，blended=int(0.4*rule100+0.6*deep) 核验。
   · deep_results 缺某 rank → exit 3（报告仍写）。
-  · 退出码：缺 profile → 1；--offline + --judge-gold 且无 manifest → 2（SystemExit）。
+  · 退出码：--gold-fixtures + --profile（密封对,禁止自定义）→ 1；--gold-ai/--judge-gold 缺
+    --profile → 1；--offline + --judge-gold 且无 manifest → 2（SystemExit）。
 
 跑法：python -m pytest tests/test_eval_matcher.py -q
 """
@@ -47,8 +48,9 @@ def _make_run(tmp_path):
     return str(run)
 
 
-def _argv(run_dir, profile, *extra):
-    return ['evaluate_matcher.py', run_dir, '--profile', profile,
+def _argv(run_dir, *extra):
+    # --gold-fixtures 是「内置简历+数据集」密封对：不由 CLI 传 --profile，评分用数据集内联简历。
+    return ['evaluate_matcher.py', run_dir,
             '--gold-fixtures', '--mode', 'quick', '--offline',
             '--out-dir', os.path.join(run_dir, 'eval_matcher'), *extra]
 
@@ -57,9 +59,8 @@ def _argv(run_dir, profile, *extra):
 
 def test_offline_fixture_e2e_writes_report_and_rule_accurate(tmp_path):
     run = _make_run(tmp_path)
-    profile = _write_profile(tmp_path)
     saved = sys.argv
-    sys.argv = _argv(run, profile)
+    sys.argv = _argv(run)
     try:
         code = EM.main()
     finally:
@@ -77,9 +78,9 @@ def test_offline_fixture_e2e_writes_report_and_rule_accurate(tmp_path):
     assert rule['accuracy'] == 1.0
     assert rule['n'] == 8
     assert 'cannot_apply' in rule['per_class']
-    # 报告含三个 KPI 区块 + 逐岗表
+    # 报告含标题 + KPI 卡片（判对没） + 逐岗表
     html = open(rep, encoding='utf-8').read()
-    assert '岗位匹配评估' in html and '四族指标' in html
+    assert '岗位匹配评估' in html and '判对没' in html
     assert '逐岗核对' in html
 
 
@@ -162,12 +163,28 @@ def test_deep_results_missing_rank_returns_3_but_report_written(tmp_path):
     assert os.path.exists(os.path.join(run, 'eval_matcher', 'eval.json'))
 
 
-# ==================== 退出码：缺 profile / 离线+judge 冲突 ====================
+# ==================== 退出码：fixtures 拒绝自定义 / 非 fixtures 缺 profile / 离线+judge ====================
 
-def test_missing_profile_returns_1(tmp_path):
+def test_fixture_mode_rejects_custom_profile(tmp_path):
+    # --gold-fixtures 是「内置简历+数据集」密封对 → 传 --profile 必须报错（exit 1）
     run = _make_run(tmp_path)
     saved = sys.argv
-    sys.argv = _argv(run, str(tmp_path / 'nope.json'))
+    sys.argv = ['evaluate_matcher.py', run, '--gold-fixtures', '--offline',
+                '--profile', os.path.join(str(tmp_path), 'mine.json'),
+                '--out-dir', os.path.join(run, 'eval_matcher')]
+    try:
+        code = EM.main()
+    finally:
+        sys.argv = saved
+    assert code == 1
+
+
+def test_non_fixture_gold_requires_profile(tmp_path):
+    # --gold-ai / --judge-gold 不是密封对 → 缺 --profile 报错（exit 1），且不触网
+    run = _make_run(tmp_path)
+    saved = sys.argv
+    sys.argv = ['evaluate_matcher.py', run, '--gold-ai', '3', '--offline',
+                '--out-dir', os.path.join(run, 'eval_matcher')]
     try:
         code = EM.main()
     finally:
