@@ -423,8 +423,18 @@ def score_job_advanced(
     jd_text = (job.get('岗位要求和职责', '') + ' ' + job.get('技能标签', '')).lower()
     pos_name = job.get('职位', '').lower()
 
+    # ── 权威要求覆盖 ──
+    # 判定以岗位要求文本为准（requirements.enrich 把缓存挂到 job['_jd_req']）。
+    # 卡片标签 / 搜索筛选条件不一定准，只有 JD 文本明确给的值才覆盖；JD 缺失或未提及时
+    # 回退卡片字段（即原行为）。"不限" / "面议" 是明确信息，不算空，必须保留。
+    req = job.get('_jd_req') or {}
+    sal_src = req.get('薪资范围') or job.get('薪资', '')
+    exp_src = req.get('经验要求') or job.get('经验', '')
+    deg_src = req.get('学历要求') or job.get('学历', '')
+    req_skills = req.get('技能要求') or []
+
     # ── 维度1: 薪资匹配 (0-20) ──
-    sal_low, sal_high = _parse_salary(job.get('薪资', ''))
+    sal_low, sal_high = _parse_salary(sal_src)
     salary_known = bool(sal_high)
     salary_gap = 0   # 到期望区间的距离(K)，区间重叠为 0
 
@@ -463,7 +473,7 @@ def score_job_advanced(
             reasons.append(f'薪资远超期望({sal_low}-{sal_high}K，竞争激烈)')
 
     # ── 维度2: 经验匹配 (0-20) ──
-    exp = job.get('经验', '')
+    exp = exp_src
     jd_exp_years = parse_experience_years(exp)
     exp_gap: Optional[float] = None   # None = 无法判断（用户或 JD 年限缺失）
 
@@ -513,7 +523,7 @@ def score_job_advanced(
 
     # ── 维度3: 学历匹配 (0-15) ──
     # 等级比较：JD 要求高于简历学历即为硬门槛（0 分 + 后续判不可投递）
-    deg = job.get('学历', '')
+    deg = deg_src
     jd_degree_level = parse_degree_level(deg)
     resume_degree_level = parse_degree_level(user_degree, default=DEFAULT_RESUME_DEGREE_LEVEL)
     if not resume_degree_level:
@@ -568,7 +578,8 @@ def score_job_advanced(
     # ── 缺失技能: JD 要求但用户不具备 ──
     # 两侧都经 _normalize_skill 归一，故比较规范名即可覆盖别名
     user_norms = {_normalize_skill(s) for s in resume_skills}
-    jd_tag_skills = job.get('技能标签', '').split()
+    # 缺失技能先看岗位要求抽出的权威技能；没有则回退卡片技能标签（原行为）
+    jd_tag_skills = req_skills or (job.get('技能标签', '') or '').split()
     missing: List[str] = []
     seen_norms = set()
     for jd_skill in jd_tag_skills:

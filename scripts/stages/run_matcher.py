@@ -108,6 +108,10 @@ def run_quick_mode(profile: ResumeProfile, output_dir: str) -> None:
     jobs = load_job_data(csv_paths)
     print(f"\n共加载 {len(jobs)} 个岗位")
 
+    # 挂权威要求：以岗位要求(detail.jd)为准，未缓存者打分回退卡片标签
+    from resume_matcher.requirements import enrich
+    enrich(jobs)
+
     # 2. 6 维度评分 + 分层
     tier1, tier2, tier3, tier4 = classify_jobs_advanced(profile, jobs)
 
@@ -177,6 +181,9 @@ def run_deep_prepare(profile: ResumeProfile, output_dir: str, top_n: int) -> Non
     csv_paths = [jf['path'] for jf in job_files]
     jobs = load_job_data(csv_paths)
     print(f"共加载 {len(jobs)} 个岗位")
+
+    from resume_matcher.requirements import enrich
+    enrich(jobs)
 
     # 2. 快速预筛选
     tier1, tier2, tier3, tier4 = classify_jobs_advanced(profile, jobs)

@@ -63,6 +63,14 @@ from .deep_analysis import (
     deserialize_profile,
 )
 
+# ── 权威要求（以岗位要求文本为准）
+from .requirements import (
+    enrich,
+    extract_job_requirements,
+    load_all,
+    save_all,
+)
+
 # ── 产物路径（统一走 paths.py，别各脚本自己拼）
 from .paths import (
     state_dir, materials_dir, deliver_dir, intermediate_dir,
@@ -111,6 +119,8 @@ __all__ = [
     # Deep analysis
     "save_deep_candidates", "merge_deep_results",
     "serialize_profile", "deserialize_profile",
+    # Authoritative requirements
+    "enrich", "extract_job_requirements", "load_all", "save_all",
     # Paths
     "state_dir", "materials_dir", "deliver_dir", "intermediate_dir",
     "profile_path", "resume_text_path", "profile_validation_path",
