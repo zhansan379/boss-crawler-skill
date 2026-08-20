@@ -333,7 +333,7 @@ def test_normalize():
 
 
 def test_eval_tools_survive():
-    print('\n[16] 评估工具依赖的本地取词保留（eval/metrics 与 evaluate_materials 仍能 import）')
+    print('\n[16] 评估工具依赖的本地取词保留（eval/materials/metrics 与 evaluate_materials 仍能 import）')
     from verify_no_fabrication import _tokens, _baseline_keys, _norm, _context, load_baseline
     check('_baseline_keys 可拆词', 'react' in _baseline_keys('会用 React Native'), '拆词失败')
     check('load_baseline 返回词集合+来源', True)

@@ -7,7 +7,7 @@
 每一档都指向「改哪里、往哪个方向」，而不是泛泛说「减点幻觉」。
 
 顶层的 `recommend(evaluations, llm_cfg=None, run_dir='')` 把两者打包，也可选调模型
-做一次综合点评（--llm-recommend，住在 eval.prompts.build_recommend_prompt）。
+做一次综合点评（--llm-recommend，住在 eval.materials.prompts.build_recommend_prompt）。
 
 所有数值都是启发阈值，不是法官：超过阈值只是「值得看一眼」的信号，报告里也这么标注。
 """
@@ -191,7 +191,7 @@ def recommend(evaluations, llm_cfg=None, llm_comment=None):
 def recommend_llm(agg, cfg, run_dir):
     """在规则建议之外再调一次模型做综合点评（--llm-recommend）。失败不致命。"""
     from llm import chat, LLMError
-    from eval.prompts import build_recommend_prompt
+    from eval.materials.prompts import build_recommend_prompt
     prompt = build_recommend_prompt(json.dumps(agg, ensure_ascii=False, indent=2))
     try:
         return chat(prompt, stage='eval_recommend', run_dir=run_dir, cfg=cfg).strip()

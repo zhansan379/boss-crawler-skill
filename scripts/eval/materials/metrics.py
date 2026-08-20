@@ -25,7 +25,8 @@ import difflib
 import os
 import sys
 
-_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# scripts/eval/materials/ 上溯两级 → scripts/ 根
+_SCRIPTS = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 for _p in (_SCRIPTS, os.path.join(_SCRIPTS, 'verify')):
     if _p not in sys.path:
         sys.path.insert(0, _p)

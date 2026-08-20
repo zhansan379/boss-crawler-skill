@@ -16,7 +16,8 @@ import json
 import hashlib
 import sys
 
-_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# scripts/eval/materials/ 上溯两级 → scripts/ 根（需含 eval/__init__.py 才能 import eval.materials.*）
+_SCRIPTS = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
@@ -53,7 +54,7 @@ def _jobs_from_ai_response(data):
 def build_jobs_ai(profile_summary, count, cfg, run_dir, spec=''):
     """调模型造 count 个多样岗位。返回 job dict 数组（可能因解析失败少于 count）。"""
     from llm import chat_json, LLMError
-    from eval.prompts import build_gen_jobs_prompt
+    from eval.materials.prompts import build_gen_jobs_prompt
 
     prompt = build_gen_jobs_prompt(profile_summary, count, spec)
     data = chat_json(prompt, stage='gen_test_jobs', run_dir=run_dir, cfg=cfg)

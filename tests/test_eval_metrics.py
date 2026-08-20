@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""eval/metrics.py + stubs.py 的纯函数单测：不触网、不依赖 llm 配置。
+"""eval/materials/metrics.py + stubs.py 的纯函数单测：不触网、不依赖 llm 配置。
 
 复用 verify_no_fabrication 的判定口径，所以这些断言同时保护「评估用的白名单式判定」
 不被改偏 —— 别名（k8s⇄kubernetes）这类容易误报的地方单独拎出来验证。
@@ -15,12 +15,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')
 
-from eval.metrics import (                            # noqa: E402
+from eval.materials.metrics import (                            # noqa: E402
     char_diff, term_stats, added_block_stats, greeting_stats,
     chapter_stats, missing_chapters, subjective_stats, evaluate_job,
     preview, has_wasted_preview,
 )
-from eval.stubs import clean_greeting, clean_resume, StubRun   # noqa: E402
+from eval.materials.stubs import clean_greeting, clean_resume, StubRun   # noqa: E402
 from verify_no_fabrication import _baseline_keys               # noqa: E402
 
 

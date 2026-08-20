@@ -20,7 +20,7 @@ import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "stages"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "eval"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "eval", "materials"))
 
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')
@@ -99,7 +99,7 @@ def test_offline_eval_no_network_and_hallucination_contrast(tmp_path):
 
     # 用 stub 产物：岗1 干净（驱动词生成），岗2 注入一批「简历和 JD 都没有」的词。
     # 岗2 的 JD 本身含 nginx/CrewAI —— 那些是岗位驱动、不该算无据；控制组用 True2 新造。
-    from eval.stubs import clean_greeting, clean_resume
+    from eval.materials.stubs import clean_greeting, clean_resume
     for i, job in enumerate(JOBS, 1):
         jd = '、'.join(str(job.get(k)) for k in
                        ('技能标签', '岗位要求和职责', '职位', '公司') if job.get(k))
@@ -139,7 +139,7 @@ def test_offline_eval_no_network_and_hallucination_contrast(tmp_path):
 
 def test_offline_writes_eval_json(tmp_path):
     run = make_run(tmp_path)
-    from eval.stubs import clean_greeting, clean_resume
+    from eval.materials.stubs import clean_greeting, clean_resume
     for i, job in enumerate(JOBS, 1):
         jd = job['技能标签']
         GM._write_atomic(os.path.join(run, 'materials', 'greeting_%d_%s.txt' % (i, job['公司'])),
@@ -150,8 +150,8 @@ def test_offline_writes_eval_json(tmp_path):
     args = argparse.Namespace(no_subjective=False)
     jobs_view, _ = EM.evaluate_run(run, JOBS, PROFILE, RESUME, args)
 
-    from eval.recommend import recommend
-    from eval.report_html import write_eval_json
+    from eval.materials.recommend import recommend
+    from eval.materials.report_html import write_eval_json
     rec = recommend([j['metrics'] for j in jobs_view])
     write_eval_json(os.path.join(run, 'eval', 'eval.json'), rec, jobs_view, 'test')
 
@@ -171,7 +171,7 @@ def test_generate_offline_stub_and_registry(tmp_path):
     assert os.path.exists(os.path.join(run, 'materials', 'resume_1_甲公司.json'))
 
     # registry 回放一致
-    from eval.stubs import StubRun
+    from eval.materials.stubs import StubRun
     reg_path = os.path.join(run, 'eval', 'stub_registry.json')
     os.makedirs(os.path.dirname(reg_path), exist_ok=True)
     stub = StubRun()
@@ -188,7 +188,7 @@ def test_generate_offline_stub_and_registry(tmp_path):
 
 def test_report_html_blocks(tmp_path):
     run = make_run(tmp_path)
-    from eval.stubs import clean_greeting, clean_resume
+    from eval.materials.stubs import clean_greeting, clean_resume
     for i, job in enumerate(JOBS, 1):
         jd = job['技能标签']
         GM._write_atomic(os.path.join(run, 'materials', 'greeting_%d_%s.txt' % (i, job['公司'])),
@@ -200,8 +200,8 @@ def test_report_html_blocks(tmp_path):
                          json.dumps({'optimized_resume': md}, ensure_ascii=False))
     args = argparse.Namespace(no_subjective=False)
     jobs_view, _ = EM.evaluate_run(run, JOBS, PROFILE, RESUME, args)
-    from eval.recommend import recommend
-    from eval.report_html import render_html
+    from eval.materials.recommend import recommend
+    from eval.materials.report_html import render_html
     html = render_html(recommend([j['metrics'] for j in jobs_view]), jobs_view, '测试')
     assert '术语三分类' in html
     assert '无据术语逐条' in html

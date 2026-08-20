@@ -22,7 +22,10 @@ import json
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 
-_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 本文件位于 scripts/eval/materials/，上溯两级拿到 scripts/ 根，才能
+# `import eval.materials.*`（需 scripts/eval/__init__.py 在 path 内）并
+# import llm / resume_matcher / verify 等 scripts/ 下的包。
+_SCRIPTS = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 for _p in (_SCRIPTS,
            os.path.join(_SCRIPTS, 'stages'),
            os.path.join(_SCRIPTS, 'verify'),
@@ -121,7 +124,7 @@ def resolve_jobs(run_dir, profile, args, offline):
     jobs = None
 
     if args.jobs_csv:
-        from eval.gen_test_jobs import load_jobs_csv
+        from eval.materials.gen_test_jobs import load_jobs_csv
         jobs = load_jobs_csv(args.jobs_csv)
     elif args.jobs_ai:
         if offline:
@@ -130,7 +133,7 @@ def resolve_jobs(run_dir, profile, args, offline):
             if not jobs:
                 raise ValueError('offline 且无既有岗位：请传 --jobs-csv 或 --jobs-existing')
         else:
-            from eval.gen_test_jobs import build_jobs_ai
+            from eval.materials.gen_test_jobs import build_jobs_ai
             _, build_resume_summary, _, *_ = _gm()
             summary = build_resume_summary(profile)
             from llm import resolve, ConfigError
@@ -154,7 +157,7 @@ def resolve_jobs(run_dir, profile, args, offline):
 
 
 def _load_existing_jobs(run_dir):
-    from eval.gen_test_jobs import load_jobs_existing
+    from eval.materials.gen_test_jobs import load_jobs_existing
     try:
         return load_jobs_existing(run_dir)
     except FileNotFoundError:
@@ -178,7 +181,7 @@ def generate_materials(run_dir, jobs, profile, args, offline):
     os.makedirs(_materials(run_dir), exist_ok=True)
 
     if offline:
-        from eval.stubs import clean_greeting, clean_resume
+        from eval.materials.stubs import clean_greeting, clean_resume
         records = {}
         for i, job in enumerate(jobs, 1):
             jd = '、'.join(str(v) for v in
@@ -250,7 +253,7 @@ def generate_materials(run_dir, jobs, profile, args, offline):
 
 def evaluate_run(run_dir, jobs, profile, base_text, args):
     """逐岗评估：读产物（materials/ 或 generate 内存 records 已落盘）→ metrics。"""
-    from eval.metrics import evaluate_job
+    from eval.materials.metrics import evaluate_job
     from verify_no_fabrication import load_baseline, _baseline_keys
     from gen_materials import format_availability
 
@@ -301,7 +304,7 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
             metrics = {'error': str(exc)}
             print('  ⚠ 岗位 #%d 评估失败: %s' % (i, exc))
 
-        from eval.metrics import preview as _pv
+        from eval.materials.metrics import preview as _pv
         jobs_view.append({
             'index': i,
             'company': job.get('公司', ''),
@@ -318,7 +321,7 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
 # ==================== 5) 报告 ====================
 
 def write_report(run_dir, recommend_result, jobs_view, meta, out_dir=None):
-    from eval.report_html import render_html, write_eval_json
+    from eval.materials.report_html import render_html, write_eval_json
     out = out_dir or os.path.join(run_dir, 'eval')
     os.makedirs(out, exist_ok=True)
     html_path = os.path.join(out, 'report.html')
@@ -336,9 +339,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='两种模式：\n'
                '  离线评估既有产物（默认不生成，不触网）:\n'
-               '    python scripts/eval/evaluate_materials.py <run_dir> --jobs-existing\n'
+               '    python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing\n'
                '  真调生成+评估（花钱）:\n'
-               '    python scripts/eval/evaluate_materials.py <工作run> --resume 简历.md --jobs-ai 8 --generate\n')
+               '    python scripts/eval/materials/evaluate_materials.py <工作run> --resume 简历.md --jobs-ai 8 --generate\n')
     ap.add_argument('run_dir', help='工作运行目录（缺 state 会自动搭 state/）')
     ap.add_argument('--resume', help='简历文件（md/txt，写为 state/resume_text.txt；缺省复用既有 state）')
     ap.add_argument('--jobs-ai', type=int, metavar='N', help='用 AI 造 N 个多样岗位（需联网/配 key）')
@@ -390,7 +393,7 @@ def main():
         if generated is None:
             return 1
         if args.stub_registry and args.offline:
-            from eval.stubs import StubRun
+            from eval.materials.stubs import StubRun
             run = StubRun()
             for i, rec in generated.items():
                 run.register_greeting(i, rec['greeting'])
@@ -405,7 +408,7 @@ def main():
         return 1
 
     # 5) 聚合 + 建议 (+LLM 点评)
-    from eval.recommend import recommend, recommend_llm
+    from eval.materials.recommend import recommend, recommend_llm
     llm_comment = ''
     if args.llm_recommend and not args.offline:
         from llm import resolve, ConfigError

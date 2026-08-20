@@ -9,6 +9,7 @@ HTML 是 dataviz 风格：浅/深双主题共用同一组 CSS 变量、统一 pa
 保留=绿 · 岗位驱动=蓝 · 无据(幻觉)=红。所有读数都是启发，报告用「启发」标注，不冒充结论。
 """
 
+import os
 import json
 
 _LEVEL_LABEL = {'high': '高优先级', 'medium': '中', 'low': '低'}
@@ -219,6 +220,9 @@ def write_eval_json(path, recommend_result, jobs_view, meta=None):
         'llm_comment': recommend_result.get('llm_comment') or '',
         'jobs': jobs_view,
     }
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return path
