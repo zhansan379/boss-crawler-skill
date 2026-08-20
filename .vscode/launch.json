@@ -1,10 +1,104 @@
 {
-    // 为 `python scripts/pipeline.py --from verify` 生成的调试配置
+    // 为 BOSS 爬虫流水线生成的调试配置。
     // 需要 VS Code 的 Python 扩展（ms-python.python）。
+    //
+    // 说明：
+    // - "crawl: 流水线爬取阶段" 走 pipeline 统一入口（--from crawl），
+    //   调用的是 scripts/stages/boss_post_interactive.py，需要该 run-dir 里已有
+    //   crawl_params.json（即先跑过 infer）。不给 --run-dir 时自动定位 LATEST.txt。
+    // - 其余几条直接调用爬虫独立入口 scripts/stages/boss_post_interactive.py（薄入口，
+    //   逻辑在 scripts/boss_crawler/ 包）。用它跑不依赖 infer，可独立调试爬虫代码。
+    //
+    // 想让某个配置走自定义 po,用注释里的 --run-dir。
+    //
+    // 以下 eval:* 配置调试 scripts/eval/evaluate_materials.py（材料质量评估工具）：
+    // - run_dir 是样例 `assets/2026-08-18_22-10-50`（已有完整 state），按需改成
+    //   当前 LATEST.txt 指向的 run；没有该目录时改任意你想让它自动搭 state 的目录。
+    // - 评估永远离线（只读产物+纯函数）。差别只在「生成」：真调花钱/触网，
+    //   --offline 用的确定性 stub。两个场景共用的岗位都是该 run 已有的 qualified_jobs.json。
+    // - eval_json/report.html 落在 <run_dir>/eval/（--out-dir 可改）。
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "pipeline: --from verify",
+            "name": "crawl: 流水线爬取阶段",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/pipeline.py",
+            "args": [
+                "--from", "crawl",
+                "--to", "crawl",
+                // 断点续跑时取消下面注释，指定这一轮的目录：
+                // "--run-dir", "assets/2026-08-15_10-00-00"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "crawler: 独立爬取(后端开发/上海, 带详情)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/stages/boss_post_interactive.py",
+            "args": [
+                "--mode", "list",
+                "--position", "后端开发",
+                "--city", "上海",
+                "--count", "20",
+                "--detail",
+                "--yes"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "crawler: 关键词自定义搜索(后端开发/上海)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/stages/boss_post_interactive.py",
+            "args": [
+                "--mode", "custom",
+                "--position", "后端开发",
+                "--city", "上海",
+                "--count", "20",
+                "--yes"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "crawler: 登录检测/扫码",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/stages/boss_post_interactive.py",
+            "args": [
+                "--ensure-login"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "crawler: 列出可选岗位/城市",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/stages/boss_post_interactive.py",
+            "args": [
+                "--list-positions",
+                "--list-cities"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "pipeline: --from verify（原有）",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/scripts/pipeline.py",
@@ -14,10 +108,55 @@
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            // 缺省解释器是下拉选的。若要显式指定，把下面注释打开。
-            // "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-            // 需要更多参数（如 --run-dir）时，追加到 args 里，例如：
-            // "--run-dir", "assets/2026-08-15_10-00-00"
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "eval: 只评估既有产物(离线,不花钱)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "args": [
+                // run_dir：改成当前 LATEST 的 run；复用其既有 qualified_jobs + materials
+                "assets/2026-08-18_22-10-50",
+                "--jobs-existing"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "eval: offline 干净对照(stub生成+评估,不触网)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "args": [
+                "assets/2026-08-18_22-10-50",
+                "--jobs-existing",
+                "--generate",
+                "--offline"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
+            "name": "eval: 真调重新生成+评估(花钱/触网)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "args": [
+                "assets/2026-08-18_22-10-50",
+                "--jobs-existing",
+                "--generate"
+                // 想用 AI 造新品岗位就把上面 --jobs-existing 换成 --jobs-ai 6；
+                // 想要 LLM 综合点评加 --llm-recommend
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
         }
     ]
 }

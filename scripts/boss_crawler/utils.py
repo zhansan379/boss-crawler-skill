@@ -23,15 +23,17 @@ from .config import (
 
 # scripts/ 的绝对路径。utils.py 在 scripts/boss_crawler/ 里，往上两级就是它。
 _SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ENTRY = os.path.join(_SCRIPTS_DIR, 'boss_post_interactive.py')
+# 爬虫入口迁到 stages/ 子目录了（和 pipeline.py 的 _SCRIPT_SUBDIR 同源）；
+# 别再指 scripts/ 根，那里没有 boss_post_interactive.py。
+_ENTRY = os.path.join(_SCRIPTS_DIR, 'stages', 'boss_post_interactive.py')
 
 
 def _quote(text):
     return '"%s"' % text if ' ' in text else text
 
 
-def script_cmd(script, *args):
-    """拼一条 `python <scripts/里的脚本> <参数…>`，路径按**当前工作目录**算。
+def _render_py_cmd(full, args):
+    """把 `python <脚本路径> <参数…>` 拼出来，路径按**当前工作目录**算。
 
     别在提示里写死路径。写死裸文件名（`python boss_post_interactive.py`）在仓库根目录
     粘就是 Errno 2 —— 脚本在 scripts/ 里；反过来写死 `scripts/…`，在 scripts/ 目录里
@@ -42,7 +44,6 @@ def script_cmd(script, *args):
 
     带空格的路径和参数都会加引号（Windows 上运行目录带空格很常见）。
     """
-    full = os.path.join(_SCRIPTS_DIR, script)
     try:
         path = os.path.relpath(full, os.getcwd())
     except ValueError:          # Windows 上 cwd 与脚本不同盘时 relpath 直接抛
@@ -52,9 +53,14 @@ def script_cmd(script, *args):
     return ' '.join(['python', _quote(path)] + [_quote(str(a)) for a in args])
 
 
+def script_cmd(script, *args):
+    """拼一条 `python <scripts/里的脚本> <参数…>`，路径按**当前工作目录**算。"""
+    return _render_py_cmd(os.path.join(_SCRIPTS_DIR, script), args)
+
+
 def entry_cmd(*args):
     """爬虫入口（boss_post_interactive.py）的 script_cmd 快捷方式。"""
-    return script_cmd('boss_post_interactive.py', *args)
+    return _render_py_cmd(_ENTRY, args)
 
 
 # ==================== 参数展开 ====================
