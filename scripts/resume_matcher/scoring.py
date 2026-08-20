@@ -234,6 +234,125 @@ def _skill_hit(skill: str, text: str) -> bool:
     return any(_skill_in_text(v, text) for v in _skill_variants(skill))
 
 
+# ==================== 编程语言 & 核心栈识别 ====================
+# 技术栈锁死依赖「候选核心语言(programming) vs 岗位要求语言」的交叉校验。
+# 语言识别只收**编程语言**，不收框架/工具；别名经 _normalize_skill 折叠
+# （go→golang、js→javascript 等）+ 一张中文/拼写纠偏表。
+# 语义:核心语言自己申报才作数——programming 为空即"未声明核心" → 关掉锁死，不误杀。
+
+_STACK_MISMATCH_MAX = 75   # 锁死岗分数封顶：≥ TIER3_MIN(70) → 落 tier3 可见，不进 tier4 被丢
+
+# 主次技能权重：programming/frameworks 是主业（打分满权），通用工具次之，其他标签最低。
+SKILL_CATEGORY_WEIGHTS = {'programming': 1.0, 'frameworks': 1.0, 'tools': 0.6, 'other': 0.35}
+
+# 中文/易混拼写 → 规范语言名（其余别名交给 SKILL_SYNONYMS / _normalize_skill）
+_LANG_SPELL = {
+    'c语言': 'c', 'c#': 'csharp', 'c++': 'cpp', 'cpp': 'cpp', 'csharp': 'csharp',
+    'objective-c': 'objectivec', 'objectivec': 'objectivec',
+    'golang': 'golang', 'typescript': 'typescript', 'javascript': 'javascript',
+    'python': 'python', 'java': 'java', 'go': 'golang', 'js': 'javascript',
+    'ts': 'typescript', 'vbs': 'visualbasic',
+}
+# 自由正文里**放心当语言词**规范名（排除 'c'/'cpp' 这类短名在正文里的误伤，
+# 它们只在干净的标签 token 精确匹配时才认）。
+_LANG_FREE = {
+    'java', 'python', 'javascript', 'typescript', 'golang',
+    'csharp', 'php', 'rust', 'swift', 'kotlin', 'ruby', 'dart',
+    'scala', 'matlab', 'objectivec', 'perl', 'lua', 'haskell',
+    'erlang', 'elixir', 'clojure', 'solidity', 'cobol', 'fortran',
+    'powershell', 'visualbasic',
+}
+# 只允许精确 token 命中的短语言名（防 'c' 命中正文 'can'、'cpp' 命中英文里不相干的词）
+_LANG_TAG_ONLY = {'c', 'cpp', 'shell', 'bash'}
+_LANG_ALL = _LANG_FREE | _LANG_TAG_ONLY
+
+
+def _profile_dict(profile) -> Dict[str, Any]:
+    """ResumeProfile dataclass → dict；已是 dict 则原样返回。
+
+    _core_languages / _candidate_has_ai 用 dict 口径读字段，批量入口拿到的是 dataclass，
+    转一次再传，避免两套取值。
+    """
+    if isinstance(profile, dict):
+        return profile
+    try:
+        from dataclasses import asdict
+        return asdict(profile)
+    except Exception:                                   # noqa: BLE001
+        return getattr(profile, '__dict__', {}) if not hasattr(profile, 'get') else profile
+
+
+def _canon_lang(token: str) -> Optional[str]:
+    """单个 token → 规范语言名；不是语言/无法识别返回 None。"""
+    t = (token or '').strip().lower()
+    if not t:
+        return None
+    c = _LANG_SPELL.get(t)
+    if c:
+        return c
+    c = _normalize_skill(t)   # go→golang、js→javascript、python→python …
+    return c if c in _LANG_ALL else None
+
+
+def _extract_langs_text(text: str) -> set:
+    """正文里词边界扫规范长语言名；短名（c/cpp/shell/bash）不参与，防误伤。"""
+    s = (text or '').lower()
+    return {lang for lang in _LANG_FREE if _skill_in_text(lang, s)}
+
+
+def _job_languages(job: Dict[str, Any], req: Dict[str, Any]) -> set:
+    """岗位要求的核心语言集合。
+
+    权威要求['技能要求']（干净 token，精确分类可认短名）→ 卡片『技能标签』 →
+    兜底 JD 正文（只扫长名）。取不到则返回 ∅（岗位没点明语言 → 不触发锁死）。
+    """
+    found: set = set()
+    src: List[str] = []
+    for sk in req.get('技能要求') or []:
+        if isinstance(sk, str) and sk.strip():
+            src.append(sk)
+    if not src:
+        tags = (job.get('技能标签') or '').strip()
+        src = [t for t in re.split(r'[,，、;；|\s]+', tags) if t]
+    for tok in src:
+        c = _canon_lang(tok)
+        if c:
+            found.add(c)
+    if not found:
+        jd = ' '.join(str(job.get(k) or '') for k in ('岗位要求和职责', '职位'))
+        found |= _extract_langs_text(jd)
+    return found
+
+
+def _core_languages(profile: Dict[str, Any]) -> set:
+    """候选核心语言：profile.skills['programming'] 归一；空则扫 keywords 兜底；仍空返回 ∅。"""
+    profile = profile or {}
+    skills = profile.get('skills') or {}
+    p = skills.get('programming') or (profile.get('keywords') or [])
+    out: set = set()
+    for s in p or []:
+        c = _canon_lang(str(s))
+        if c:
+            out.add(c)
+    return out
+
+
+def _candidate_has_ai(profile: Dict[str, Any]) -> bool:
+    """候选是否具备 AI 能力：技能/关键词/项目里出现 AI 词（复用 AI_KEYWORDS）。"""
+    profile = profile or {}
+    parts: List[str] = []
+    skills = profile.get('skills') or {}
+    for cat in ('programming', 'frameworks', 'tools', 'other'):
+        parts.extend(skills.get(cat) or [])
+    parts.extend(profile.get('keywords') or [])
+    for proj in profile.get('projects') or []:
+        parts.append(str(proj.get('description') or ''))
+        parts.extend(proj.get('highlights') or [])
+        parts.extend(proj.get('tech_stack') or [])
+    blob = ' '.join(str(x) for x in parts).lower()
+    return any(k.lower() in blob for k in AI_KEYWORDS)
+
+
 # 折算基准：每月平均工作日（用于「元/天」类日薪换算）
 _WORKDAYS_PER_MONTH = 21.75
 
@@ -386,6 +505,9 @@ def score_job_advanced(
     salary_max: int = 10,
     user_experience_years: float = 0,
     user_degree: str = '',
+    core_languages: set = None,
+    has_ai_capability: Optional[bool] = None,
+    skill_weights: Dict[str, float] = None,
 ) -> Dict[str, Any]:
     """
     6 维度规则评分（总分 0-115）+ 投递建议分类
@@ -408,6 +530,11 @@ def score_job_advanced(
         salary_min / salary_max: 期望薪资区间(K)
         user_experience_years: 用户实际工作年限，0 表示未提供
         user_degree: 用户学历文本（如 '本科'），空值按 DEFAULT_RESUME_DEGREE_LEVEL 处理
+        core_languages: 候选核心语言集合（由 profile 算出）；None=未声明核心 → 跳过技术栈锁死。
+            （旧调用/老测试不传则行为不变。）
+        has_ai_capability: 候选是否具备 AI 能力。False → 不给 AI 加分；
+            True → Python·AI/Agent 岗豁免技术栈锁死。None → 不影响（旧行为）。
+        skill_weights: 规范技能名 → 匹配权重；给出时按主次加权（仅影响分数排序，不改 category）。
 
     Returns:
         含 match_score、各维度分项、match_reasons、matched_skills、missing_skills、
@@ -550,7 +677,12 @@ def score_job_advanced(
         if _skill_hit(skill, jd_text):
             matched.append(skill)
             matched_norms.add(norm)
-    skills_score = min(30, len(matched) * 5)
+    if skill_weights:
+        # 按主次技能加权：核心语言/框架满权，通用工具打折、其他标签最低。
+        # 只改分数排序，不改 category（聚类仍用 len(matched)）。
+        skills_score = min(30, round(sum(skill_weights.get(norm, 1.0) for norm in matched_norms)))
+    else:
+        skills_score = min(30, len(matched) * 5)
     reasons.append(f'技能命中:{len(matched)}项')
 
     # ── 维度5: 职位相关度 (0-20) ──
@@ -559,7 +691,8 @@ def score_job_advanced(
         reasons.append(f'职位相关:+{position_score}')
 
     # ── 维度6: AI 核心优势 (0-10) ──
-    # 归一化去重：'llm' 与 '大模型' 指向同一概念，只计 1 项
+    # 归一化去重：'llm' 与 '大模型' 指向同一概念，只计 1 项。
+    # 门控：AI 加分只在候选人自己具备 AI 能力时给——不允许"JD 堆 AI 词就白拿分"。
     ai_count = len({_normalize_skill(k) for k in AI_KEYWORDS if k in jd_text})
     if ai_count >= 5:
         ai_bonus = 10
@@ -568,6 +701,8 @@ def score_job_advanced(
     elif ai_count >= 1:
         ai_bonus = 4
     else:
+        ai_bonus = 0
+    if has_ai_capability is False:
         ai_bonus = 0
     if ai_bonus:
         reasons.append(f'AI/RAG/Agent匹配:+{ai_bonus} ({ai_count}项)')
@@ -607,6 +742,25 @@ def score_job_advanced(
         degree_ok=degree_ok,
         salary_known=salary_known,
     )
+
+    # ── 技术栈锁死 ──
+    # 岗位要求语言不在候选核心语言里，且不触发「次要 AI 兴趣」→ 压为不可投 + 分数封顶，
+    # 让这类纯非核心栈的岗沉到 tier3（报告可见理由，auto-apply 永不触碰）。
+    # Python·AI/Agent 岗（JD 有 AI 词 + 候选自己具备 AI 能力）豁免——命中候选列的次要兴趣。
+    stack_mismatch = False
+    job_langs: set = set()
+    if core_languages:
+        job_langs = _job_languages(job, req)
+        ai_interest = ai_count >= 1 and has_ai_capability is True
+        stack_mismatch = bool(job_langs) and job_langs.isdisjoint(core_languages) and not ai_interest
+    if stack_mismatch:
+        stack_reason = '技术栈不匹配(核心%s vs 岗位%s)' % (
+            '/'.join(sorted(core_languages)), '/'.join(sorted(job_langs)))
+        score = min(score, _STACK_MISMATCH_MAX)
+        difficulty = 'Hard'
+        application_category = CATEGORY_CANNOT_APPLY
+        category_reason = stack_reason
+        reasons.append(stack_reason)
 
     # ── 优化建议 ──
     if score >= TIER2_MIN:
@@ -679,6 +833,15 @@ def classify_jobs_advanced(
         'AI', 'RAG', 'Agent', 'LLM', '大模型', '后端开发', 'Python', 'Java', '全栈'
     ]
 
+    # 技术栈锁死所需：核心语言 + 是否具备 AI 能力，一次算好所有岗位共用。
+    core_languages = _core_languages(_profile_dict(profile))
+    has_ai_capability = _candidate_has_ai(_profile_dict(profile))
+    # 主次技能权重：按类目标签逐技能打权重，供评分按主次加权。
+    skill_weights: Dict[str, float] = {}
+    for cat, w in SKILL_CATEGORY_WEIGHTS.items():
+        for s in (profile.skills or {}).get(cat) or []:
+            skill_weights.setdefault(_normalize_skill(str(s)), w)
+
     salary = profile.salary_expectation or {}
     # `or` 而不是 get 的第二参数：简历没写期望薪资时，解析产出的是
     # {"min": null, "max": null}——键存在、值是 None，默认值形同虚设，
@@ -705,6 +868,9 @@ def classify_jobs_advanced(
             salary_max=sal_max,
             user_experience_years=user_experience_years,
             user_degree=user_degree,
+            core_languages=core_languages,
+            has_ai_capability=has_ai_capability,
+            skill_weights=skill_weights,
         )
         job_result = {**job, **result}
 

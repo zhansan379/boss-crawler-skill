@@ -156,18 +156,31 @@ def resolve_jobs(run_dir, profile, args, offline):
 # ==================== 规则预测 ====================
 
 def rule_predict(job, profile):
-    """单岗规则打分（守卫复用 classify_jobs_advanced 的取值，避开 None 传播 TypeError）。"""
-    from resume_matcher.scoring import score_job_advanced
+    """单岗规则打分（守卫复用 classify_jobs_advanced 的取值，避开 None 传播 TypeError）。
+
+    生产批量入口 classify_jobs_advanced 会算出核心语言/AI 能力/技能权重一并传入；
+    评估路径必须同样传，否则技术栈锁死在这里静默失效，fixture 与线上行为不一致。
+    """
+    from resume_matcher.scoring import (score_job_advanced, _core_languages,
+                                        _candidate_has_ai, _normalize_skill,
+                                        SKILL_CATEGORY_WEIGHTS)
     skills = _profile_skills(profile)
     salary = profile.get('salary_expectation') or {}
     sal_min = salary.get('min') or 8
     sal_max = salary.get('max') or 10
     exp = float(profile.get('experience', {}).get('total_years', 0) or 0)
     degree = profile.get('education', {}).get('degree', '') or ''
+    skill_weights = {}
+    for cat, w in SKILL_CATEGORY_WEIGHTS.items():
+        for s in (profile.get('skills') or {}).get(cat) or []:
+            skill_weights.setdefault(_normalize_skill(str(s)), w)
     result = score_job_advanced(
         job, resume_skills=skills, resume_keywords=_profile_keywords(profile),
         salary_min=sal_min, salary_max=sal_max,
-        user_experience_years=exp, user_degree=degree)
+        user_experience_years=exp, user_degree=degree,
+        core_languages=_core_languages(profile),
+        has_ai_capability=_candidate_has_ai(profile),
+        skill_weights=skill_weights)
     return result
 
 

@@ -101,6 +101,15 @@ def build_resume_info(profile):
         if lines:
             parts.append('## 技能\n' + '\n'.join(lines))
 
+    # 核心技术栈：简历编程语言(programming) 栏即主业语言，单独亮出来让模型分主次。
+    # 这只是把简历原有的一个字段**原样**再呈现一遍（不是规则侧的结论），模型据此独立应用
+    # match_analysis.st 里的「核心技术栈优先」判定，40/60 混合的独立性不破坏。
+    if skills:
+        core_langs = skills.get('programming') or []
+        core_text = ('、'.join(str(v) for v in core_langs) if core_langs
+                     else '（简历未在 programming 栏申报主业语言）')
+        parts.append('## 核心技术栈\n%s' % core_text)
+
     projects = profile.get('projects') or []
     if projects:
         lines = []

@@ -83,15 +83,16 @@ FIXTURES = [
          'matched_skills': ['Python', 'RAG', 'LLM'],
          'missing_skills': [],
          'reason': '技能契合但薪资面议无法验证，需确认后投'}),
-    # A5 别名：k8s ⇄ Kubernetes、es ⇄ Elasticsearch，命中靠别名归一
+    # A5 别名：k8s ⇄ Kubernetes、es ⇄ Elasticsearch，命中靠别名归一。但岗位唯一语言是
+    # Golang，不在简历核心 Python 内、且无 AI → 触发技术栈锁死，判不可投。
     _sample(
         'https://jobs.eval.local/match/5', '云算科技', '平台工程师', '26-36K', '2-4年', '本科',
         'Kubernetes,Elasticsearch,Go',
         '用 k8s 部署微服务，用 ES 做检索平台。',
-        {'category': 'need_optimization', 'score': 72,
+        {'category': 'cannot_apply', 'score': 60,
          'matched_skills': ['Kubernetes', 'Elasticsearch'],
          'missing_skills': ['Go'],
-         'reason': 'k8s/es 别名命中但仅 2 项达标技能，缺 Golang'}),
+         'reason': '技术栈不匹配：核心 Golang 不在简历核心 Python 内；k8s/es 别名虽命中'}),
     # A5'：简历写 k8s/es（别名形），JD 用 Kubernetes/Elasticsearch（规范形）。命中靠
     # _normalize_skill 折叠；但命中仅 2 项（< 达标 4）→ should be need_optimization，不是 qualified。
     # A6 学历硬门槛：JD 硕士，简历本科 → cannot_apply
@@ -109,14 +110,14 @@ FIXTURES = [
         {'category': 'need_optimization', 'score': 55,
          'matched_skills': [], 'missing_skills': [],
          'reason': 'JD 信息不足，无法确认技能与要求'}),
-    # A8 简历技能没进 JD：gold=need_optimization（不该凭猜 qualified）
+    # A8 技能栈完全跨栈：岗位 C 语言 vs 简历核心 Python，无 AI → 技术栈锁死（不可投）
     _sample(
         'https://jobs.eval.local/match/8', '异域厂', '硬件工程师', '25-35K', '3-5年', '本科',
         '嵌入式,C语言,FPGA',
         '负责嵌入式与 FPGA 开发。',
-        {'category': 'need_optimization', 'score': 48,
+        {'category': 'cannot_apply', 'score': 48,
          'matched_skills': [], 'missing_skills': ['嵌入式', 'C语言', 'FPGA'],
-         'reason': '技术栈完全不在简历内，但无硬门槛，方向跨得太远'}),
+         'reason': '技术栈不匹配：岗位核心 C 语言不在简历核心 Python 内，方向跨得太远'}),
 ]
 
 

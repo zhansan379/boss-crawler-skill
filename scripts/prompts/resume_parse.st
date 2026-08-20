@@ -63,7 +63,7 @@
         "other": ["其他链接（如有）"]
     }},
     "skills": {{
-        "programming": ["编程语言列表"],
+        "programming": ["核心/主业的编程语言，判定以「项目技术栈」为主证：扫 projects 每条 tech_stack 里累积出现最多的那一两种语言，只保留这些。技能栏的「熟练/熟悉」只是自述、不得反超项目技术栈；标题、奖项里的技术方向只作参考，不进入本字段（比如简历主打 AI 应用，但旗舰项目的 SpringBoot 是 Java 实现，核心语言就该是 Java）。刻意列出的次要技术（如 agent/python、LLM 框架）归 tools 或 other。"],
         "frameworks": ["框架列表"],
         "tools": ["工具列表"],
         "other": ["其他技能"],
