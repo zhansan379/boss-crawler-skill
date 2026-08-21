@@ -29,12 +29,34 @@ def ensure_output_dir():
         os.makedirs(OUTPUT_DIR)
 
 
-def parse_experience_years(exp_str: str) -> int:
-    """解析经验年限"""
+def parse_experience_years(exp_str: str) -> float:
+    r"""解析经验年限（年）。整数年返回 int，子年（半年/小数/N个月）返回小数。
+
+    顺序必须在 `(\d+)-?(\d+)?年` 之前处理子年形式：正则只会贪婪抓整数段，
+    "0.5年"会被错抓成 5、"6个月"里的 6 会被当成 6 年——都得先拦下来。
+    """
     if not exp_str:
         return 0
 
-    # 匹配 "X年" 或 "X-Y年"
+    # 中文子年：半年 → 0.5
+    if '半年' in exp_str:
+        return 0.5
+
+    # 多年 → 3（JD 虚指「若干年经验」，取常见下限；不再落到兜底 8 分）
+    if '多年' in exp_str:
+        return 3
+
+    # 小数年："0.5年"、"1.5年以上" 等。先于整数正则，否则 "0.5年" 会抓到 "5年"。
+    match = re.search(r'(\d+\.\d+)\s*年', exp_str)
+    if match:
+        return float(match.group(1))
+
+    # 月数："6个月" → 0.5、"3个月" → 0.25。也要先于裸数字兜底。
+    match = re.search(r'(\d+)\s*个?月', exp_str)
+    if match:
+        return int(match.group(1)) / 12
+
+    # 整数年："X年" 或 "X-Y年"
     match = re.search(r'(\d+)-?(\d+)?年', exp_str)
     if match:
         if match.group(2):

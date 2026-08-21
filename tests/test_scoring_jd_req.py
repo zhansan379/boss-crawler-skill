@@ -24,8 +24,10 @@ from resume_matcher.requirements import (  # noqa: E402
 )
 from resume_matcher.scoring import (
     score_job_advanced,
+    parse_degree_level,
     CATEGORY_CANNOT_APPLY, CATEGORY_NEED_OPTIMIZATION, CATEGORY_QUALIFIED,
 )
+from resume_matcher.utils import parse_experience_years
 
 
 def base_job(**over):
@@ -145,7 +147,127 @@ def main():
           from_req['missing_skills'])
 
     # ================================================================
-    print('\n=== 6. enrich：按 link 挂缓存，未命中/无 link 不动 ===')
+    print('\n=== 5b. 学历名校/批次门槛不能当"不限"，或档取下限 ===')
+    check('双一流以上学历(无学历词) → 本科底线 4，而非 0',
+          parse_degree_level('公办全日制双一流以上学历') == 4,
+          parse_degree_level('公办全日制双一流以上学历'))
+    check('985/211 + 本科 → 仍本科 4',
+          parse_degree_level('本科及以上，985/211双一流大学毕业') == 4,
+          parse_degree_level('本科及以上，985/211双一流大学毕业'))
+    check('统招二本及以上 → 本科 4，而非不限 0',
+          parse_degree_level('统招二本及以上') == 4,
+          parse_degree_level('统招二本及以上'))
+    check('大专或本科 → 取下限大专 3',
+          parse_degree_level('大专或本科') == 3, parse_degree_level('大专或本科'))
+    check('常规 本科/硕士 不受影响',
+          parse_degree_level('本科') == 4 and parse_degree_level('硕士及以上') == 5,
+          (parse_degree_level('本科'), parse_degree_level('硕士及以上')))
+    # 打分侧：985 岗现在能拦大专，不再误放行
+    gate = base_job(学历='大专', _jd_req={'学历要求': '本科及以上，985/211双一流大学毕业'})
+    g = score_job_advanced(gate, **BASE_KW)   # 简历大专
+    check('985/211 岗拦大专 → 判不可投', g['application_category'] == CATEGORY_CANNOT_APPLY,
+          (g['application_category'], g['application_category_reason']))
+
+    def _premium(user_degree='本科', user_school=''):
+        return score_job_advanced(
+            base_job(学历='本科', _jd_req={'学历要求': '本科及以上，985/211双一流大学毕业'}),
+            resume_skills=['Java'], resume_keywords=['后端'],
+            salary_min=15, salary_max=20, user_experience_years=2,
+            user_degree=user_degree, user_school=user_school)
+
+    check('985 名校(北京大学) 通过名校门槛',
+          _premium(user_school='北京大学')['application_category'] != CATEGORY_CANNOT_APPLY,
+          _premium(user_school='北京大学')['application_category'])
+    check('非名校(职业技术学院) 被名校门槛拦下',
+          _premium(user_school='某职业技术学院')['application_category'] == CATEGORY_CANNOT_APPLY,
+          _premium(user_school='某职业技术学院')['application_category'])
+    check('缩写/限定名(清华) 也能命中名校',
+          _premium(user_school='清华大学深圳研究院')['application_category'] != CATEGORY_CANNOT_APPLY)
+    check('学校缺失时名校门槛不误杀（退回学历等级）',
+          _premium(user_school='')['application_category'] != CATEGORY_CANNOT_APPLY)
+    # 非名校门槛的普通 JD：非名校也放行
+    plain = score_job_advanced(
+        base_job(学历='本科', _jd_req={'学历要求': '本科及以上'}),
+        resume_skills=['Java'], resume_keywords=['后端'], salary_min=15, salary_max=20,
+        user_experience_years=2, user_degree='本科', user_school='某职业技术学院')
+    check('非名校门槛岗：非名校不被拦',
+          plain['application_category'] != CATEGORY_CANNOT_APPLY,
+          plain['application_category'])
+
+    # ================================================================
+    print('\n=== 6. parse_experience_years：子年形式必须化解为小数，不能回退裸数字 ===')
+    from resume_matcher.utils import parse_experience_years as _py
+    check('半年以上 → 0.5', _py('半年以上') == 0.5, _py('半年以上'))
+    check('半年 → 0.5', _py('半年') == 0.5, _py('半年'))
+    check('0.5年及以上 → 0.5（而非被错抓成 5）', _py('0.5年及以上') == 0.5, _py('0.5年及以上'))
+    check('1.5年 → 1.5', _py('1.5年以上') == 1.5, _py('1.5年以上'))
+    check('6个月 → 0.5', _py('6个月') == 0.5, _py('6个月'))
+    check('3个月 → 0.25', _py('3个月') == 0.25, _py('3个月'))
+    check('整数年仍取上限：3-5年 → 5', _py('3-5年') == 5, _py('3-5年'))
+    check('整数年：3年以上 → 3', _py('3年以上') == 3, _py('3年以上'))
+    check('经验不限 → 0', _py('经验不限') == 0, _py('经验不限'))
+    check('空串 → 0', _py('') == 0)
+
+    # ----- 打分侧：双档经验要求按学历分流；多年/有相关经验按语义化 -----
+    dual = base_job(**{'_jd_req': {'经验要求': '专科5年以上，本科3年以上'}})
+    ben = score_job_advanced(dual, resume_skills=['Java'], resume_keywords=['后端'],
+                             salary_min=15, salary_max=20,
+                             user_experience_years=3, user_degree='本科')
+    check('本科+3年 → 按本科档(3年) → 经验满分(20)',
+          ben['experience_score'] == 20, (ben['experience_score'],))
+
+    duanzhuan = score_job_advanced(dual, resume_skills=['Java'], resume_keywords=['后端'],
+                                   salary_min=15, salary_max=20,
+                                   user_experience_years=4, user_degree='专科')
+    check('专科+4年 → 按专科档(5年) → 经验略低而非满分',
+          duanzhuan['experience_score'] < 20, duanzhuan['experience_score'])
+
+    vague = score_job_advanced(base_job(**{'_jd_req': {'经验要求': '有相关经验'}}),
+                               **BASE_KW)   # 用户 1 年
+    check('有相关经验 → 视为宽松(满分)，不再吃兜底 8 分',
+          vague['experience_score'] == 20, vague['experience_score'])
+
+    duonian = score_job_advanced(base_job(**{'_jd_req': {'经验要求': '多年'}}),
+                                 resume_skills=['Java'], resume_keywords=['后端'],
+                                 salary_min=15, salary_max=20,
+                                 user_experience_years=4, user_degree='本科')
+    check('多年 → 解析成 3 年，4 年经验 → 经验满分',
+          duonian['experience_score'] == 20, (duonian['experience_score'],))
+    check('多年不再走兜底 8 分', duonian['experience_score'] != 8, duonian['experience_score'])
+
+    # ================================================================
+    print('\n=== 5c. 技能里 A/B、A或B 二选一 → 命中其一即不算缺 ===')
+    j_dup = {**base_job(), '_jd_req': {'学历要求': '', '经验要求': '', '薪资范围': '',
+                                      '技能要求': ['MySQL/PostgreSQL', 'Vue/React']}}
+    only_mysql = score_job_advanced(j_dup, resume_skills=['MySQL', 'Vue'],
+                                    resume_keywords=['后端'], salary_min=15, salary_max=20,
+                                    user_experience_years=1, user_degree='大专')
+    check('会 MySQL 即满足"MySQL/PostgreSQL"，不再报缺', only_mysql['missing_skills'] == [],
+          only_mysql['missing_skills'])
+    required = score_job_advanced({**base_job(), '_jd_req': {
+        '学历要求': '', '经验要求': '', '薪资范围': '', '技能要求': ['Kubernetes']}},
+        resume_skills=['MySQL'], resume_keywords=['后端'], salary_min=15, salary_max=20,
+        user_experience_years=1, user_degree='大专')
+    check('无斜杠项仍照常报缺', required['missing_skills'] == ['Kubernetes'],
+          required['missing_skills'])
+
+    # ----- 打分侧：低门槛"半年以上"应给满分而非兜底 8 分 -----
+    fresh = base_job(**{'_jd_req': {'经验要求': '半年以上'}})
+    fresh['经验'] = '经验不限'  # 卡片无关紧要，判定以权威要求为准
+    half = score_job_advanced(fresh, **BASE_KW)  # 用户 1 年经验，远超半年门槛
+    check('用户 1 年 ≥ 半年要求 → 经验满分(20)',
+          half['experience_score'] == 20, half['experience_score'])
+    check('不再落入兜底 8 分', half.get('experience_score', 8) != 8,
+          half['experience_score'])
+
+    # ----- 打分侧：0.5年及以上不应再把 JD 当 5 年门槛 -----
+    sub = base_job(**{'_jd_req': {'经验要求': '0.5年及以上'}})
+    sub2 = score_job_advanced(sub, **BASE_KW)  # 用户 1 年
+    check('用户 1 年 ≥ 0.5年要求 → 经验满分(20)',
+          sub2['experience_score'] == 20, sub2['experience_score'])
+
+    # ================================================================
+    print('\n=== 7. enrich：按 link 挂缓存，未命中/无 link 不动 ===')
     jobs = [{'link': 'https://a/1.html', '岗位要求和职责': 'x'},
             {'link': 'https://b/2.html', '岗位要求和职责': 'y'},
             {'link': '', '岗位要求和职责': 'z'}]
@@ -157,7 +279,7 @@ def main():
     check('无 link 者不动', '_jd_req' not in jobs[2], jobs[2].keys())
 
     # ================================================================
-    print('\n=== 7. 缓存读写：save_all/load_all 原子往返 ===')
+    print('\n=== 8. 缓存读写：save_all/load_all 原子往返 ===')
     import tempfile, shutil
     tmp = tempfile.mkdtemp(prefix='req_test_')
     orig = REQ_MOD.cache_path

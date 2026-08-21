@@ -128,6 +128,73 @@ DEFAULT_RESUME_DEGREE_LEVEL = 4
 # JD 学历为以下表述时视为无门槛
 _DEGREE_UNLIMITED = ('不限', '无要求', '不要求', '学历不限')
 
+# 名校/批次门槛（"双一流/985/211/一本/二本/重点/名校"这类没带学历词的表述）。
+# 语义上是**本科以上的硬门槛**，绝不能解析成 0(不限)放行所有人。简历侧拿不到毕业院校，
+# 所以保守取本科底线(4)做门禁——至少不再把名校岗误判成无门槛。
+_SCHOOL_PREMIUM = ('985', '211', '双一流', '一本', '二本', '重点', '名校')
+
+# 校牌硬门槛：只有这些才真正要求「名校毕业」。'一本/二本' 只是录取批次（大致=本科），
+# 不是校牌门槛——它们该走学历等级，不该触发名校拦截。
+_SCHOOL_PREMIUM_GATE = ('985', '211', '双一流', '名校')
+
+# 标准 985/211/双一流 院校名册（含常见别称）。简历侧 education.school 是模型抽的最高
+# 学历校名；匹配用双向子串，容忍 "清华大学深圳研究院"、"清华" 这类带限定/缩写。
+# 名单尽量收全 985+211，并带上科技岗常见双一流（深大/南方科大/上科大等）；
+# 名册外基本都是非名校，列表之外的个别学科双一流较少出现在本库 Java 岗里，边界可接受。
+_PREMIUM_SCHOOLS = frozenset({
+    # 985（39 所全）
+    '清华大学', '北京大学', '复旦大学', '浙江大学', '上海交通大学',
+    '南京大学', '中国科学技术大学', '中科大', '哈尔滨工业大学', '西安交通大学',
+    '中国人民大学', '北京航空航天大学', '北京理工大学', '北京师范大学', '中国农业大学',
+    '中央民族大学', '南开大学', '天津大学', '大连理工大学', '东北大学', '吉林大学',
+    '同济大学', '华东师范大学', '东南大学', '南京航空航天大学', '南京理工大学',
+    '中国矿业大学', '河海大学', '南京农业大学', '厦门大学', '山东大学', '中国海洋大学',
+    '武汉大学', '华中科技大学', '湖南大学', '中南大学', '中山大学', '华南理工大学',
+    '四川大学', '重庆大学', '电子科技大学', '西北工业大学', '兰州大学', '国防科技大学',
+    '西北农林科技大学',
+    # 211（非 985 部分）
+    '北京交通大学', '北京工业大学', '北京科技大学', '北京化工大学', '北京邮电大学',
+    '北京林业大学', '北京中医药大学', '北京外国语大学', '中国传媒大学', '中央财经大学',
+    '对外经济贸易大学', '北京体育大学', '中央音乐学院', '中央美术学院', '中国政法大学',
+    '华北电力大学', '中国地质大学', '中国石油大学', '天津医科大学', '河北工业大学',
+    '太原理工大学', '内蒙古大学', '辽宁大学', '大连海事大学', '延边大学', '东北师范大学',
+    '哈尔滨工程大学', '东北农业大学', '东北林业大学', '上海外国语大学', '东华大学',
+    '上海财经大学', '上海大学', '苏州大学', '江南大学', '南京师范大学', '中国药科大学',
+    '华东理工大学', '南京林业大学', '安徽大学', '合肥工业大学', '福州大学', '南昌大学',
+    '郑州大学', '武汉理工大学', '华中师范大学', '华中农业大学', '中南财经政法大学',
+    '湖南师范大学', '暨南大学', '华南师范大学', '广西大学', '海南大学', '西南交通大学',
+    '四川农业大学', '西南财经大学', '西南大学', '贵州大学', '云南大学', '西藏大学',
+    '西北大学', '长安大学', '西安电子科技大学', '青海大学', '宁夏大学', '新疆大学',
+    '石河子大学', '海军军医大学', '空军军医大学', '陆军军医大学',
+    '陕西师范大学',
+    # 科技岗常见双一流（非 211）：中国科学院大学 / 深研体系 / 行业新贵
+    '中国科学院大学', '南方科技大学', '上海科技大学', '深圳大学', '宁波大学',
+    '南京邮电大学', '南京信息工程大学', '华南农业大学', '湘潭大学', '山西大学',
+    '广州医科大学', '成都理工大学', '西南石油大学', '天津工业大学', '上海海洋大学',
+    '首都师范大学', '河南大学', '中国美术学院', '北京协和医学院',
+    '外交学院', '中国人民公安大学', '中国音乐学院', '中央戏剧学院',
+    '天津中医药大学', '上海中医药大学', '上海体育学院', '上海音乐学院',
+    '南京医科大学', '南京中医药大学', '广州中医药大学', '成都中医药大学',
+})
+
+
+def _jd_premium_gate(deg_text: str) -> bool:
+    """JD 学历要求是否为名校硬门槛（需 985/211/双一流 毕业）。"""
+    s = (deg_text or '').lower()
+    return any(t in s for t in _SCHOOL_PREMIUM_GATE)
+
+
+def _school_is_prestigious(school_text: str) -> bool:
+    """简历学校是否命中名校名册（双向子串，容忍缩写与限定后缀）。"""
+    s = re.sub(r'[\s（）()、,，·]', '', school_text or '').lower()
+    if not s:
+        return False
+    for name in _PREMIUM_SCHOOLS:
+        n = name.lower()
+        if n in s or (len(s) >= 2 and s in n):
+            return True
+    return False
+
 
 def parse_degree_level(degree_str: str, default: int = 0) -> int:
     """
@@ -135,16 +202,49 @@ def parse_degree_level(degree_str: str, default: int = 0) -> int:
 
     '不限' 及空值返回 0（无门槛）；无法识别时返回 default。
     '本科及以上' 取 '本科' 的等级——「及以上」不抬高门槛。
+    含 '或/或以上'（如 '大专或本科'）时取**下限**——最低能接受的学历才是门槛；
+    只写名校批次（如 '双一流以上学历'）且无学历词的，按本科底线(4)，不当"不限"。
     """
     if not degree_str:
         return 0
     s = degree_str.lower().strip()
     if any(u in s for u in _DEGREE_UNLIMITED):
         return 0
-    for name, level in _DEGREE_LEVELS:
-        if name in s:
-            return level
+    matched = [level for name, level in _DEGREE_LEVELS if name in s]
+    if matched:
+        return min(matched)   # '大专或本科'、'X或以上' → 取最低档
+    if any(t in s for t in _SCHOOL_PREMIUM):
+        return 4             # 名校/批次门槛无学历词 → 本科底线
     return default
+
+
+def _conditional_exp_years(exp: str, user_degree_text: str) -> Optional[float]:
+    """'专科X年以上，本科Y年以上' 型双档经验要求 → 按简历学历选对应档。
+
+    直出的双要求里若取首段（专科档），本科学历的候选人会被按更严的专科档误压分。
+    None 表示不是这种双档结构，调用方回退 parse_experience_years。
+    """
+    m = re.search(r'专科\s*([\d.]+)\s*年以上\s*，?\s*本科\s*([\d.]+)\s*年以上', exp or '')
+    if not m:
+        return None
+    jd_require, graduate_require = float(m.group(1)), float(m.group(2))
+    # ≥本科 → 用本科档（更松）；学历未知/大专及以下 → 用专科档（更严，宁紧勿松）
+    if parse_degree_level(user_degree_text) >= 4:
+        return graduate_require
+    return jd_require
+
+
+def _skill_any_of_matched(skill: str, user_norms: set) -> bool:
+    """'A/B'、'A或B' 组合项当「任一命中即满足」。
+
+    'MySQL/PostgreSQL' 这类是『会用其中一个就行』，不是两个都要。若拆出的任一部分
+    属于简历技能，则这项算满足，从缺技能清单里剔除，避免二选一被当成两样都要。
+    """
+    parts = [p.strip() for p in re.split(r'[/／、或]', skill) if p.strip()]
+    if len(parts) <= 1:
+        return False
+    try_norms = {_normalize_skill(p) for p in parts}
+    return bool(try_norms & user_norms)
 
 
 # ==================== 技能别名映射 & AI 关键词 ====================
@@ -505,6 +605,7 @@ def score_job_advanced(
     salary_max: int = 10,
     user_experience_years: float = 0,
     user_degree: str = '',
+    user_school: str = '',   # 简历最高学历院校；空 = 无数据，名校门槛不拦
     core_languages: set = None,
     has_ai_capability: Optional[bool] = None,
     skill_weights: Dict[str, float] = None,
@@ -601,10 +702,13 @@ def score_job_advanced(
 
     # ── 维度2: 经验匹配 (0-20) ──
     exp = exp_src
-    jd_exp_years = parse_experience_years(exp)
+    jd_exp_years = _conditional_exp_years(exp, user_degree) if user_degree else None
+    if jd_exp_years is None:
+        jd_exp_years = parse_experience_years(exp)
     exp_gap: Optional[float] = None   # None = 无法判断（用户或 JD 年限缺失）
 
-    if any(t in exp for t in ['应届', '经验不限', '1年以内', '在校', '在校生']):
+    if any(t in exp for t in ['应届', '经验不限', '1年以内', '在校', '在校生',
+                              '有相关经验', '有经验', '相关经验']):
         experience_score = 20
         exp_gap = 0.0   # JD 无年限门槛，视为完全满足
         reasons.append('经验要求匹配(应届/经验不限)')
@@ -657,6 +761,14 @@ def score_job_advanced(
         resume_degree_level = DEFAULT_RESUME_DEGREE_LEVEL
     degree_ok = jd_degree_level <= resume_degree_level
 
+    # 名校硬门槛：JD 要求 985/211/双一流 毕业，而简历院校已知且非名校 → 直接判不过。
+    # 学校字段缺失/为空时不拦（数据不足不该误杀，退回上面的学历等级门槛）。
+    school_gate_reason = ''
+    if (degree_ok and jd_degree_level and user_school
+            and _jd_premium_gate(deg) and not _school_is_prestigious(user_school)):
+        degree_ok = False
+        school_gate_reason = f'名校要求{deg}(简历院校非985/211/双一流)'
+
     if not jd_degree_level:
         degree_score = 15
         reasons.append('学历匹配(不限)')
@@ -665,7 +777,7 @@ def score_job_advanced(
         reasons.append(f'学历匹配({deg})')
     else:
         degree_score = 0
-        reasons.append(f'学历要求{deg}(硬门槛，简历不达标)')
+        reasons.append(school_gate_reason or f'学历要求{deg}(硬门槛，简历不达标)')
 
     # ── 维度4: 技能重合 (0-30) ──
     matched: List[str] = []
@@ -722,6 +834,8 @@ def score_job_advanced(
         if norm in seen_norms:
             continue
         seen_norms.add(norm)
+        if _skill_any_of_matched(jd_skill, user_norms):
+            continue   # 'A/B'、'A或B'：任一部分已具备即不算缺
         if norm not in user_norms:
             missing.append(jd_skill)
             if len(missing) >= 5:
@@ -851,6 +965,7 @@ def classify_jobs_advanced(
     sal_max = salary.get('max') or 10
     user_experience_years = float(profile.experience.get('total_years', 0) or 0)
     user_degree = profile.education.get('degree', '') or ''
+    user_school = profile.education.get('school', '') or ''
 
     print(f"\n正在增强分析 {len(jobs)} 个岗位(6维度评分)...")
 
@@ -868,6 +983,7 @@ def classify_jobs_advanced(
             salary_max=sal_max,
             user_experience_years=user_experience_years,
             user_degree=user_degree,
+            user_school=user_school,
             core_languages=core_languages,
             has_ai_capability=has_ai_capability,
             skill_weights=skill_weights,
