@@ -7,6 +7,9 @@ HTML 是 dataviz 风格：浅/深双主题共用同一组 CSS 变量、统一 pa
 
 报告只读不写：文件在 evaluate_materials.py 里落盘。三个类别统一配色：
 保留=绿 · 岗位驱动=蓝 · 无据(幻觉)=红。所有读数都是启发，报告用「启发」标注，不冒充结论。
+
+术语三分类支持两种来源：rule（白名单规则，纯算数）与 llm（语义分类，带逐词 reason）。
+LLM 来源时，「优化前 vs 优化后」对照面板会把每词按来路着色，悬停看理由；rule 来源仅纯文本对照。
 """
 
 import os
@@ -29,11 +32,96 @@ def _esc(text):
              .replace('"', '&quot;'))
 
 
+# ==================== 术语着色基元 ====================
+
+_BUCKET_CSS = {'retained': '#25a06c', 'jd_driven': '#3b82f6', 'unfounded': '#e5484d'}
+_BUCKET_LABEL = {'retained': '保留', 'jd_driven': '岗位驱动', 'unfounded': '无据(幻觉)'}
+
+
+def _replace_case(src, token, meta=None):
+    """把 src 里所有 token（大小写不敏感、整词边界）包成带色 span。meta 为空则仅转义。"""
+    if not token:
+        return src
+    n, out, o = len(token), '', 0
+    low_src, low_tok = src.lower(), token.lower()
+    while True:
+        idx = low_src.find(low_tok, o)
+        if idx < 0:
+            break
+        pts = not (idx > 0 and (src[idx - 1].isalnum() or src[idx - 1] in '_-'))
+        pte = not (idx + n < len(src) and (src[idx + n].isalnum() or src[idx + n] in '_-'))
+        if meta and pts and pte:
+            css, label = meta['css'], meta['label']
+            reason = meta.get('reason', '')
+            out += _esc(src[o:idx])
+            out += ('<span class="tterm" style="background:%s22;color:%s;'
+                    'border-radius:3px;padding:0 2px" title="[%s] %s">'
+                    % (css, css, label, _esc(reason)))
+            out += _esc(src[idx:idx + n])
+            out += '</span>'
+        else:
+            out += _esc(src[o:idx + n])
+        o = idx + n
+    return out + _esc(src[o:])
+
+
+def _highlight_terms(src, terms):
+    """单次扫描把 src 里所有命中术语包成带色 span，一次成型，绝不二次转义。
+
+    若逐词调用 _replace_case，后一个词会把前一个词已插好的 `<span>` 当纯文本再
+    _esc 一遍，产生 &amp;amp;lt;span… 的双倍转义。这里是收集全部 (起,止,css,label,
+    reason) 后按位置排序，一次性输出：非命中区间 _esc，命中区间直接插 span。
+    同义词同词形只取第一桶（terms 已按优先级排序）。
+    """
+    hits = []
+    low = src.lower()
+    min_len = 2                            # 单个字符切词无意义，跳过
+    for t in terms or []:
+        tok = (t.get('term') or '').strip()
+        if not tok or len(tok) < min_len:
+            continue
+        css = _BUCKET_CSS.get(t.get('bucket'), '#999')
+        label = _BUCKET_LABEL.get(t.get('bucket'), t.get('bucket', '?'))
+        reason = t.get('reason') or ''
+        low_tok, n = tok.lower(), len(tok)
+        o = 0
+        while True:
+            idx = low.find(low_tok, o)
+            if idx < 0:
+                break
+            o = idx + n
+            pts = not (idx > 0 and (src[idx - 1].isalnum() or src[idx - 1] in '_-'))
+            pte = not (idx + n < len(src) and (src[idx + n].isalnum() or src[idx + n] in '_-'))
+            if pts and pte:
+                hits.append((idx, idx + n, css, label, reason))
+    if not hits:
+        return _esc(src)
+    hits.sort(key=lambda h: (h[0], -h[1]))
+    picks = []
+    for h in hits:
+        if picks and h[0] < picks[-1][1]:  # 与已被更长/更早命中覆盖或重叠，跳过
+            continue
+        picks.append(h)
+    out, o = [], 0
+    for s, e, css, label, reason in picks:
+        out.append(_esc(src[o:s]))
+        # o 到 s 之间可能残留未命中的小段，直接进转义
+        out.append('<span class="tterm" style="background:%s22;color:%s;'
+                   'border-radius:3px;padding:0 2px" title="[%s] %s">'
+                   % (css, css, label, _esc(reason)))
+        out.append(_esc(src[s:e]))
+        out.append('</span>')
+        o = e
+    out.append(_esc(src[o:]))
+    return ''.join(out)
+
+
 def render_html(recommend_result, jobs_view, meta=None):
     """渲染整份 HTML。recommend_result 来自 recommend.recommend()，jobs_view 是逐岗明细。
 
     jobs_view 每项：{index, company, position, greeting_preview, greeting_full,
-    status('ok'|'missing'), metrics(evaluate_job 结果)}。
+    status('ok'|'missing'), metrics(evaluate_job 结果),
+    base_text / optimized_resume / terms_mode（对照面板用）}。
     """
     agg = recommend_result.get('aggregate', {})
     suggestions = recommend_result.get('suggestions', [])
@@ -87,6 +175,43 @@ def render_html(recommend_result, jobs_view, meta=None):
                 % (tag, j.get('index'), j.get('company'), seg, r, d, u))
 
     term_bars = '\n'.join(term_bar(j) for j in jobs_view) or '<p>无可用岗位</p>'
+
+    # ── 优化前 vs 优化后（LLM 术语高亮）──
+    def compare_card(j):
+        if j.get('status') == 'missing':
+            return ''
+        base = (j.get('base_text') or '').strip()
+        opt = (j.get('optimized_resume') or '').strip()
+        m = ((j.get('metrics') or {}).get('terms', {})
+             if (j.get('metrics') or {}).get('terms') else {})
+        mode = m.get('mode') if isinstance(m, dict) else None
+        terms = m.get('terms') if isinstance(m, dict) else None
+        analysis = (m.get('analysis') or '') if isinstance(m, dict) else ''
+
+        if mode == 'llm' and isinstance(terms, list):
+            hl_opt = _highlight_terms(opt, terms)
+            opt_header = '优化后 · LLM 语义分类'
+        else:
+            hl_opt = None
+            opt_header = '优化后 · 规则分类'
+        opt_col = ('<div class="cmp-col opt"><h4>%s</h4><pre>%s</pre></div>'
+                   % (opt_header,
+                      hl_opt if mode == 'llm' else _esc(opt or '（无产物）')))
+        base_col = ('<div class="cmp-col base"><h4>优化前（原简历）</h4>'
+                    '<pre>%s</pre></div>' % _esc(base or '（无基准文本）'))
+        ana = ('<p class="cmp-ana">LLM 点评：%s</p>' % _esc(analysis)
+               if analysis else '')
+        tag = '<span class="bd %s">%s</span>' % (
+            'ok' if mode == 'llm' else ('warn' if mode else ''),
+            'LLM 语义分类' if mode == 'llm' else '规则分类')
+        return ('<details class="cmp" %s><summary>#%s %s / %s %s</summary>%s'
+                '<div class="cmp-grid">%s%s</div></details>'
+                % ('open' if mode == 'llm' else '', j.get('index'),
+                   _esc(j.get('company') or ''), _esc(j.get('position') or ''),
+                   tag, ana, base_col, opt_col))
+
+    compare_cards = '\n'.join(c for j in jobs_view
+                              if (c := compare_card(j))) or '<p>（无）</p>'
 
     # ── 字符级 diff 明细表 ──
     char_rows = []
@@ -198,7 +323,8 @@ def render_html(recommend_result, jobs_view, meta=None):
         sugg = ['<p class="good">没有任何阈值命中 —— 这套 prompt 目前很健康。</p>']
 
     return _HTML_TEMPLATE % dict(
-        kpis=kpis, term_bars=term_bars, char_table=char_table,
+        kpis=kpis, term_bars=term_bars, compare_cards=compare_cards,
+        char_table=char_table,
         unfounded_table=unfounded_table, blocks_table=blocks_table,
         greet_cards=greet_cards, chapters_table=chapters_table,
         subjective_html=subjective_html,
@@ -259,6 +385,15 @@ ul.subj{list-style:none;padding:0;margin:8px 0}ul.subj li{padding:4px 0;font-siz
 .su{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0}.su-h{font-size:13px}.su .ev{color:var(--muted);font-size:12px;float:right}.su-a{color:var(--muted);font-size:13px;margin-top:4px}
 .su.high{border-left:3px solid var(--bad)}.su.medium{border-left:3px solid var(--warn)}.su.low{border-left:3px solid var(--good)}
 .llm{background:var(--hl);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:13px}
+details.cmp{background:var(--hl);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:8px 0}
+details.cmp summary{cursor:pointer;font-size:13px;font-weight:600}
+details.cmp .bd{vertical-align:middle;margin-left:6px}
+.cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+.cmp-col{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--card)}
+.cmp-col h4{font-size:12px;color:var(--muted);margin:0 0 6px}
+.cmp-col pre{white-space:pre-wrap;word-break:break-word;font:13px/1.5 "Microsoft YaHei",sans-serif;margin:0;max-height:340px;overflow:auto}
+.cmp-ana{font-size:12px;color:var(--muted);margin:6px 0 0;border-top:1px dashed var(--line);padding-top:6px}
+@media (max-width:760px){.cmp-grid{grid-template-columns:1fr}}
 </style></head><body>
 <div class="topbar"><h1>材料生成质量评估</h1>
 <button onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">深浅主题</button></div>
@@ -266,7 +401,13 @@ ul.subj{list-style:none;padding:0;margin:8px 0}ul.subj li{padding:4px 0;font-siz
 %(meta_html)s
 %(llm_html)s
 <div class="kpis">%(kpis)s</div>
-<section class="panel"><h3>术语三分类 · 每岗 100%% 堆叠 <span style="font-weight:400;color:var(--muted)">■保留 ■岗位驱动 ■无据(幻觉)</span></h3>%(term_bars)s</section>
+<section class="panel"><h3>术语三分类 · 每岗 100%% 堆叠
+      <span style="font-weight:400;color:var(--muted)">
+        <b style="color:#25a06c">■</b>保留
+        <b style="color:#3b82f6">■</b>岗位驱动
+        <b style="color:#e5484d">■</b>无据(幻觉)
+      </span></h3>%(term_bars)s</section>
+<section class="panel"><h3>优化前 vs 优化后 · 逐词对照（LLM 分类含理由，悬停查看）</h3>%(compare_cards)s</section>
 <section class="panel"><h3>字符级 删 / 增 / 覆盖</h3>%(char_table)s</section>
 <section class="panel"><h3>招呼语 preview（HR 只看前 15 字）</h3>%(greet_cards)s</section>
 <section class="panel"><h3>无据术语逐条</h3>%(unfounded_table)s</section>

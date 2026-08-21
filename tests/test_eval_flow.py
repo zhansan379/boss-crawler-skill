@@ -209,6 +209,102 @@ def test_report_html_blocks(tmp_path):
     assert 'PyTorch' in html
 
 
+# ==================== --terms-llm：分类器接入 + 对照面板 ====================
+
+def test_terms_llm_feeds_classifier_and_compare_panel(tmp_path):
+    """--terms-llm 走 LLM 分类（monkeypatch classify_all，不触网），报告渲染对照面板。
+
+    断言：job2（岗位驱动 PyTorch / 无据 FabricatedStack）terms.mode=llm 且带 analysis；
+    report.html 出现「优化前 vs 优化后」、悬停理由、三类着色；job1（无缓存）回退规则。
+    """
+    run = make_run(tmp_path)
+    from eval.materials.stubs import clean_greeting, clean_resume
+    for i, job in enumerate(JOBS, 1):
+        GM._write_atomic(os.path.join(run, 'materials', 'greeting_%d_%s.txt' % (i, job['公司'])),
+                         clean_greeting(job, ''))
+        md = clean_resume(RESUME, job['技能标签'])[0]
+        if i == 2:
+            md += "\n- 熟悉 PyTorch 与 FabricatedStack\n"
+        GM._write_atomic(os.path.join(run, 'materials', 'resume_%d_%s.json' % (i, job['公司'])),
+                         json.dumps({'optimized_resume': md}, ensure_ascii=False))
+
+    # 只给 2 岗分类（1 岗无缓存 → 应回退规则），monkeypatch 成必炸无法区分 bucket 语义，
+    # 直接喂确定性三桶。完全由我们给定，不触网。
+    from eval.materials import terms_llm
+    fake_classified = {
+        2: {'n_opt': 2, 'n_retained': 1, 'n_jd_driven': 1, 'n_unfounded': 0,
+            'hallucination_pct': 0.0, 'jd_driven_pct': 0.5, 'retention_pct': 0.5,
+            'fabrication_within_new': 0.0, 'unfounded': [],
+            'terms': [
+                {'term': 'PyTorch', 'bucket': 'jd_driven', 'reason': '乙公司 JD 明确要求'},
+                {'term': 'FabricatedStack', 'bucket': 'unfounded', 'reason': '两边都没有，编的'},
+            ],
+            'analysis': '靠岗位但有一条编造需清。', 'mode': 'llm'},
+    }
+    called = {}
+    def _fake_classify_all(jobs, base_text, opt_by_index, **kw):
+        called['n'] = len(jobs)
+        return fake_classified
+    saved = terms_llm.classify_all
+    terms_llm.classify_all = _fake_classify_all
+    args = argparse.Namespace(no_subjective=False)
+    try:
+        classified = terms_llm.classify_all(JOBS, RESUME, {}, run_dir=run, offline=True)
+        assert called['n'] == 2
+        # 逐岗喂给 evaluate_run
+        jobs_view, _ = EM.evaluate_run(run, JOBS, PROFILE, RESUME, args,
+                                       classified=classified)
+    finally:
+        terms_llm.classify_all = saved
+
+    alias = {j['index']: j['metrics'] for j in jobs_view}
+    assert alias[2]['terms']['mode'] == 'llm'
+    assert alias[2]['terms']['analysis'] == '靠岗位但有一条编造需清。'
+    assert alias[1]['terms'].get('mode') != 'llm'          # 1 岗无分类 → 规则兜底
+
+    from eval.materials.recommend import recommend
+    from eval.materials.report_html import render_html
+    html = render_html(recommend([j['metrics'] for j in jobs_view]), jobs_view, '测试')
+    assert '优化前 vs 优化后' in html
+    assert 'LLM 语义分类' in html
+    assert '规则分类' in html
+    assert 'FabricatedStack' in html and 'PyTorch' in html
+    assert 'title="[岗位驱动] 乙公司 JD 明确要求' in html        # 悬停理由
+    assert '&amp;amp;lt;span' not in html                      # 无双倍转义
+
+
+def test_terms_llm_offline_reads_cache_without_network(tmp_path):
+    """--offline 且有缓存：分类直接读缓存键，不触网。无缓存岗给 {'mode':'rule'} 兜底。"""
+    from eval.materials import terms_llm
+    # 先造一份缓存：给岗1 写入一个确定性 terms dict，岗1 脚本用真实 resume/opt 一致输入
+    from eval.materials.stubs import clean_resume
+    opt1 = clean_resume(RESUME, JOBS[0]['技能标签'])[0]
+    opt2 = clean_resume(RESUME, JOBS[1]['技能标签'])[0]
+    opt_by = {1: opt1, 2: opt2}
+    cache = {}
+    # 岗1 的键：base_text + opt1 + jd1
+    jd1 = '、'.join(str(JOBS[0].get(k)) for k in
+                    ('技能标签', '岗位要求和职责', '职位', '公司') if JOBS[0].get(k))
+    key1 = terms_llm._job_key(RESUME, opt1, jd1)
+    cache[key1] = {'n_opt': 3, 'n_retained': 3, 'n_jd_driven': 0, 'n_unfounded': 0,
+                   'hallucination_pct': 0.0, 'terms': [], 'analysis': '缓存命中的点评。',
+                   'mode': 'llm'}
+    terms_llm.save_cache(str(tmp_path), cache)
+
+    # 把真触网分类器换成必炸：cache 命中路径不该走到它
+    def _boom(*a, **k):
+        raise RuntimeError('offline 不应触网')
+    saved = terms_llm.classify_job
+    terms_llm.classify_job = _boom
+    try:
+        out = terms_llm.classify_all(JOBS, RESUME, opt_by, run_dir=str(tmp_path), offline=True)
+    finally:
+        terms_llm.classify_job = saved
+    assert out[1]['mode'] == 'llm'
+    assert out[1]['analysis'] == '缓存命中的点评。'
+    assert out[2] == {'mode': 'rule'}               # 岗2 无缓存 → 规则兜底标记
+
+
 if __name__ == '__main__':
     import tempfile
     import pathlib

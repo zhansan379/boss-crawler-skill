@@ -184,6 +184,50 @@ def test_evaluate_job_shape():
     assert r['terms']['n_unfounded'] >= 1          # Kubernetes 无据
 
 
+def test_evaluate_job_terms_source_llm_uses_classified():
+    """terms_source='llm'：不走 term_stats 白名单，直接采用分类器的 terms dict。
+
+    其余五维照常离线纯算数；llm 模式带 mode/analysis，rule 没有（向后兼容）。
+    """
+    classified = {'n_opt': 3, 'n_retained': 2, 'n_jd_driven': 1, 'n_unfounded': 0,
+                  'hallucination_pct': 0.0, 'jd_driven_pct': 1 / 3,
+                  'retention_pct': 2 / 3, 'fabrication_within_new': 0.0,
+                  'unfounded': [], 'terms': [
+                      {'term': 'Python', 'bucket': 'retained', 'reason': '原文有'},
+                      {'term': 'PyTorch', 'bucket': 'jd_driven', 'reason': 'JD 要求'},
+                  ], 'analysis': '靠岗位，无编造。', 'mode': 'llm'}
+    r = evaluate_job(
+        base_text="## 个人简介\nPython",
+        baseline={"python"},
+        jd_keys=_baseline_keys("要求 PyTorch"),
+        greeting_text="Python 方向",
+        optimized_resume="## 个人简介\nPython 与 PyTorch",
+        terms_source='llm', classified_terms=classified,
+    )
+    assert r['terms']['mode'] == 'llm'
+    assert r['terms']['n_jd_driven'] == 1 and r['terms']['n_unfounded'] == 0
+    assert r['terms']['analysis'] == '靠岗位，无编造。'
+    # 分类器把 PyTorch 判为 jd_driven —— 规则白名单也会判成 jd_driven，但模式标记要生效
+    assert r['terms']['terms'][1]['bucket'] == 'jd_driven'
+    # 其他五维照常离线算数
+    for key in ('char_diff', 'added_blocks', 'greeting', 'chapters', 'subjective'):
+        assert key in r
+
+
+def test_evaluate_job_terms_source_rule_still_runs():
+    """terms_source 缺省/rule：回退原白名单规则，不产生 mode/analysis。"""
+    r = evaluate_job(
+        base_text="## 个人简介\nPython",
+        baseline={"python"},
+        jd_keys=set(),
+        greeting_text="Python",
+        optimized_resume="## 个人简介\nPython 与 Quarkus",
+    )
+    assert r['terms'].get('mode') != 'llm'
+    assert r['terms']['n_unfounded'] >= 1          # Quarkus 规则判无据
+    assert 'analysis' not in r['terms']
+
+
 # ==================== stub 生成（干净对照） ====================
 
 def test_clean_resume_adds_only_jd_driven_words():

@@ -251,14 +251,20 @@ def generate_materials(run_dir, jobs, profile, args, offline):
 
 # ==================== 4) 六维评估 ====================
 
-def evaluate_run(run_dir, jobs, profile, base_text, args):
-    """逐岗评估：读产物（materials/ 或 generate 内存 records 已落盘）→ metrics。"""
+def evaluate_run(run_dir, jobs, profile, base_text, args, classified=None):
+    """逐岗评估：读产物（materials/ 或 generate 内存 records 已落盘）→ metrics。
+
+    classified: {岗号: terms dict}（LLM 术语分类结果，缓存优先）。有则该岗走
+    terms_source='llm'，否则回退规则。同时把该岗的原/优化简历文本塞进 jobs_view，
+    供 report_html 渲染「优化前 vs 优化后」对照。
+    """
     from eval.materials.metrics import evaluate_job
     from verify_no_fabrication import load_baseline, _baseline_keys
     from gen_materials import format_availability
 
     baseline, _ = load_baseline(run_dir)
     availability = format_availability(profile)
+    classified = classified or {}
     jobs_view, missing = [], []
 
     for i, job in enumerate(jobs, 1):
@@ -281,6 +287,7 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
                 'index': i, 'company': job.get('公司', ''),
                 'position': job.get('职位', ''), 'link': job.get('link', ''),
                 'status': 'missing', 'greeting_preview': '', 'greeting_full': '',
+                'base_text': '', 'optimized_resume': '',
                 'metrics': {},
             })
             continue
@@ -290,6 +297,8 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
                         job.get('公司')) if v)
         jd_keys = _baseline_keys(jd)
 
+        # 该岗是否有 LLM 分类结果：有则走 llm，无则回退规则
+        use_llm = i in classified and classified[i].get('mode') == 'llm'
         try:
             metrics = evaluate_job(
                 base_text=base_text or '',
@@ -299,6 +308,8 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
                 optimized_resume=opt_md,
                 availability_text=availability,
                 subjective=not args.no_subjective,
+                terms_source='llm' if use_llm else 'rule',
+                classified_terms=classified.get(i) if use_llm else None,
             )
         except Exception as exc:                                   # noqa: BLE001
             metrics = {'error': str(exc)}
@@ -313,6 +324,9 @@ def evaluate_run(run_dir, jobs, profile, base_text, args):
             'status': 'missing' if missing_now else 'ok',
             'greeting_preview': _pv(greeting),
             'greeting_full': greeting,
+            'base_text': (base_text or ''),
+            'optimized_resume': opt_md,
+            'terms_mode': 'llm' if use_llm else 'rule',
             'metrics': metrics,
         })
     return jobs_view, missing
@@ -353,6 +367,10 @@ def main():
     ap.add_argument('--offline', action='store_true', help='全程不触网：生成降级为确定性 stub，AI 造岗自动降级')
     ap.add_argument('--stub-registry', help='stub 生成的产物 registry 落盘路径（可回放）')
     ap.add_argument('--llm-recommend', action='store_true', help='额外调模型做综合点评（需联网，避开 offline）')
+    ap.add_argument('--terms-llm', action='store_true',
+                    help='术语三分类收 LLM 语义判断（缓存优先；需联网/配 key，倒回规则兜底）')
+    ap.add_argument('--force-llm-terms', action='store_true',
+                    help='忽略术语分类缓存，强制重新调 LLM 分类')
     ap.add_argument('--no-subjective', action='store_true', help='关闭客观性(夸大)启发维度')
     ap.add_argument('--out-dir', help='报告输出目录（默认 <run_dir>/eval/）')
     ap.add_argument('--workers', '-w', type=int, help='生成并发数（默认 4）')
@@ -401,8 +419,41 @@ def main():
             run.save(args.stub_registry)
             print('✅ stub registry → %s' % args.stub_registry)
 
-    # 4) 评估
-    jobs_view, missing = evaluate_run(run_dir, jobs, profile, base_text, args)
+    # 4) 术语分类（LLM，缓存优先）
+    #    - --terms-llm 或 --force-llm-terms：调分类器（联网），写缓存；force 忽略缓存。
+    #    - --offline：只读已有缓存，不回退联网；没缓存那几岗走规则兜底（报里标 rule）。
+    classified = None
+    if args.terms_llm or args.force_llm_terms or args.offline:
+        from eval.materials.terms_llm import classify_all
+        from gen_materials import build_resume_summary
+        opt_by_index = {}
+        for i in range(1, len(jobs) + 1):
+            rp = _find(run_dir, 'resume', i)
+            if rp:
+                with open(rp, 'r', encoding='utf-8') as _f:
+                    opt_by_index[i] = ((json.load(_f) or {})
+                                       .get('optimized_resume') or '')
+        if args.terms_llm or args.force_llm_terms:
+            from llm import resolve, ConfigError
+            try:
+                cfg = resolve(stage='eval_terms')
+            except ConfigError as exc:
+                print('❌ 术语分类配置错误：\n%s' % exc)
+                return 1
+            classified = classify_all(jobs, base_text or '', opt_by_index,
+                                      cfg=cfg, run_dir=run_dir,
+                                      offline=args.offline, force=args.force_llm_terms)
+        else:   # 仅 --offline：读缓存即可
+            classified = classify_all(jobs, base_text or '', opt_by_index,
+                                      run_dir=run_dir, offline=True)
+        n_llm = sum(1 for d in (classified or {}).values()
+                    if (d or {}).get('mode') == 'llm')
+        if n_llm:
+            print('✅ 术语分类：%d/%d 岗走 LLM（缓存优先）' % (n_llm, len(jobs)))
+
+    # 5) 评估
+    jobs_view, missing = evaluate_run(run_dir, jobs, profile, base_text, args,
+                                      classified=classified)
     if not jobs_view:
         print('❌ 没有任何岗位可供评估')
         return 1

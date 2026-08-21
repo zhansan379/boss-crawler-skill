@@ -167,6 +167,9 @@ class StubRun:
             'greetings': {str(k): v for k, v in self.greetings.items()},
             'resumes': {str(k): v for k, v in self.resumes.items()},
         }
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)      # 与 write_eval_json/save_cache 同款
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         return path

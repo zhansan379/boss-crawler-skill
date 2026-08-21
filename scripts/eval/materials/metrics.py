@@ -310,12 +310,26 @@ def subjective_stats(base_text, opt_text, enabled=True):
 # ==================== 逐岗汇总 ====================
 
 def evaluate_job(*, base_text, baseline, jd_keys, greeting_text,
-                 optimized_resume, availability_text='', subjective=True):
-    """一个岗位的完整六维评估。返回可直接进 JSON 的 dict。"""
+                 optimized_resume, availability_text='', subjective=True,
+                 terms_source='rule', classified_terms=None):
+    """一个岗位的完整六维评估。返回可直接进 JSON 的 dict。
+
+    terms_source / classified_terms：
+      - 'rule'：用纯规则白名单（term_stats）三分类，离线、确定性（默认）。
+      - 'llm'：调用方（evaluate_materials）已用 eval.materials.terms_llm 分类好
+        （缓存优先），本函数直接采用 classified_terms 作 terms dict，不现场跑规则。
+    除 terms 外的五维（char_diff / added_blocks / greeting / chapters / subjective）
+    **始终离线纯算数**，两种 source 共用同一套输出字段，下游 aggregate/report 无需感知来源。
+    """
     opt = optimized_resume or ''
+    if terms_source == 'llm' and isinstance(classified_terms, dict):
+        terms = dict(classified_terms)
+        terms.setdefault('mode', 'llm')
+    else:
+        terms = term_stats(opt, baseline, jd_keys)       # rule 兜底
     return {
         'char_diff': char_diff(base_text, opt),
-        'terms': term_stats(opt, baseline, jd_keys),
+        'terms': terms,
         'added_blocks': added_block_stats(base_text, opt, baseline, jd_keys),
         'greeting': greeting_stats(greeting_text or '', baseline, jd_keys,
                                    availability_text),

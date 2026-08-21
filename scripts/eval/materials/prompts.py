@@ -8,6 +8,7 @@
 """
 
 import os
+import re
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 
@@ -20,12 +21,20 @@ def load_eval_prompt(name):
 
 
 def build_gen_jobs_prompt(profile_summary, count, spec=''):
-    """给 AI 造岗位的 prompt。spec 是多样的补充说明（空则不额外约束）。"""
-    return load_eval_prompt('gen_test_jobs').format(
-        count=count,
-        resume_summary=profile_summary,
-        spec=spec,
-    )
+    """给 AI 造岗位的 prompt。spec 是多样的补充说明（空则不额外约束）。
+
+    用 replace 而不是 .format：模板里的 JSON 示例（{"link":...}）全是字面花括号，
+    .format 会把它们当「字段名」去替换而 KeyError。token 单写不带花括号，避免误伤。
+    """
+    prompt = load_eval_prompt('gen_test_jobs')
+    prompt = prompt.replace('{count}', str(count)) \
+                   .replace('{resume_summary}', profile_summary)
+    if spec:
+        prompt = prompt.replace('{spec}', '补充多样性要求：%s' % spec)
+    else:
+        # spec 未填：整条删掉「- {spec}」那行，避免模板留个空令牌
+        prompt = re.sub(r'^-\s*\{spec\}\s*$', '', prompt, flags=re.M)
+    return prompt
 
 
 def build_recommend_prompt(aggregate_json):
