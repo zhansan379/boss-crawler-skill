@@ -95,6 +95,25 @@ def test_fabrication_within_new_denominator():
     assert r['fabrication_within_new'] == 1.0
 
 
+def test_term_stats_per_bucket_detail_and_terms():
+    """规则路也回三桶逐词明细 + 统一 terms list（report 才能逐词着色/列具体词）。"""
+    base = _baseline_keys("精通 Python 与 FastAPI")
+    jd = _baseline_keys("要求会 PyTorch")
+    r = term_stats("精通 Python 与 PyTorch 与 FakeX",
+                   baseline=base, jd_keys=jd)
+    assert r['n_retained'] == 1 and r['n_jd_driven'] == 1 and r['n_unfounded'] == 1
+    # 三桶明细
+    assert ['Python'] == [w['term'] for w in r['retained']]
+    assert ['PyTorch'] == [w['term'] for w in r['jd_driven']]
+    assert ['FakeX'] == [w['term'] for w in r['unfounded']]
+    # 统一 terms list：与 rule/llm 两路都同构，含 bucket + context
+    buckets = {t['bucket'] for t in r['terms']}
+    assert buckets == {'retained', 'jd_driven', 'unfounded'}
+    assert {t['term'] for t in r['terms']} == {'Python', 'PyTorch', 'FakeX'}
+    # 规则路径无 mode/analysis（仅 LLM 有），向后兼容
+    assert r.get('mode') != 'llm' and 'analysis' not in r
+
+
 # ==================== 新增块幻觉 ====================
 
 def test_added_block_unfounded_word():

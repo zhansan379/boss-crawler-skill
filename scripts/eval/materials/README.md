@@ -61,12 +61,14 @@ AI 改完的简历：
 
 还有个次口径 `fabrication_within_new`：只在「新增的词」里算无据比例（分母去掉保留项），想看「它新加的东西有几成是瞎编的」就看这个。
 
-**两种判词来源**（默认 `--offline` 纯规则，边改边调；上正式跑质量评估建议 `--terms-llm`）：
+**两种判词来源（默认走 LLM，`--offline` 才离线）**：
 
-- **纯规则（默认）**：白名单式比对——优化稿的词在「原简历 ∪ JD」里出现过就放，没出现过就报。**离线、确定、不花钱**，但认不出语义等价（同义词、缩写、技能强弱），语言模型能一眼看穿的东西它照报。
-- **LLM 语义分类（`--terms-llm`，推荐）**：让模型同时看「原简历 + 优化稿 + JD」逐词打 `retained / jd_driven / unfounded`，每个词带**理由**；还顺带输出一句「这一岗优化得健康吗」的人话总结。认得出 k8s⇄Kubernetes、能把「了解→精通」这种抬高当问题点出来（理由里单独提示）。**要联网配 key**，结果落盘到 `{run_dir}/eval/term_classify_cache.json` 缓存，跑过一次再跑（含 `--offline`）直接命中，不重复烧钱；没缓存的岗自动回退规则，报告里那岗标「规则分类」照出不崩。
+- **LLM 语义分类（默认）**：模型同时看「原简历 + 优化稿 + JD」逐词打 `retained / jd_driven / unfounded`，每个词带**理由**，还顺带输出一句「这一岗优化得健康吗」的人话总结。认得出 k8s⇄Kubernetes、能把「了解→精通」这种抬高当问题点出来（理由里单独提示）。**要联网配 key**；结果落盘到 `{run_dir}/eval/term_classify_cache.json` 缓存，跑过一次再跑（含 `--offline`）直接命中，不重复烧钱——从头到尾的默认都是这个（`--terms-llm` 只是显式重申，实际已是默认）。没配 key 或没缓存的岗自动回退规则，报告里那岗标「规则分类」照出不崩。
+- **纯规则（`--offline` / 无缓存兜底）**：白名单式比对——优化稿的词在「原简历 ∪ JD」里出现过就放，没出现过就报。**离线、确定、不花钱**，但认不出语义等价（同义词、缩写、技能强弱），语言模型能一眼看穿的东西它照报。只在显式 `--offline` 或 LLM 不可用时出现。
 
-报告里的「优化前 vs 优化后 → 逐词对照 → LLM 分类」折叠面板：左栏原简历、右栏优化稿，每个术语按来路着色，**悬停看理由**，面板顶部是模型的整岗点评；规则来源则纯文本对照、右上角标「规则分类」。
+不管哪路，报告里都能看到具体词，不只比例：
+- **术语堆叠条**下方每 bucket 一行**具体术语标签**（🟩保留 / 🟦岗位驱动 / 🟥无据各一行，词直接列出来）。
+- **「优化前 vs 优化后」折叠面板**：左原简历、右优化稿，**每个术语按来路着色**（规则、LLM 都着）；**悬停看理由**（LLM 是模型给的 reason，规则是那词所在的上下文）；LLM 在面板顶部多一句整岗点评，右上角标「LLM 语义分类」vs「规则分类」。
 
 ### 3. 新增块检查 —— 有没有凭空造数字
 
@@ -115,7 +117,7 @@ diff 出所有「新增的整段」，逐段查两件事：
 
 ### 跑法一：只评估已经生成好的材料（默认，不花钱）
 
-run_dir 里已经跑过 `gen_materials`、`materials/` 目录有东西了，就直接评。**六维指标这五维（字符/新增块/招呼语/章节/客观性）永远离线本——只读文件 + 算数**；只有你可选的增强项会联网：`--terms-llm`（术语语义分类）和 `--llm-recommend`（整份点评）。这两个都用磁盘缓存，跑过一次后 `--offline` 也会直接命中缓存不触网；没缓存就回退规则/跳过，不挡主流程。
+run_dir 里已经跑过 `gen_materials`、`materials/` 目录有东西了，就直接评。**六维指标这五维（字符/新增块/招呼语/章节/客观性）永远离线本——只读文件 + 算数**。术语三分类**默认走 LLM（联网配 key，有磁盘缓存）**，`--llm-recommend`（整份点评）也是可选的联网项。只有显式 `--offline` 才会全程不触网：术语分类降级为「只读缓存，没缓存回退规则」、点评跳过；六维那五维无论哪种都离线。
 
 ### 跑法二：`--generate` 先生成再评估
 
@@ -135,38 +137,38 @@ python scripts/eval/materials/evaluate_materials.py <run_dir> \
     [--resume FILE] \
     [--jobs-existing | --jobs-csv F | --jobs-ai N [--jobs-ai-spec TEXT]] \
     [--generate][--offline][--stub-registry PATH] \
-    [--llm-recommend][--terms-llm][--force-llm-terms][--no-subjective] \
+    [--llm-recommend][--force-llm-terms][--no-subjective] \
     [--out-dir D][--workers N]
 ```
 
-**第一次上手，先跑这行**（全离线、不花钱，几秒出报告）：
+**第一次上手，先跑这行**（加 `--offline` 才是全程零成本、几秒出报告；术语分类回退规则/缓存）：
 
 ```bash
-python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing
+python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing --offline
 ```
 
 - `<run_dir>` 是你跑爬虫的工作目录。缺 `state/` 会自动搭，**不会覆盖既有数据**。
 - `--resume FILE` 指定简历（md/txt），会写成 `state/resume_text.txt`；不给就复用既有的。**没有简历文本就没法评**（原简历是基准），会直接退 1。
+- 缺省命令（不带 `--offline`）术语分类走 **LLM**（联网配 key，结果缓存）——这是默认行为，不用加 flag。
 
 **常见组合：**
 
 ```bash
-# 1) 离线评估既有产物 —— 最常用，零成本
+# 1) 默认 —— 术语三分类走 LLM 语义判词（联网、带缓存），越跑越快
 python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing
 
-# 2) 干净对照组 —— stub 生成 + 评估，验证评估器本身没坏（幻觉应≈0）
+# 2) 全程离线 —— 零成本，术语分类读缓存/规则兜底；也可当干净对照组基准
+python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing --offline
+
+# 3) 干净对照组 —— stub 生成 + 评估，验证评估器本身没坏（幻觉应≈0）
 python scripts/eval/materials/evaluate_materials.py <run_dir> \
     --resume <path>/简历.md --jobs-csv <path>/jobs.csv \
     --generate --offline --stub-registry /tmp/stub.json
 
-# 3) 真调全量 —— AI 造 8 个岗 + 真生成 + LLM 综合点评（花钱，测生产链路）
+# 4) 真调全量 —— AI 造 8 个岗 + 真生成 + LLM 综合点评（花钱，测生产链路）
 python scripts/eval/materials/evaluate_materials.py <run_dir> \
     --resume <path>/简历.md --jobs-ai 8 --generate --llm-recommend -w 4
-
-# 4) 术语三分类收 LLM（推荐上正式评估用）—— 语义判词 + 对照面板，配有磁盘缓存
-python scripts/eval/materials/evaluate_materials.py <run_dir> \
-    --jobs-existing --generate --terms-llm
-#    重复跑 → 命中缓存不重新调模型；--force-llm-terms 强刷缓存
+#    分类缓存重复跑直接命中不重调模型；--force-llm-terms 强刷缓存
 ```
 
 **退出码扫一眼就知道咋回事：**
@@ -181,8 +183,8 @@ python scripts/eval/materials/evaluate_materials.py <run_dir> \
 产物在 `{run_dir}/eval/`：`report.html` + `eval.json`。HTML 里有：
 
 - **6 张 KPI 卡**：平均无据术语、岗位驱动新增、原文保留、章节缺失、前 15 字客套、编造到岗承诺。扫一眼定性。
-- **术语堆叠条**：每个岗一行三色条（🟩保留 / 🟦岗位驱动 / 🟥无据），一眼看出哪个岗被编得最多。
-- **优化前 vs 优化后 · 逐词对照**：每岗一个折叠面板，左栏原简历、右栏优化稿。加 `--terms-llm` 时右栏每个术语按来路着色、**悬停看模型给的理由**，顶部是这一岗的整句点评；默认（规则）则纯文本对照、标「规则分类」。
+- **术语堆叠条**：每个岗一行三色条（🟩保留 / 🟦岗位驱动 / 🟥无据）+ 三行**具体术语标签**，一眼看出哪个岗被编得最多、具体编了哪些词。
+- **优化前 vs 优化后 · 逐词对照**：每岗一个折叠面板，左栏原简历、右栏优化稿，**每个术语按来路着色**（规则、LLM 都着）、**悬停看理由**（LLM 给模型 reason，规则给那词的上下文），顶部是这一岗的整句点评（仅 LLM），右上角标「LLM 语义分类」vs「规则分类」。
 - **字符 diff 表**：逐岗的删除% / 新增% / 原文覆盖% / 字数变化。
 - **无据术语表**：每个凭空词 + **它出现的上下文**。这是最该逐条看的一块。
 - **新增块表**：疑似编造的新增片段（标了「人工复核」）。

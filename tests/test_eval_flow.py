@@ -207,6 +207,11 @@ def test_report_html_blocks(tmp_path):
     assert '无据术语逐条' in html
     assert '提示词优化建议' in html
     assert 'PyTorch' in html
+    # 规则路径也逐词着色（对照面板） + 堆叠条给具体术语标签，不只比例
+    assert 'class="tterm' in html
+    assert 'class="chip' in html
+    assert '规则分类' in html
+    assert '&amp;amp;lt;span' not in html
 
 
 # ==================== --terms-llm：分类器接入 + 对照面板 ====================

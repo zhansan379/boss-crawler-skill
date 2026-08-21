@@ -82,7 +82,8 @@ def _highlight_terms(src, terms):
             continue
         css = _BUCKET_CSS.get(t.get('bucket'), '#999')
         label = _BUCKET_LABEL.get(t.get('bucket'), t.get('bucket', '?'))
-        reason = t.get('reason') or ''
+        # 悬停说明：LLM 给 reason（带理由），规则路没有 reason 就退到 context（那词在哪句）
+        reason = t.get('reason') or t.get('context') or ''
         low_tok, n = tok.lower(), len(tok)
         o = 0
         while True:
@@ -158,6 +159,17 @@ def render_html(recommend_result, jobs_view, meta=None):
         for key, val, cls, desc in kpi_spec)
 
     # ── 术语堆叠条 ──
+    def _chips(lst, color, label):
+        """某一 bucket 的具体术语标签（不只看比例）。"""
+        if not lst:
+            return ''
+        words = ''.join(
+            '<span class="chip" style="color:%s;border-color:%s">%s</span>'
+            % (color, color, _esc(w.get('term')))
+            for w in lst)
+        return '<div class="chips"><b class="chk" style="color:%s">%s</b>%s</div>' \
+               % (color, label, words)
+
     def term_bar(j):
         m = j.get('metrics', {}).get('terms', {}) if j.get('metrics') else {}
         n = m.get('n_opt', 0)
@@ -170,9 +182,13 @@ def render_html(recommend_result, jobs_view, meta=None):
                '<div style="width:%.1f%%;background:#3b82f6" title="岗位驱动 %d"></div>'
                '<div style="width:%.1f%%;background:#e5484d" title="无据 %d"></div>'
                % (r / n * 100, r, d / n * 100, d, u / n * 100, u))
-        return ('<div class="row"><span class="n">%s #%s %s</span><span class="bar">%s</span>'
+        head = ('<div class="row"><span class="n">%s #%s %s</span><span class="bar">%s</span>'
                 '<span class="ratio">%d/%d/%d</span></div>'
                 % (tag, j.get('index'), j.get('company'), seg, r, d, u))
+        detail = (_chips(m.get('retained'), '#25a06c', '保留')
+                  + _chips(m.get('jd_driven'), '#3b82f6', '岗位驱动')
+                  + _chips(m.get('unfounded'), '#e5484d', '无据'))
+        return head + detail if detail else head
 
     term_bars = '\n'.join(term_bar(j) for j in jobs_view) or '<p>无可用岗位</p>'
 
@@ -188,15 +204,14 @@ def render_html(recommend_result, jobs_view, meta=None):
         terms = m.get('terms') if isinstance(m, dict) else None
         analysis = (m.get('analysis') or '') if isinstance(m, dict) else ''
 
-        if mode == 'llm' and isinstance(terms, list):
+        # rule/llm 都有统一 terms list（含 bucket）→ 都逐词着色；缺明细才纯文本
+        if isinstance(terms, list) and terms:
             hl_opt = _highlight_terms(opt, terms)
-            opt_header = '优化后 · LLM 语义分类'
         else:
-            hl_opt = None
-            opt_header = '优化后 · 规则分类'
+            hl_opt = _esc(opt or '（无产物）')
+        opt_header = '优化后 · LLM 语义分类' if mode == 'llm' else '优化后 · 规则分类'
         opt_col = ('<div class="cmp-col opt"><h4>%s</h4><pre>%s</pre></div>'
-                   % (opt_header,
-                      hl_opt if mode == 'llm' else _esc(opt or '（无产物）')))
+                   % (opt_header, hl_opt))
         base_col = ('<div class="cmp-col base"><h4>优化前（原简历）</h4>'
                     '<pre>%s</pre></div>' % _esc(base or '（无基准文本）'))
         ana = ('<p class="cmp-ana">LLM 点评：%s</p>' % _esc(analysis)
@@ -375,6 +390,8 @@ button{background:var(--card);color:var(--fg);border:1px solid var(--line);borde
 .row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--hl)}.row .n{min-width:190px;font-size:13px}
 .bar{flex:1;display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--hl);min-width:120px}.bar>div{height:100%%}
 .ratio{min-width:86px;text-align:right;color:var(--muted);font-size:12px}.empty{color:var(--muted);font-size:12px}
+.chips{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:2px 0 6px;font-size:12px}
+.chips .chk{min-width:52px;font-weight:600}.chip{display:inline-block;border:1px solid;border-radius:10px;padding:0 8px;background:var(--card)}
 table{width:100%%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--hl)}th{color:var(--muted);font-weight:600}
 code{background:var(--hl);border:1px solid var(--line);border-radius:5px;padding:0 5px;font-size:12px}.good{color:var(--good)}
 .gc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0;max-width:620px}

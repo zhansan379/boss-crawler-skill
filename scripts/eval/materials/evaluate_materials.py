@@ -368,7 +368,7 @@ def main():
     ap.add_argument('--stub-registry', help='stub 生成的产物 registry 落盘路径（可回放）')
     ap.add_argument('--llm-recommend', action='store_true', help='额外调模型做综合点评（需联网，避开 offline）')
     ap.add_argument('--terms-llm', action='store_true',
-                    help='术语三分类收 LLM 语义判断（缓存优先；需联网/配 key，倒回规则兜底）')
+                    help='（已默认）术语分类走 LLM 语义判断，仅 --offline 才离线规则/缓存')
     ap.add_argument('--force-llm-terms', action='store_true',
                     help='忽略术语分类缓存，强制重新调 LLM 分类')
     ap.add_argument('--no-subjective', action='store_true', help='关闭客观性(夸大)启发维度')
@@ -419,37 +419,40 @@ def main():
             run.save(args.stub_registry)
             print('✅ stub registry → %s' % args.stub_registry)
 
-    # 4) 术语分类（LLM，缓存优先）
-    #    - --terms-llm 或 --force-llm-terms：调分类器（联网），写缓存；force 忽略缓存。
-    #    - --offline：只读已有缓存，不回退联网；没缓存那几岗走规则兜底（报里标 rule）。
+    # 4) 术语分类。默认走 LLM 语义判断（联网、缓存优先）——「要 AI 判词」是常态；
+    #    只有显式 --offline 才不强求联网：只读已有缓存，没缓存那几岗回退规则（报里标 rule）。
+    #    --force-llm-terms 忽略缓存强刷（仅联网）。
     classified = None
-    if args.terms_llm or args.force_llm_terms or args.offline:
-        from eval.materials.terms_llm import classify_all
-        from gen_materials import build_resume_summary
-        opt_by_index = {}
-        for i in range(1, len(jobs) + 1):
-            rp = _find(run_dir, 'resume', i)
-            if rp:
-                with open(rp, 'r', encoding='utf-8') as _f:
-                    opt_by_index[i] = ((json.load(_f) or {})
-                                       .get('optimized_resume') or '')
-        if args.terms_llm or args.force_llm_terms:
-            from llm import resolve, ConfigError
-            try:
-                cfg = resolve(stage='eval_terms')
-            except ConfigError as exc:
-                print('❌ 术语分类配置错误：\n%s' % exc)
-                return 1
+    from eval.materials.terms_llm import classify_all
+    from gen_materials import build_resume_summary
+    opt_by_index = {}
+    for i in range(1, len(jobs) + 1):
+        rp = _find(run_dir, 'resume', i)
+        if rp:
+            with open(rp, 'r', encoding='utf-8') as _f:
+                opt_by_index[i] = ((json.load(_f) or {})
+                                   .get('optimized_resume') or '')
+    if args.force_llm_terms or not args.offline:
+        from llm import resolve, ConfigError
+        try:
+            cfg = resolve(stage='eval_terms')
+        except ConfigError as exc:                 # 没配 key：降级规则，不挡主流程
+            print('⚠ 术语分类模型未配置，本岗回退规则分类：\n%s' % exc)
+            cfg = None
+        if cfg is not None:
             classified = classify_all(jobs, base_text or '', opt_by_index,
                                       cfg=cfg, run_dir=run_dir,
                                       offline=args.offline, force=args.force_llm_terms)
-        else:   # 仅 --offline：读缓存即可
+        else:
             classified = classify_all(jobs, base_text or '', opt_by_index,
                                       run_dir=run_dir, offline=True)
-        n_llm = sum(1 for d in (classified or {}).values()
-                    if (d or {}).get('mode') == 'llm')
-        if n_llm:
-            print('✅ 术语分类：%d/%d 岗走 LLM（缓存优先）' % (n_llm, len(jobs)))
+    else:   # 纯 --offline：只读缓存，不触网
+        classified = classify_all(jobs, base_text or '', opt_by_index,
+                                  run_dir=run_dir, offline=True)
+    n_llm = sum(1 for d in (classified or {}).values()
+                if (d or {}).get('mode') == 'llm')
+    if n_llm:
+        print('✅ 术语分类：%d/%d 岗走 LLM（缓存优先）' % (n_llm, len(jobs)))
 
     # 5) 评估
     jobs_view, missing = evaluate_run(run_dir, jobs, profile, base_text, args,

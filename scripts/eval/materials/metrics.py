@@ -149,17 +149,21 @@ def term_stats(opt_text, baseline, jd_keys):
     """
     tokens = _tokens(opt_text)                 # {归一形: 原文首次写法}
     retained = jd_driven = unfounded = 0
-    unfounded_list = []
+    retained_list, jd_list, unfounded_list, terms = [], [], [], []
     for key, raw in tokens.items():
+        _ct = _context(opt_text, raw, width=42)
         if key in baseline:
             retained += 1
+            retained_list.append({'term': raw, 'context': _ct})
+            terms.append({'term': raw, 'bucket': 'retained', 'context': _ct})
         elif key in jd_keys:
             jd_driven += 1
+            jd_list.append({'term': raw, 'context': _ct})
+            terms.append({'term': raw, 'bucket': 'jd_driven', 'context': _ct})
         else:
             unfounded += 1
-            unfounded_list.append({
-                'term': raw, 'context': _context(opt_text, raw, width=42),
-            })
+            unfounded_list.append({'term': raw, 'context': _ct})
+            terms.append({'term': raw, 'bucket': 'unfounded', 'context': _ct})
     n_opt = len(tokens)
     new_total = (unfounded + jd_driven) or 1
     return {
@@ -172,7 +176,11 @@ def term_stats(opt_text, baseline, jd_keys):
         'hallucination_pct': unfounded / n_opt if n_opt else 0,
         # 次口径：只看「新增」里有多少是无据（排除保留项的分母）
         'fabrication_within_new': unfounded / new_total,
+        # 逐桶明细 + 统一 terms list：规则路也有 bucket，report 才能逐词着色
+        'retained': retained_list,
+        'jd_driven': jd_list,
         'unfounded': unfounded_list,
+        'terms': terms,
     }
 
 
