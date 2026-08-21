@@ -97,7 +97,7 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 - [ ] gate:send  一次 AskUserQuestion → apply.py --yes
 ```
 
-**四个停点。** 路径选择、`infer` 确认（两次打包的 `AskUserQuestion` 调用加一次小小的 `min_count` 后续——当路径 C 复用完整预设时跳过）、`gate:jobs`、`gate:send`。外加一个条件停点：爬取下限，只在池子来得太稀薄时。
+**四个停点。** 路径选择、`infer` 确认（两次打包的 `AskUserQuestion` 调用加一次小小的 `min_count` 后续——当路径 C 复用完整预设时跳过）、`gate:jobs`、`gate:send`。外加两个条件停点：爬取下限（只在池子来得太稀薄时）、`availability`（只在该 run 要 AI 招呼语且到岗三样为 null 时）。
 
 **迷失了位置（例如在上下文压缩之后）？不要重读文档来重建状态。** 问文件系统：
 
@@ -340,6 +340,27 @@ python -c "from resume_matcher.auto_apply import has_wasted_preview; print(has_w
 - 一段重试也失败了的 AI 招呼语 —— 原样保留，且**不会**出现在那行打印里
 
 如果检查失败，说出来并提供重新前置，但**绝不静默改写用户提供的招呼语。**
+
+### availability —— 到岗三样，缺就问（条件停点）
+
+**只有要给「AI 招呼语」送往岗时才走这一步**（`gate:jobs` 里选了 AI 生成招呼语，即默认）；`--greeting-mode default` 和自定义招呼语不消费它，就别问。
+
+到岗三样（可到岗 `can_start` / 可实习时长 `duration` / 每周出勤 `days_per_week`）是 HR 会照此排期入职的**承诺**，招呼语里不许编。`materials` 阶段的 AI 招呼语提示词是**动态组装**的：`profile.basic_info.availability` 有值才把到岗段拼进去，没值整段不出现——所以如果你简历原文没写、parse 又没提出来（三项 null），招呼语就一个都写不了，得靠你问用户补一次真值。
+
+先用 thin 视图读，别 `Read` profile.json：
+
+```bash
+python scripts/utils/read_thin.py <run_dir>/state/profile.json --kind profile
+```
+
+若 `basic_info.availability` 的**三项全为 null/空** → 一次 `AskUserQuestion`（≤4 选项规矩照旧）问可到岗时间 / 可实习时长 / 每周可出勤天数；拿到答案后用 `set_availability.py` 写回 profile（**绝不手改 profile.json**——那是显式 null、get 默认值不生效的坑）：
+
+```bash
+python scripts/stages/set_availability.py <run_dir> \
+    --can-start "随时" --duration "6个月" --days-per-week "5天"
+```
+
+三项任一句都不给就是允许 `materials` 一个到岗段都没有——那是用户自己的选择，尊重它，别再追着问。非 null（简历原文写了，parse 提出来了）→ 这一停点直接跳过，不打扰。
 
 ### materials —— 招呼语 + 优化后简历
 

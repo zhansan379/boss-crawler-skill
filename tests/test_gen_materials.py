@@ -226,6 +226,26 @@ def main():
         check('availability 不是 dict 也不炸',
               GM.format_availability({'basic_info': {'availability': '随时'}}) == '')
 
+        # gen_greeting 必须把 format_availability 的结果动态拼进提示词（到岗动态段）
+        captured = []
+        def _fake_chat(prompt='', **kw):
+            captured.append(prompt)
+            return '负责后端开发，熟悉 FastAPI。方便看一下吗？'
+        _job = {'公司': '某某', '职位': '后端开发', '薪资': '', '经验': '', '学历': '',
+                '技能标签': '', '岗位要求和职责': '熟悉 FastAPI 全栈'}
+        _orig = GM.chat
+        GM.chat = _fake_chat
+        try:
+            GM.gen_greeting(_job, PROFILE, {}, cfg=None, run_dir='.', mode='ai')
+        finally:
+            GM.chat = _orig
+        check('招呼语提示词动态带上到岗段',
+              captured and '我实际的到岗安排（权威来源）' in captured[0],
+              captured[0][:80] if captured else '未调用 chat')
+        check('到岗值进了提示词',
+              captured and '随时' in captured[0] and '5天' in captured[0],
+              captured[0][:80] if captured else '未调用 chat')
+
         # ================================================================
         print('\n=== 4. 优化基底：resume_text.txt > profile 通用稿 ===')
         base_dir = os.path.join(tmp, 'base')

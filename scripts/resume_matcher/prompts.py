@@ -37,10 +37,36 @@ def get_match_analysis_prompt(resume_info: str, job_requirements: str) -> str:
     )
 
 
+_AVAIL_HEADING = '## 我实际的到岗安排'
+
+
+def _strip_avail_section(template: str) -> str:
+    """模板里裁掉「我实际的到岗安排」段（含段头），availability 为空时的动态组装。
+
+    该段以 `## 我实际的到岗安排` 开头、到下一个 `## ` 二级标题为止。裁剪用节名加
+    下一个二级标题做边界，不依赖具体占位文本，模板改措辞也不破。若模板里没有该段
+    （历史上可选段），则原样返回。
+    """
+    lines = template.split('\n')
+    out, in_block = [], False
+    for ln in lines:
+        if ln.strip().startswith(_AVAIL_HEADING):
+            in_block = True
+            continue
+        if in_block:
+            if ln.strip().startswith('## '):      # '### ' 不会被误判（前三个是 ###）
+                in_block = False
+            else:
+                continue
+        out.append(ln)
+    return '\n'.join(out)
+
+
 def get_greeting_prompt(
     job: Dict[str, Any],
     resume: str = '',
     match_reasons: str = '',
+    availability: str = '',
 ) -> str:
     """获取招呼语提示词（gen_materials.py 的 greeting 阶段在用）
 
@@ -49,8 +75,15 @@ def get_greeting_prompt(
 
     resume 直接传完整简历原文，不要先拆成摘要字段 —— 姓名、到岗信息、经验年限、
     学校都由模型从原文自取。模型从这个字段读；这一份的空值说明「无原文」。
+
+    availability 是 `format_availability(profile)` 的结构化「到岗 / 时长 / 每周出勤」
+    文本。**动态组装**：有值才把到岗段拼进提示词；空则整段不出现，提示词里零到岗字样，
+    不给模型留一栏脑补的诱因。空值时自动从模板裁掉该段（无 availability 的历史模板
+    天然兼容）。默认空串 = 不带到岗段，行为不变。
     """
-    template = load_prompt("greeting")
+    template = load_prompt('greeting')
+    if not availability.strip():
+        template = _strip_avail_section(template)
     return template.format(
         company=job.get('公司', '') or '',
         position=job.get('职位', '') or '',
@@ -61,6 +94,7 @@ def get_greeting_prompt(
         jd=(job.get('岗位要求和职责', '') or '')[:1500],
         resume=resume or '（简历原文未提供）',
         match_reasons=match_reasons or '（无）',
+        availability=availability or '',
     )
 
 

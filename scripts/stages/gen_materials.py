@@ -298,10 +298,13 @@ def gen_greeting(job, profile, match, cfg, run_dir, mode, resume=''):
         return generate_greeting(profile=_to_profile_obj(profile), job=job), False
 
     # 直接喂完整简历原文，不拆字段 —— 姓名、到岗信息、经验年限都由模型从原文自取。
+    # availability（basic_info.availability 的结构化到岗文本）单独走 get_greeting_prompt
+    # 的**动态组装**：有值才拼到岗段，空则整段不出现，不给模型脑补到岗承诺的诱因。
     prompt = get_greeting_prompt(
         job,
         resume=resume,
         match_reasons='；'.join(match.get('match_reasons') or []) or '',
+        availability=format_availability(profile),
     )
     text = chat(prompt, stage='greeting', run_dir=run_dir, cfg=cfg).strip()
 

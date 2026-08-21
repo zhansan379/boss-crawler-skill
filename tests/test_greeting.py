@@ -151,16 +151,40 @@ def test_closing_and_no_hardcoded_domain():
 
 # ── [5] 提示词模板 ─────────────────────────────────────────────────
 def test_prompt_template():
-    print('\n[5] greeting.st 能加载并填满')
+    print('\n[5] greeting.st 能加载并填满（availability 有值走动态段）')
 
-    prompt = get_greeting_prompt(JOB, name='张三', resume_summary='Python/Django 三年',
-                                 match_reasons='技能命中 3 项')
+    prompt = get_greeting_prompt(JOB, resume='张三 男 应届 复旦硕士',
+                                 match_reasons='技能命中 3 项',
+                                 availability='可到岗：随时、每周出勤：5天')
     check('模板渲染出内容', len(prompt) > 500, '%d 字符' % len(prompt))
     check('岗位信息填进去了', '某某科技' in prompt and 'Python后端开发工程师' in prompt)
     check('没有漏填的占位符', '{' not in prompt and '}' not in prompt)
-    check('availability 缺省填「简历未提供」而不是空串', '简历未提供' in prompt)
+    check('availability 值进了到岗段', '我实际的到岗安排' in prompt and '随时' in prompt and '5天' in prompt)
     for rule in ('15 个字', '不许编造', '校招'):
         check('模板包含规则「%s」' % rule, rule in prompt)
+
+
+# ── [6] availability 动态组装 ──────────────────────────────────────
+def test_availability_dynamic_assembly():
+    print('\n[6] availability 动态组装：只有存在数据才带日期相关内容')
+
+    _RESUME = '张三 男 应届 复旦硕士'
+    AVAIL_FILL = '可到岗：2026-09-01、每周出勤：3天'   # 独特值，模板「前15字公式」例子里绝不出现
+    p_empty = get_greeting_prompt(JOB, resume=_RESUME, match_reasons='技能命中 3 项',
+                                  availability='')
+    check('空 availability → 到岗数据段头（权威来源）不出现',
+          '我实际的到岗安排（权威来源）' not in p_empty)
+    check('空 availability → 到岗数据段措辞不出现', '栏里给了值就照写' not in p_empty)
+    check('空 availability → 到岗值不泄露进提示词', '2026-09-01' not in p_empty)
+    check('空 availability → 防编造规则仍保留', '不许编造的三件事' in p_empty)
+
+    p_filled = get_greeting_prompt(JOB, resume=_RESUME, match_reasons='技能命中 3 项',
+                                   availability=AVAIL_FILL)
+    check('有 availability → 到岗段头出现', '我实际的到岗安排（权威来源）' in p_filled)
+    check('有 availability → 值进提示词', '2026-09-01' in p_filled and '3天' in p_filled)
+    check('两种情况都无残留占位',
+          '{' not in p_empty and '}' not in p_empty
+          and '{' not in p_filled and '}' not in p_filled)
 
 
 def main():
@@ -172,6 +196,7 @@ def main():
     test_availability_used_when_given()
     test_closing_and_no_hardcoded_domain()
     test_prompt_template()
+    test_availability_dynamic_assembly()
 
     print('\n' + '=' * 60)
     if FAILURES:
