@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""质量评估的**纯函数层**：六维指标，输入文本/集合，输出结构化数字与明细。
+"""质量评估的**纯函数层**：五维指标，输入文本/集合，输出结构化数字与明细。
 
 刻意不 import llm，也刻意不触网 —— 评估只有「读已生成产物 + 算数」两件事，
 任何维度都不需要再问模型（可选 `--llm-recommend` 的综合点评单独住在 recommend.py）。
@@ -184,53 +184,7 @@ def term_stats(opt_text, baseline, jd_keys):
     }
 
 
-# ==================== 3) 新增块幻觉 ====================
-
-def _added_segments(base_text, opt_text):
-    """diff 出所有「新增一段」（insert + replace 的 b 侧），去掉空白返回原文片段。"""
-    a, b = normalize_chars(base_text), normalize_chars(opt_text)
-    # 在归一字符串上定位可读片段会丢原文，退回按空白切分后做整句级 ——
-    # 简化：直接返回 diff 出来的新增连续段（归一后），足够判断“有没有引入新词/新数字”。
-    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
-    segs = []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag in ('insert', 'replace'):
-            segs.append(b[j1:j2])
-    return segs
-
-
-def added_block_stats(base_text, opt_text, baseline, jd_keys):
-    """新增段落里，含「无据术语」或「原文本不存在的新数字」的块 = 编造高风险块。
-
-    数字判定：块里每个数字/百分号，如果不在 base 里出现过，就算一个凭空量化成果。
-    这是规则启发，标「人工复核」，不是结论。
-    """
-    base_flat = normalize_chars(base_text)
-    base_nums = set(_NUM.findall(base_flat))
-    segments = _added_segments(base_text, opt_text)
-    fabricated_blocks, blocks_with_num = [], []
-    for seg in segments:
-        if not seg:
-            continue
-        seg_keys = _baseline_keys(seg)
-        has_unfounded = any(k not in baseline and k not in jd_keys
-                            for k in seg_keys if len(k) >= 2)
-        new_nums = [m for m in _NUM.findall(seg) if m not in base_nums]
-        if has_unfounded or new_nums:
-            fabricated_blocks.append({'segment': seg, 'unfounded': has_unfounded,
-                                      'new_numbers': new_nums})
-        if new_nums:
-            blocks_with_num.append(seg)
-    total = len([s for s in segments if s]) or 1
-    return {
-        'added_blocks_total': len([s for s in segments if s]),
-        'fabricated_blocks': fabricated_blocks,
-        'added_block_fabrication_pct': len(fabricated_blocks) / total,
-        'added_blocks_with_new_number': len(blocks_with_num),
-    }
-
-
-# ==================== 4) 招呼语质量 ====================
+# ==================== 3) 招呼语质量 ====================
 
 _PROMISE_RE = re.compile(
     r'(?:可?到岗|可实习|每周|每工作日|[周][一二三四五六日]\s*\d*\s*天|'
@@ -262,7 +216,7 @@ def greeting_stats(greeting_text, baseline, jd_keys, availability_text):
     }
 
 
-# ==================== 5) 章节保真 ====================
+# ==================== 4) 章节保真 ====================
 
 def chapter_stats(base_text, opt_text):
     """原简历实有、优化后缺失的章节（= 删除内容）。"""
@@ -275,7 +229,7 @@ def chapter_stats(base_text, opt_text):
     }
 
 
-# ==================== 6) 客观性 / 夸大（启发，非结论） ====================
+# ==================== 5) 客观性 / 夸大（启发，非结论） ====================
 # verify 明确抓不到这层，这里也只给「⚠ 提示」：能力等级副词升级 + 新增绝对表述。
 
 _UPGRADE_WORDS = ('精通', '熟练掌握', '深入掌握', '扎实掌握', '熟练掌握并')
@@ -320,13 +274,13 @@ def subjective_stats(base_text, opt_text, enabled=True):
 def evaluate_job(*, base_text, baseline, jd_keys, greeting_text,
                  optimized_resume, availability_text='', subjective=True,
                  terms_source='rule', classified_terms=None):
-    """一个岗位的完整六维评估。返回可直接进 JSON 的 dict。
+    """一个岗位的完整五维评估。返回可直接进 JSON 的 dict。
 
     terms_source / classified_terms：
       - 'rule'：用纯规则白名单（term_stats）三分类，离线、确定性（默认）。
       - 'llm'：调用方（evaluate_materials）已用 eval.materials.terms_llm 分类好
         （缓存优先），本函数直接采用 classified_terms 作 terms dict，不现场跑规则。
-    除 terms 外的五维（char_diff / added_blocks / greeting / chapters / subjective）
+    除 terms 外的四维（char_diff / greeting / chapters / subjective）
     **始终离线纯算数**，两种 source 共用同一套输出字段，下游 aggregate/report 无需感知来源。
     """
     opt = optimized_resume or ''
@@ -338,7 +292,6 @@ def evaluate_job(*, base_text, baseline, jd_keys, greeting_text,
     return {
         'char_diff': char_diff(base_text, opt),
         'terms': terms,
-        'added_blocks': added_block_stats(base_text, opt, baseline, jd_keys),
         'greeting': greeting_stats(greeting_text or '', baseline, jd_keys,
                                    availability_text),
         'chapters': chapter_stats(base_text, opt),

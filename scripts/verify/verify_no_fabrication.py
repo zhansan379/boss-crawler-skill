@@ -352,7 +352,7 @@ def report_is_stale(run_dir):
 # ==================== 本地取词（仅供 eval/materials 评估工具用，verify 主流程不用） ====================
 
 # verify 闸门（方案一）已弃用本地折词，改纯 LLM 全文判定。但 offline 评估工具
-# eval/materials/metrics.py（term_stats / added_block_stats / greeting_stats）和
+# eval/materials/metrics.py（term_stats / greeting_stats）和
 # eval/materials/evaluate_materials.py 要靠**词表差异**量化「优化简历/招呼语新增了哪些原文没有的
 # 技术词」当 KPI —— 那是跑分需要，不是投递闸门；拆词在那里的作用是精确计数。
 # 因此以下函数保留给它们 import，verify 的 main/judge 路径一概不依赖（可参考头部注释）。

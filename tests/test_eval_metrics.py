@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8', errors='replace')
 
 from eval.materials.metrics import (                            # noqa: E402
-    char_diff, term_stats, added_block_stats, greeting_stats,
+    char_diff, term_stats, greeting_stats,
     chapter_stats, missing_chapters, subjective_stats, evaluate_job,
     preview, has_wasted_preview,
 )
@@ -114,25 +114,6 @@ def test_term_stats_per_bucket_detail_and_terms():
     assert r.get('mode') != 'llm' and 'analysis' not in r
 
 
-# ==================== 新增块幻觉 ====================
-
-def test_added_block_unfounded_word():
-    r = added_block_stats("我会写 Python", "我会写 Python，还熟练做 Kubernetes 集群压测",
-                          baseline=_baseline_keys("我会写 Python"), jd_keys=set())
-    assert r['added_blocks_total'] >= 1
-    assert r['added_block_fabrication_pct'] > 0
-    assert any(b['unfounded'] for b in r['fabricated_blocks'])
-
-
-def test_added_block_new_number():
-    # 「提升 60%」原文没有这个数字 → 新数字命中
-    r = added_block_stats("性能做了优化",
-                          "性能做了优化，吞吐提升 60%",
-                          baseline=_baseline_keys("性能做了优化"), jd_keys=set())
-    assert r['added_blocks_with_new_number'] >= 1
-    assert any(b['new_numbers'] for b in r['fabricated_blocks'])
-
-
 # ==================== 招呼语质量 ====================
 
 def test_greeting_wasted_preview():
@@ -198,7 +179,7 @@ def test_evaluate_job_shape():
         optimized_resume="## 个人简介\n精通 Python 做后端并精通 Kubernetes。",
         availability_text='',
     )
-    for key in ('char_diff', 'terms', 'added_blocks', 'greeting', 'chapters', 'subjective'):
+    for key in ('char_diff', 'terms', 'greeting', 'chapters', 'subjective'):
         assert key in r
     assert r['terms']['n_unfounded'] >= 1          # Kubernetes 无据
 
@@ -229,7 +210,7 @@ def test_evaluate_job_terms_source_llm_uses_classified():
     # 分类器把 PyTorch 判为 jd_driven —— 规则白名单也会判成 jd_driven，但模式标记要生效
     assert r['terms']['terms'][1]['bucket'] == 'jd_driven'
     # 其他五维照常离线算数
-    for key in ('char_diff', 'added_blocks', 'greeting', 'chapters', 'subjective'):
+    for key in ('char_diff', 'greeting', 'chapters', 'subjective'):
         assert key in r
 
 

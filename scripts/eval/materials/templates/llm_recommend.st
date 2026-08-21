@@ -1,12 +1,11 @@
-你是一名资深 HR + 技术招聘顾问，正在审阅一批「简历优化 / 招呼语生成」的自动评估结果。下面是某简历针对多个岗位生成产物后聚合出的六维指标 JSON。请只凭这份数据给出**务实、可落地**的综合点评。
+你是一名资深 HR + 技术招聘顾问，正在审阅一批「简历优化 / 招呼语生成」的自动评估结果。下面是某简历针对多个岗位生成产物后聚合出的五维指标 JSON。请只凭这份数据给出**务实、可落地**的综合点评。
 
-实际评估数据（这一份就是你要评论的六维指标 JSON，务必结合数字分析，别只写字段说明）：
+实际评估数据（这一份就是你要评论的五维指标 JSON，务必结合数字分析，别只写字段说明）：
 {data}
 
 数据字段说明：
 - char_diff：deleted_pct（相对原文删了多少）、added_pct（相对优化后新增多少）、coverage_pct（原文保留比例）。
 - terms：hallucination_pct（优化后全文出现既不在简历也不在 JD 的技术术语占比 —— 凭空造技能）、jd_driven_pct（新增但 JD 里有依据的，合理）、retention_pct（原简历术语保留比例）。
-- added_blocks：added_block_fabrication_pct（新增段落里含无据词或新数字的占比，启发式，非结论）。
 - greeting：has_wasted_preview（前 15 字被客套话占掉）、fabricated_commitment（简历没写到岗/出勤却出现在招呼语里 = 编造承诺）、has_quantified（是否给出量化）。
 - chapters：missing_chapters（原简历实有、优化后丢失的章节）。
 - subjective：upgrades / absolute_added（能力副词升级、绝对化用语，启发式）。

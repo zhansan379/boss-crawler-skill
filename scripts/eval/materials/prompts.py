@@ -39,7 +39,7 @@ def build_gen_jobs_prompt(profile_summary, count, spec=''):
 
 def build_recommend_prompt(aggregate_json):
     """给 LLM 综合点评的 prompt（--llm-recommend）。aggregate_json 是 recommend.py
-    聚合出的六维结果（已序列化成多行 JSON 字符串）。"""
+    聚合出的五维结果（已序列化成多行 JSON 字符串）。"""
     return load_eval_prompt('llm_recommend').format(
         data=aggregate_json,
     )

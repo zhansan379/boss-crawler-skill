@@ -253,18 +253,6 @@ def render_html(recommend_result, jobs_view, meta=None):
                        '<tbody>%s</tbody></table>' % '\n'.join(rows)
                        if rows else '<p class="good">无据术语 0 条 —— 干净。</p>')
 
-    # ── 新增块 ──
-    b_rows = []
-    for j in jobs_view:
-        for b in ((j.get('metrics') or {}).get('added_blocks', {}).get('fabricated_blocks') or []):
-            b_rows.append('<tr><td>#%s %s</td><td>%s</td><td>%s</td></tr>'
-                          % (j.get('index'), j.get('company'),
-                             '无据词+' if b.get('unfounded') else '',
-                             _esc(b.get('segment', ''))[:80]))
-    blocks_table = ('<table><thead><tr><th>岗位</th><th>性质</th><th>新增片段（启发，人工复核）</th></tr>'
-                    '</thead><tbody>%s</tbody></table>' % '\n'.join(b_rows)
-                    if b_rows else '<p class="good">新增段落未发现编造迹象。</p>')
-
     # ── 招呼语卡片 ──
     def greet_card(j):
         g = (j.get('metrics') or {}).get('greeting', {}) if j.get('metrics') else {}
@@ -340,7 +328,7 @@ def render_html(recommend_result, jobs_view, meta=None):
     return _HTML_TEMPLATE % dict(
         kpis=kpis, term_bars=term_bars, compare_cards=compare_cards,
         char_table=char_table,
-        unfounded_table=unfounded_table, blocks_table=blocks_table,
+        unfounded_table=unfounded_table,
         greet_cards=greet_cards, chapters_table=chapters_table,
         subjective_html=subjective_html,
         sugg_html='\n'.join(sugg), llm_html=llm_html,
@@ -428,7 +416,6 @@ details.cmp .bd{vertical-align:middle;margin-left:6px}
 <section class="panel"><h3>字符级 删 / 增 / 覆盖</h3>%(char_table)s</section>
 <section class="panel"><h3>招呼语 preview（HR 只看前 15 字）</h3>%(greet_cards)s</section>
 <section class="panel"><h3>无据术语逐条</h3>%(unfounded_table)s</section>
-<section class="panel"><h3>新增块 · 编造成果迹象（启发，人工复核）</h3>%(blocks_table)s</section>
 <section class="panel"><h3>章节保真（优化简历是否删掉原章节）</h3>%(chapters_table)s</section>
 <section class="panel"><h3>客观性提示（能力升级 / 绝对化，启发）</h3>%(subjective_html)s</section>
 <h3>提示词优化建议</h3>%(sugg_html)s

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""质量评估工具的唯一 CLI 入口 —— 编排「准备 state → 造/取岗位 → 生成材料 → 六维评估 → 报告」。
+"""质量评估工具的唯一 CLI 入口 —— 编排「准备 state → 造/取岗位 → 生成材料 → 五维评估 → 报告」。
 
 一次调用分两段（都可被 --generate / --offline 组合控制）：
 
@@ -246,10 +246,17 @@ def generate_materials(run_dir, jobs, profile, args, offline):
                     greet = f.read()
             records[i] = {'greeting': greet,
                           'resume_md': (data or {}).get('optimized_resume', '') or ''}
+            # 边跑边报进度：每岗完成即打一行（含失败标记），避免长时间静默
+            if g_row and r_row:
+                print('  ✓ 岗位 #%d/%d 材料完成' % (i, len(jobs)), flush=True)
+            elif g_row:
+                print('  ! 岗位 #%d/%d 仅招呼语生成，简历失败' % (i, len(jobs)), flush=True)
+            else:
+                print('  ✗ 岗位 #%d/%d 招呼语与简历均失败' % (i, len(jobs)), flush=True)
     return records
 
 
-# ==================== 4) 六维评估 ====================
+# ==================== 4) 五维评估 ====================
 
 def evaluate_run(run_dir, jobs, profile, base_text, args, classified=None):
     """逐岗评估：读产物（materials/ 或 generate 内存 records 已落盘）→ metrics。
@@ -282,7 +289,7 @@ def evaluate_run(run_dir, jobs, profile, base_text, args, classified=None):
             missing.append(i)
 
         if missing_now:
-            # 无产物：不是「删光原文」，是压根没生成 → 六维不做判定，KPI 聚合自动略过空 metrics
+            # 无产物：不是「删光原文」，是压根没生成 → 五维不做判定，KPI 聚合自动略过空 metrics
             jobs_view.append({
                 'index': i, 'company': job.get('公司', ''),
                 'position': job.get('职位', ''), 'link': job.get('link', ''),
