@@ -44,7 +44,7 @@ sys.path.insert(0, _SCRIPTS)
 from write_application_md import (sanitize, load_jobs, resolve_greeting,
                                   resolve_csv_row, merge, DELIVERY_MD_FILENAME)
 from render_images import parse_only, resolve_name, job_dir_name
-from resume_matcher import profile_path, deliver_dir, apply_log_path
+from resume_matcher import profile_path, deliver_dir, apply_log_path, materials_dir
 
 # 投递入口在**模块层**导入，不在 main() 里 —— 局部 import 会遮蔽模块属性，
 # 让 test_apply_gate.py 换不掉它，于是「验证闸门」的测试反而会真的打开浏览器去投递。
@@ -145,6 +145,30 @@ def find_image(run_dir, job, person, index):
     base = '%s-%s' % (sanitize(person), sanitize(position))
     path = os.path.join(deliver_dir(run_dir), dir_name, base + '.png')
     return path if os.path.exists(path) and os.path.getsize(path) > 0 else None
+
+
+def decision_fallback_image(run_dir, index):
+    """被拒岗位的回退图（materials/decision_{index}.json 的 fallback_image）。
+
+    计划征询里「不用 AI 优化」的岗位，用户可给一张自定义图或原上传简历当附件。
+    该岗位没有 AI 长图（render 已跳过它），投递时从这里取图。已批准岗位此文件缺
+    fallback_image，返回 None，走正常渲染图。
+    """
+    path = os.path.join(materials_dir(run_dir), 'decision_%d.json' % index)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    img = data.get('fallback_image')
+    if not img:
+        return None
+    img = os.path.abspath(img)
+    return img if os.path.exists(img) and os.path.getsize(img) > 0 else None
 
 
 def verify_images(paths):
@@ -323,7 +347,9 @@ def build_plan(run_dir, jobs, indexes, person, want_image, shared_image,
 
         image = None
         if want_image:
-            image = shared_image or find_image(run_dir, job, person, index)
+            # 优先级：--image 整批覆盖 > 该岗位被拒时的回退图 > 渲染出的 AI 长图
+            image = (shared_image or decision_fallback_image(run_dir, index)
+                     or find_image(run_dir, job, person, index))
             if not image:
                 blockers.append(
                     '#%d %s 没有简历图（先跑 render_images.py，或用 --no-image / --image）'

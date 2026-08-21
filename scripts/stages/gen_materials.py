@@ -15,8 +15,14 @@ ShowCV 渲染都按它对齐：
     python scripts/stages/gen_materials.py <run_dir>
     python scripts/stages/gen_materials.py <run_dir> --greeting-mode default   # 不调模型，套模板
     python scripts/stages/gen_materials.py <run_dir> --resume-mode skip        # 只出招呼语
+    python scripts/stages/gen_materials.py <run_dir> --resume-mode plan        # 只出「调整计划」待用户逐点确认
+    python scripts/stages/gen_materials.py <run_dir> --resume-mode apply       # 读已存计划+决策，只出已批准岗位的简历
     python scripts/stages/gen_materials.py <run_dir> --only 1,3,5              # 只补这几个
     python scripts/stages/gen_materials.py <run_dir> --force                   # 覆盖已有产物
+
+同意闸门：`--resume-mode plan` 写 materials/plan_{i}_{公司}.json，用户在
+SKILL.md「计划征询」停点按点确认后，用 scripts/stages/set_plan_decisions.py 写
+materials/decision_{i}.json，再 `--resume-mode apply` 只对已批准岗位出完整简历。
 
 退出码：0 = 需要的产物齐全，1 = 输入缺失/全部失败，3 = 部分失败。
 """
@@ -403,22 +409,17 @@ def _build_chapter_list(plan):
                      for i, c in enumerate(keep, 1))
 
 
-def gen_resume(job, resume_text, match, cfg, run_dir):
-    """一个岗位的优化简历 — 两阶段。
+def gen_plan(job, resume_text, match, cfg, run_dir):
+    """阶段①：只生成「简历调整计划」，不写正文、不落盘。
 
-    阶段①（resume_optimize_plan.st）：生成「调整计划」chapter_plan +
-    optimization_suggestions，并对 chapter_plan 是否覆盖原简历全部实有章节做便宜校验，
-    缺章就在本阶段重试。阶段②（resume_optimize_apply.st）：照计划输出完整简历，再校验
-    optimized_resume 的章节覆盖度，缺章也重试。返回的 JSON 与旧单阶段版形状一致：
-    {optimization_suggestions, optimized_resume, key_changes} —— 下游 render /
-    verify / write_application_md 只按这三个字段对齐，不受两阶段拆分影响。
+    供计划征询停点先给用户过目、按点确认。返回 `{chapter_plan, optimization_suggestions}` 等
+    的 dict；校验与重试语义与合并路径完全一致 —— chapter_plan 必须覆盖原简历全部实有章节。
     """
     jd = (job.get('岗位要求和职责', '') or job.get('技能标签', '') or '')[:2000]
     match_score = match.get('match_score') or 0
     missing_items = '、'.join(match.get('missing_items') or []) or '（无）'
     optimization_points = '、'.join(match.get('optimization_points') or []) or '（无）'
 
-    # ── 阶段①：调整计划（只分析，不重排正文） ────────────────────
     plan_prompt = get_optimize_plan_prompt(
         resume_text=resume_text,
         company=job.get('公司', '') or '',
@@ -446,9 +447,19 @@ def gen_resume(job, resume_text, match, cfg, run_dir):
                            % (_PLAN_RETRY, '、'.join(missing)))
     if plan is None:
         raise LLMError('阶段①（调整计划）无法生成')
+    return plan
 
-    # ── 阶段②：照计划输出完整简历 ──────────────────────────
-    suggestions = plan.get('optimization_suggestions') or {}
+
+def apply_plan(job, resume_text, cfg, run_dir, plan, suggestions=None):
+    """阶段②：照「章节清单 + 已批准的 suggestions」输出完整简历。
+
+    suggestions 是唯一真正驱动正文改写的来源 —— 计划征询停点把它过滤/改写成用户批准后的
+    子集（含用户亲手补的 must_add 真内容）再传进来，被拒绝的条目绝不会到达阶段②。
+    None 时退回计划自带的全量 suggestions（兼容无闸门的合并路径与 eval harness）。
+    """
+    if suggestions is None:
+        suggestions = plan.get('optimization_suggestions') or {}
+    src_chapters = _extract_chapters(resume_text)
     apply_prompt = get_optimize_apply_prompt(
         resume_text=resume_text,
         company=job.get('公司', '') or '',
@@ -479,11 +490,21 @@ def gen_resume(job, resume_text, match, cfg, run_dir):
     if body.strip().startswith('```'):
         data['optimized_resume'] = strip_fence(body).strip()
 
-    # 组装最终产物，保持下游契约：optimization_suggestions 来自阶段①
+    # 组装最终产物，保持下游契约：optimization_suggestions = 实际喂给阶段②的那份（批准/过滤后）
     data['optimization_suggestions'] = suggestions
     if not isinstance(data.get('key_changes'), list):
         data['key_changes'] = plan.get('key_changes') or []
     return data
+
+
+def gen_resume(job, resume_text, match, cfg, run_dir):
+    """一个岗位的优化简历 —— 两阶段合并执行（默认/无闸门路径）。
+
+    组合 gen_plan + apply_plan（suggestions 用计划自带的全量），即原有的原子语义。
+    eval harness（evaluate_materials._gm）真调用本函数，签名与产物结构保持不变。
+    """
+    plan = gen_plan(job, resume_text, match, cfg, run_dir)
+    return apply_plan(job, resume_text, cfg, run_dir, plan)
 
 
 def _to_profile_obj(profile):
@@ -531,6 +552,63 @@ def _write_atomic(path, text):
     os.replace(tmp, path)
 
 
+# ==================== 同意闸门：计划 / 决策文件 ====================
+
+# 计划征询停点（SKILL.md「计划征询」）：
+#   · --resume-mode plan   → 只跑阶段①，写 materials/plan_{i}_{公司}.json
+#   · --resume-mode apply  → 读 materials/plan_{i}_{公司}.json + decision_{i}.json，
+#                            只对用户已批准的岗位跑阶段②，写 resume_{i}_{公司}.json
+# decision_{i}.json 由 scripts/stages/set_plan_decisions.py 原子落盘（主循环绝不手编），
+# 其结构见该脚本 docstring。{i} 仍是 qualified_jobs.json 里的 1-based 序号。
+DECISION_FILE = 'decision_%d.json'
+
+
+def plan_file_path(gen_dir, index, company):
+    return os.path.join(gen_dir, 'plan_%d_%s.json' % (index, company))
+
+
+def decision_path(gen_dir, index):
+    return os.path.join(gen_dir, DECISION_FILE % index)
+
+
+def _artifact_prefix(kind):
+    """kind → 产物文件名前缀。greeting/plan/resume 各自独立；apply 的产物落成 resume。"""
+    return {'greeting': 'greeting', 'plan': 'plan', 'resume': 'resume',
+            'apply': 'resume'}.get(kind, kind)
+
+
+def load_decision(run_dir, index):
+    """读 materials/decision_{i}.json；不存在/坏/非对象都返回 None（= 尚未征询或被拒）。"""
+    path = decision_path(os.path.join(run_dir, GEN_DIR), index)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def apply_from_decision(job, resume_text, cfg, run_dir, index, company):
+    """应用阶段：按已存计划 + 用户决策调用阶段②，返回最终 3 键产物 dict。
+
+    决策未批准（reject / 尚未落盘）时不生成简历 —— 返回 None，调用方不回写文件，
+    该岗位走回退（自定义图片 / 原简历），招呼语不受影响。
+    """
+    decision = load_decision(run_dir, index)
+    if not decision or not decision.get('approved'):
+        return None
+    p_path = plan_file_path(os.path.join(run_dir, GEN_DIR), index, company)
+    if not os.path.exists(p_path):
+        raise LLMError('应用阶段缺已存计划文件：%s（先跑 --resume-mode plan）' % p_path)
+    with open(p_path, 'r', encoding='utf-8') as f:
+        plan = json.load(f)
+    suggestions = decision.get('suggestions')
+    return apply_plan(job, resume_text, cfg, run_dir, plan,
+                      suggestions if isinstance(suggestions, dict) else None)
+
+
 # ==================== 主流程 ====================
 
 # --only 的解析挪到了 check_artifacts.py（那边没有依赖）。这里 re-export，让
@@ -549,8 +627,9 @@ def main():
     ap.add_argument('run_dir', help='运行目录（含 qualified_jobs.json 与 profile.json）')
     ap.add_argument('--greeting-mode', choices=('ai', 'default', 'skip'), default='ai',
                     help='ai=调模型（默认）；default=套规则模板不花钱；skip=不生成')
-    ap.add_argument('--resume-mode', choices=('ai', 'skip'), default='ai',
-                    help='ai=调模型优化简历（默认）；skip=不生成')
+    ap.add_argument('--resume-mode', choices=('ai', 'plan', 'apply', 'skip'), default='ai',
+                    help='ai=两阶段合并出完整简历（默认）；plan=只出调整计划待用户确认；'
+                         'apply=读已存计划+决策只出已批准岗位；skip=不生成')
     ap.add_argument('--resume-text', help='优化基底文件，默认用 <run_dir>/state/resume_text.txt')
     ap.add_argument('--allow-generic-base', action='store_true',
                     help='state/resume_text.txt 缺失时，允许用 profile 重述的通用稿作 AI 优化基底（默认拒绝）')
@@ -594,8 +673,9 @@ def main():
     kinds = []
     if args.greeting_mode != 'skip':
         kinds.append('greeting')
-    if args.resume_mode != 'skip':
-        kinds.append('resume')
+    if args.resume_mode in ('ai', 'plan', 'apply'):
+        # ai=int：合并两阶段（plan→apply 一气呵成）；plan/apply 是同意闸门的两半。
+        kinds.append({'ai': 'resume', 'plan': 'plan', 'apply': 'apply'}[args.resume_mode])
     if not kinds:
         print('❌ --greeting-mode 与 --resume-mode 都是 skip，没有要做的事')
         return 1
@@ -606,7 +686,7 @@ def main():
         print('❌ %s' % exc)
         return 1
 
-    needs_llm = args.greeting_mode == 'ai' or args.resume_mode == 'ai'
+    needs_llm = args.greeting_mode == 'ai' or args.resume_mode in ('ai', 'plan', 'apply')
     # 两个阶段各自解析配置：招呼语短、便宜，简历改写长、吃能力，配置文件里的
     # stages.greeting / stages.resume 就是为了让它们指向不同的模型。
     cfg_greeting = cfg_resume = None
@@ -616,7 +696,7 @@ def main():
     try:
         if args.greeting_mode == 'ai':
             cfg_greeting = resolve(stage='greeting', **overrides)
-        if args.resume_mode == 'ai':
+        if args.resume_mode in ('ai', 'plan', 'apply'):
             cfg_resume = resolve(stage='resume', **overrides)
     except ConfigError as exc:
         print('❌ 配置错误：\n%s' % exc)
@@ -625,7 +705,7 @@ def main():
     workers = args.workers or (cfg_any.concurrency if cfg_any else 4)
 
     resume_text, resume_source = None, ''
-    if args.resume_mode == 'ai':
+    if args.resume_mode in ('ai', 'plan', 'apply'):
         try:
             resume_text, resume_source = load_resume_text(run_dir, profile, args.resume_text)
         except LLMError as exc:
@@ -658,7 +738,7 @@ def main():
         if only is not None and index not in only:
             continue
         for kind in kinds:
-            have = existing_artifact(gen_dir, kind, index)
+            have = existing_artifact(gen_dir, _artifact_prefix(kind), index)
             if have and not args.force:
                 skipped.append(have)
                 continue
@@ -683,7 +763,7 @@ def main():
         print('模型 %s / 并发 %d' % (' | '.join(models), workers))
     if skipped:
         print('跳过 %d 个已有产物（--force 可覆盖）' % len(skipped))
-    if not match_index and args.resume_mode == 'ai':
+    if not match_index and args.resume_mode in ('ai', 'plan', 'apply'):
         print('⚠ 没找到任何匹配信息（scored_jobs / job_classification / deep_results 都不在），'
               '简历优化会缺少缺失项提示')
 
@@ -694,9 +774,10 @@ def main():
     if args.dry_run:
         print('\n--dry-run：将生成 %d 份产物' % len(tasks))
         for index, job, kind in tasks:
+            out_prefix = _artifact_prefix(kind)
             ext = 'txt' if kind == 'greeting' else 'json'
             print('  %s_%d_%s.%s   ← %s / %s'
-                  % (kind, index, safe_name(job.get('公司')), ext,
+                  % (out_prefix, index, safe_name(job.get('公司')), ext,
                      job.get('公司', '?'), job.get('职位', '?')))
         print('（未发送任何请求，未写任何文件）')
         return 0
@@ -715,7 +796,22 @@ def main():
                                            args.greeting_mode, greeting_resume)
             path = os.path.join(gen_dir, 'greeting_%d_%s.txt' % (index, company))
             _write_atomic(path, text)
-        else:
+        elif kind == 'plan':
+            # 计划征询的第一半：只出调整计划，留给用户逐点确认。
+            plan = gen_plan(job, resume_text, match, cfg_resume, run_dir)
+            path = plan_file_path(gen_dir, index, company)
+            _write_atomic(path, json.dumps(plan, ensure_ascii=False, indent=2))
+            rewritten = False
+        elif kind == 'apply':
+            # 计划征询的第二半：只对用户的已批准岗位照计划出完整简历。未批准返回 None，
+            # 不回写文件 —— 该岗位回退到自定义图片/原简历，招呼语不受影响。
+            data = apply_from_decision(job, resume_text, cfg_resume, run_dir, index, company)
+            if data is None:
+                return None
+            path = os.path.join(gen_dir, 'resume_%d_%s.json' % (index, company))
+            _write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+            rewritten = False
+        else:  # 'resume'：ai 合并两阶段（默认/无闸门）
             data = gen_resume(job, resume_text, match, cfg_resume, run_dir)
             path = os.path.join(gen_dir, 'resume_%d_%s.json' % (index, company))
             _write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
@@ -766,7 +862,19 @@ def main():
     print()
     try:
         from check_artifacts import check
-        _, found, missing = check(run_dir, kinds, jobs=jobs)
+        # kind 是内部名，check_artifacts 认的是产物前缀：'apply' 落盘成 resume_。
+        check_kinds = sorted({_artifact_prefix(k) for k in kinds})
+        if args.resume_mode == 'apply':
+            # 应用阶段只对「已批准」岗位出简历，被拒岗位故意没有 resume —— 核对时只查
+            # 有决策且 approved 的岗位，否则一次成功的 apply 会被误报成缺一批。
+            approved = {i for i in range(1, len(jobs) + 1)
+                        if (lambda d: d and d.get('approved'))(load_decision(run_dir, i))}
+            if only is not None:
+                approved &= only
+            verify_only = approved or None
+        else:
+            verify_only = only
+        _, found, missing = check(run_dir, check_kinds, jobs=jobs, only=verify_only)
         if missing:
             print('⚠ check_artifacts 口径下仍缺 %d 项：' % len(missing))
             for item in missing[:12]:
@@ -775,7 +883,7 @@ def main():
                 print('    …还有 %d 项' % (len(missing) - 12))
         else:
             print('✅ check_artifacts 口径校验通过：%d 个岗位 × %s 全部齐全'
-                  % (len(jobs), '+'.join(kinds)))
+                  % (len(jobs or []), '+'.join(check_kinds)))
     except Exception as exc:                        # noqa: BLE001 — 复核失败不改变生成结果
         print('（跳过 check_artifacts 复核：%s）' % exc)
 

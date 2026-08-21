@@ -32,6 +32,8 @@ for _s in (sys.stdout, sys.stderr):
 _SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SCRIPTS)
 
+from resume_matcher import qualified_jobs_path      # noqa: E402
+
 
 def thin_jobs(data: list) -> list:
     """Extract thin fields from each job entry — no full JDs or company info."""
@@ -170,10 +172,84 @@ KINDS = {
     'deep': thin_deep,
 }
 
-# ranked 不在 KINDS 里：它的入参是 run 目录，不是一个 JSON 文件，走另一条分支。
-DIR_KINDS = ('ranked',)
+# ranked / plans 不在 KINDS 里：它们的入参是 run 目录，不是一个 JSON 文件，走另一条分支。
+DIR_KINDS = ('ranked', 'plans')
 
-USAGE = 'Usage: python scripts/utils/read_thin.py <file|run_dir> --kind {jobs|profile|deep|ranked}'
+
+def thin_plans(run_dir: str) -> list:
+    """把 materials/plan_{i}_*.json 做成逐岗位的紧凑摘要，供「计划征询」停点展示。
+
+    计划文件由 gen_materials --resume-mode plan 写入。这里只取展示决策要的信号：
+    index / 公司 / 职位 + must_add、should_adjust、keywords、format 的条数与概览，
+    绝不把整份 optimization_suggestions 塞进主循环。
+    """
+    import glob
+    jobs = []
+    try:
+        with open(qualified_jobs_path(run_dir), encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            jobs = data
+        elif isinstance(data, dict):
+            jobs = data.get('jobs') or data.get('data') or []
+    except (OSError, ValueError):
+        jobs = []
+
+    def company_pos(index):
+        if 0 < index <= len(jobs):
+            j = jobs[index - 1]
+            return str(j.get('公司') or ''), str(j.get('职位') or '')
+        return '', ''
+
+    out = []
+    for path in sorted(glob.glob(os.path.join(run_dir, 'materials', 'plan_*.json'))):
+        base = os.path.basename(path)
+        m = base[len('plan_'):]
+        try:
+            index = int(m.split('_', 1)[0])
+        except ValueError:
+            continue
+        try:
+            with open(path, encoding='utf-8') as f:
+                plan = json.load(f)
+        except (ValueError, OSError):
+            continue
+        if not isinstance(plan, dict):
+            continue
+        sug = plan.get('optimization_suggestions') or {}
+        if not isinstance(sug, dict):
+            sug = {}
+
+        def trunc(s, n=20):
+            s = str(s).replace('\n', ' ')
+            return s if len(s) <= n else s[:n] + '…'
+
+        must_add = []
+        for item in (sug.get('must_add') or []):
+            if isinstance(item, dict):
+                must_add.append('%s：%s' % (trunc(item.get('section', '')), trunc(item.get('content', ''))))
+            else:
+                must_add.append(trunc(item))
+        should_adjust = []
+        for item in (sug.get('should_adjust') or []):
+            if isinstance(item, dict):
+                should_adjust.append('%s：%s' % (trunc(item.get('section', '')), trunc(item.get('suggestion', ''))))
+            else:
+                should_adjust.append(trunc(item))
+
+        company, position = company_pos(index)
+        out.append({
+            'index': index,
+            '公司': company,
+            '职位': position,
+            'must_add': must_add,
+            'should_adjust': should_adjust,
+            'keywords_to_emphasize': [trunc(k) for k in (sug.get('keywords_to_emphasize') or [])],
+            'format_suggestions': [trunc(k) for k in (sug.get('format_suggestions') or [])],
+        })
+    return out
+
+USAGE = 'Usage: python scripts/utils/read_thin.py <file|run_dir> --kind {jobs|profile|deep|ranked|plans}'
 
 
 def main():
@@ -187,6 +263,8 @@ def main():
         print('  deep     — deep_results.json: verdicts only, no full JD text')
         print('  ranked   — <run_dir>: 1-based index + company + position + score + verdict,')
         print('             joined across scored_jobs / job_classification / deep_results')
+        print('  plans    — <run_dir>: 计划征询停点用。每岗位材料的调整计划紧凑摘要')
+        print('             （must_add / should_adjust / keywords / format 的概览）')
         sys.exit(1)
 
     target = None
@@ -218,6 +296,15 @@ def main():
         if not target or not os.path.isdir(target):
             print(f'ERROR: --kind {kind} wants a run directory, got: {target}')
             sys.exit(1)
+        if kind == 'plans':
+            # 计划征询：吃 run 目录，站在 materials/plan_*.json 上，不回写任何东西。
+            try:
+                result = thin_plans(target)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f'ERROR: cannot build plans view from {target}: {e}')
+                sys.exit(1)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
         import match_index
         try:
             result = match_index.build_ranked(target, limit=limit)
