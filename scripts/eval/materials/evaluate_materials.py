@@ -171,6 +171,53 @@ def _make_availability(profile):
     return format_availability(profile)
 
 
+def _match_reasons(run_dir, profile, jobs):
+    """每个岗位的匹配理由（招呼语提示词「匹配理由」段要用的）。
+
+    真调路径照流水线传给 gen_greeting 的 match_reasons，否则招呼语提示词只剩
+    JD + 简历，缺「为什么我匹配这个岗」——此前这里 match={} 空传，模板里那段
+    永远是「（无）」。来源按优先级，全部离线（规则纯函数，不触网）：
+
+      1. state/match_analysis.json（流水线已算好的规则匹配，键=岗位 link）；
+      2. 其余岗位现跑规则评分兜底（classify_jobs_advanced 与流水线同一套评分），
+         覆盖 --jobs-ai / --jobs-csv 造出来、不在任何匹配产物里的岗位。
+
+    返回 {link: [reason, ...]}。都拿不到就留空（退化为现状：提示词该段显示「无」）。
+    """
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    reasons = {}
+    ma = _state_path(run_dir, 'match_analysis.json')
+    if os.path.exists(ma):
+        try:
+            with open(ma, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for link, m in data.items():
+                    if isinstance(m, dict) and m.get('match_reasons'):
+                        reasons[link] = [str(r) for r in m['match_reasons']]
+        except (ValueError, OSError):
+            pass
+
+    missing = [j for j in jobs if not reasons.get(j.get('link') or '')]
+    if missing:
+        try:
+            from gen_materials import _to_profile_obj
+            from resume_matcher.scoring import classify_jobs_advanced
+            # 评分器会打进度行，这里压进 StringIO，别污染评估输出
+            with redirect_stdout(StringIO()):
+                tiers = classify_jobs_advanced(_to_profile_obj(profile), jobs)
+            for tier in tiers:
+                for j in (tier or []):
+                    if j.get('match_reasons'):
+                        reasons.setdefault(j.get('link') or '',
+                                           [str(r) for r in j['match_reasons']])
+        except Exception:                       # noqa: BLE001
+            pass                                # 拿不到理由就留空，不挡主流程
+    return reasons
+
+
 def generate_materials(run_dir, jobs, profile, args, offline):
     """真调（非 offline）或 stub（offline）生成。返回 {index: {'greeting':…, 'resume_md':…}}。"""
     (load_profile, build_resume_summary, format_availability,
@@ -211,12 +258,16 @@ def generate_materials(run_dir, jobs, profile, args, offline):
     except ConfigError as exc:
         print('❌ 配置错误：\n%s' % exc)
         return None
+    # 匹配理由一次算好所有岗位共用；gen_greeting 的 {resume}/{match_reasons}
+    # 缺一都不行（缺 resume 提示词里「我的情况」是「未提供」，没个人线索可写）。
+    reasons = _match_reasons(run_dir, profile, jobs)
     def work(i):
         job = jobs[i - 1]
-        match = {}
+        match = {'match_reasons': reasons.get(job.get('link') or '') or []}
         g_row = r_row = None
         try:
-            g_text, _ = gen_greeting(job, profile, match, cfg_g, run_dir, 'ai')
+            g_text, _ = gen_greeting(job, profile, match, cfg_g, run_dir, 'ai',
+                                     base_resume)
         except Exception as exc:                                   # noqa: BLE001
             g_text = None
             print('  ⚠ 岗位 #%d 招呼语失败: %s' % (i, exc))
