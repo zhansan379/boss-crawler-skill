@@ -151,50 +151,50 @@ python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing --
 - `--resume FILE` 指定简历（md/txt），会写成 `state/resume_text.txt`；不给就复用既有的。**没有简历文本就没法评**（原简历是基准），会直接退 1。
 - 缺省命令（不带 `--offline`）术语三分类走 **LLM**（联网配 key，结果缓存）——这是默认行为，不用加 flag。
 
-### 参数速查表
+### 参数速查表（大白话版：每个参数到底干嘛、花不花钱）
 
-| 参数 | 作用 | 触网？ | 说明 |
-|---|---|---|---|
-| `<run_dir>` | 工作目录 | ❌ | 爬虫产物所在目录；缺 `state/` 会自动搭，**不覆盖既有数据** |
-| `--resume FILE` | 指定原简历 | ❌ | md/txt，写成 `state/resume_text.txt`；不给就复用既有的。**没简历文本就没法评**（原简历是基准），会退 1 |
-| `--jobs-existing` | 复用既有岗位 | ❌ | 直接用 `state/qualified_jobs.json`，最省事 |
-| `--jobs-csv FILE` | 岗位读本地 CSV | ❌ | 中文列岗位表，离线可用；自动筛已失效、按 link 去重 |
-| `--jobs-ai N` | AI 造 N 个岗位 | ✅ | 让模型编 N 个多样岗位；`--offline` 下自动降级复用既有，不偷偷联网 |
-| `--jobs-ai-spec TEXT` | 造岗多样性补充 | ✅ | 搭配 `--jobs-ai` 用 |
-| `--generate` | 先生成材料再评估 | 视模式 | 先跑 `gen_greeting`/`gen_resume`；`--offline` 下换成确定性 stub（干净对照） |
-| `--offline` | 全程不触网 | ❌ | 生成→stub；术语分类→只读缓存/规则兜底；`--llm-recommend` 会跳过并报冲突 |
-| `--stub-registry PATH` | stub 产物落盘 | ❌ | 存成 registry 文件可回放/对拍 |
-| `--llm-recommend` | 追加整份点评 | ✅ | 评估完再调模型总结一段话健康度；失败不致命，只少这一块 |
-| `-w / --workers N` | 生成并发线程数 | — | 默认 4 |
-| `--terms-llm` | 术语分类走 LLM | ✅ | **已默认**——只有 `--offline` 才强制离线；保留这个开关只是为了兼容旧命令 |
-| `--force-llm-terms` | 忽略分类缓存强刷 | ✅ | 强制重新调 LLM 分类，不读缓存 |
-| `--no-subjective` | 关「客观性/夸大」维 | ❌ | 不想看能力升级/绝对化提示就加 |
-| `--out-dir D` | 报告输出目录 | — | 默认 `<run_dir>/eval/` |
-| `--model / --base-url / --api-key` | 覆盖模型配置 | ✅ | 临时指定 LLM 配置，优先于 `.env` |
+| 参数 | 这句是干嘛的（大白话） | 花不花钱 / 触不触网 |
+|---|---|---|
+| `<run_dir>` | 指到你的工作目录，程序在这里找简历、岗位和已经生成的文档。没有的话它会自己搭好，**不会动你原本的数据**。 | 纯粹本地，不花 |
+| `--resume FILE`(简历文件) | 把你自己的简历喂进去（`.md` 或 `.txt`），评估用它当「原简历」基准。不给就用目录里已有的。**没简历文本就没法评**（没基准），会直接退出。 | 不花 |
+| `--jobs-existing` | 用目录里**已经爬好的岗位**，不重新要。最省事。 | 不花 |
+| `--jobs-csv FILE`(岗位表格) | 从一份**本地表格文件(CSV)**里读岗位，适合离线用。会自动扔掉「已失效」的、按链接去重。 | 不花 |
+| `--jobs-ai N` | 让模型**现编 N 个五花八门的岗位**来练手。 | **花钱**（要联网调模型）；但如果带着 `--offline`，它就偷偷用回旧岗位，绝不会背着你去联网 |
+| `--jobs-ai-spec TEXT` | 造岗时想加点花样（比如「偏AI」「要初创公司」），写在这里。 | 跟 `--jobs-ai` 一起用 |
+| `--generate` | 先让程序**现场生成**「优化简历 + 招呼语」这两份材料，再拿去评估。（不加这个 = 直接用目录里已生成的文档来评） | 看下面两条：**不带 `--offline` 就见真章、花钱；带 `--offline` 就用假数据对照、不花** |
+| `--offline` | 把**所有会联网、要花钱的调用一键全关**：生成用假数据对照（stub）、术语分类只读缓存/纯规则、点评直接跳过。剩下那五维本来就是纯算数、不联网。 | **不花钱、不联网** |
+| `--stub-registry PATH` | 把 `--offline` 那套假数据（stub）产物存成一个文件，方便以后对账、回放。 | 不花 |
+| `--llm-recommend` | 评估完，再让模型**对整份结果说一段人话总结**（哪里健康、哪里最该改）。 | **花钱**（要联网调模型）；带着 `--offline` 时会冲突退出 |
+| `-w / --workers N` | 让生成时几件事**一起干**（并发），数字越大越快。默认 4。 | 不花，只是提速 |
+| `--terms-llm` | 术语三分类交给 **AI 来判断**是「你自己的 / 岗位需要的 / 凭空编的」。 | **已经是默认、默认就花钱**——除非带 `--offline` 才会关掉走规则。留这个开关只是为了让旧命令还能跑 |
+| `--force-llm-terms` | 强制 AI 重新判一遍，**不理之前存的缓存**（凡重判都要联网花钱）。 | 花钱 |
+| `--no-subjective` | 关掉「有没有偷偷替你吹牛」（能力升级/绝对化用语）那一项的检查。 | 不花 |
+| `--out-dir D` | 报告存到哪个文件夹。默认存在 `<run_dir>/eval/`。 | 不花 |
+| `--model / --base-url / --api-key` | 临时换用别的模型/接口/密钥，优先级比配置文件高。 | — |
 
-**几个易混点：**
-- `--offline` = 把「钱的调用」全关掉：生成、造岗、术语分类、点评都不碰网。剩下六维那五维本来就纯算数。
-- `--llm-recommend` 和 `--terms-llm` 是**两回事**：前者给一段整份点评，后者把术语三分类换成 AI 判词。`--offline --llm-recommend` 会**报冲突退 2**（因为点评必须调模型）。
-- 术语分类默认走 LLM 是「开」的，`--offline` 才关；所以想省事不联网，就在命令里明确写 `--offline`。
+**几个最容易搞混的地方（大白话）：**
+- `--offline` 一句话：**把你所有“掏钱包”的地方全关掉**——生成、造岗、术语分类、点评，全都不碰网、不花钱。剩下的检查本来就是纯数学、天然免费。
+- `--llm-recommend`（整份点评）和 `--terms-llm`（术语分类）是**两码事**，别混。而且 `--offline` 想关点评会**报错退出（码 2）**，因为点评这功能必须联网才能做。
+- 术语分类默认就花模型的钱（走 AI），只有带 `--offline` 才免费；所以你想「不联网跑一次」，就在命令里**明确写上 `--offline`**。
 
 **常见组合：**
 
 ```bash
-# 1) 默认 —— 术语三分类走 LLM 语义判词（联网、带缓存），越跑越快
+# 1) 最省事的跑法：用已有岗位直接评估（术语分类默认走 AI，带缓存越跑越快）
 python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing
 
-# 2) 全程离线 —— 零成本，术语分类读缓存/规则兜底；也可当干净对照组基准
+# 2) 想完全免费不联网：同样评估，但术语分类不调 AI 了（读缓存/纯规则）
 python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing --offline
 
-# 3) 干净对照组 —— stub 生成 + 评估，验证评估器本身没坏（幻觉应≈0）
+# 3) 自检：用假数据(stub)先生成再评估，验证评估器本身没毛病（该项幻觉应≈0）
 python scripts/eval/materials/evaluate_materials.py <run_dir> \
     --resume <path>/简历.md --jobs-csv <path>/jobs.csv \
     --generate --offline --stub-registry /tmp/stub.json
 
-# 4) 真调全量 —— AI 造 8 个岗 + 真生成 + LLM 综合点评（花钱，测生产链路）
+# 4) 全量真实：AI 造 8 个岗 + 真生成文档 + AI 整份点评（这条花钱、测真实链路）
 python scripts/eval/materials/evaluate_materials.py <run_dir> \
     --resume <path>/简历.md --jobs-ai 8 --generate --llm-recommend -w 4
-#    分类缓存重复跑直接命中不重调模型；--force-llm-terms 强刷缓存
+#    术语分类结果有缓存，重跑不会重复花钱；非得重判就加 --force-llm-terms
 ```
 
 **退出码扫一眼就知道咋回事：**
