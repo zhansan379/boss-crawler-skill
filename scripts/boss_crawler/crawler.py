@@ -620,6 +620,30 @@ def print_crawl_summary(total_stats):
     time_stats.print_summary()
 
 
+def auto_refresh_requirements(with_detail):
+    """爬取结束后增量刷新岗位权威要求缓存（assets/job_requirements.json）。
+
+    只在本轮爬了详情时跑 —— 没 JD（岗位要求和职责）的话无从抽。增量逻辑见
+    perform_extraction：已缓存 link 跳过，仅把「新采到 JD 且没抽过」的补进缓存。
+
+    LLM 阶段是独立、可缺失的：配置没配、请求失败都只打印告警，绝不向上抛、
+    绝不拖垮本轮爬取本身。退出码非 0 时提示未刷新岗位评分将回退卡片标签。
+    """
+    if not with_detail:
+        print('\n[要求] 本轮未爬详情（无 JD 可抽），跳过权威要求增量刷新')
+        return
+    print('\n[要求] 爬取结束，增量刷新岗位权威要求…')
+    try:
+        from stages.run_requirements import perform_extraction
+        rc = perform_extraction()
+        if rc != 0:
+            print(f'  ⚠️ 权威要求增量刷新未完全成功（退出码 {rc}），'
+                  f'未刷新的岗位评分将回退卡片标签')
+    except Exception as exc:
+        # 配置缺失 / 网络 / 依赖任何一处出错都不该让爬取结果丢失。
+        print(f'  ⚠️ 权威要求增量刷新失败（不影响本次爬取）：{exc}')
+
+
 # ==================== 交互式爬取流程 ====================
 
 
@@ -730,6 +754,7 @@ def run_crawl_process():
     dp.quit()
     time_stats.stop()
     print_crawl_summary(total_stats)
+    auto_refresh_requirements(selections['with_detail'])
 
 
 # ==================== CLI 模式爬取 ====================
@@ -862,6 +887,7 @@ def run_crawl_cli(args):
     dp.quit()
     time_stats.stop()
     print_crawl_summary(total_stats)
+    auto_refresh_requirements(with_detail)
 
     # 把爬取统计落到 run-dir，供 Claude 主代理在爬取后读取，判断是否达到最低岗位数量。
     # 主代理读不到 stdout（后台任务），所以这里显式写盘；crawl_summary.json 是约定的文件名。

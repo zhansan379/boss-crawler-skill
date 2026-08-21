@@ -145,3 +145,86 @@ def enrich(jobs: List[Dict[str, Any]],
         print(f'  [要求] 已用岗位要求(权威抽取)覆盖 {hit} 个岗位的学历/经验/薪资/技能判定'
               f'（未覆盖的回退卡片标签）')
     return hit
+
+
+def perform_extraction(*, workers=None, run_dir=None, all_=False, dry_run=False) -> int:
+    """批量抽取岗位权威要求为 assets/job_requirements.json。
+
+    CLI（scripts/stages/run_requirements.py）和爬虫爬完自动增量刷新
+    （boss_crawler.auto_refresh_requirements）共用的核心编排：
+
+      读全部岗位 CSV → 挑「含 JD 且未缓存（或 --all）」的 → 并发抽取 → 落缓存。
+
+    已缓存 link 默认跳过（增量幂等），all_=True 才无条件重抽。返回进程退出码：
+      0 = 全部成功或无需抽取
+      1 = 配置错误 / 无岗位数据
+      3 = 部分失败（成功部分已落缓存，失败处评分回退卡片）
+
+    依赖懒加载，避免顶层引入 llm/resume_matcher 撞出循环导入（见模块 docstring）。
+    """
+    from llm.config import ConfigError, resolve
+    from llm.client import map_concurrent
+    from resume_matcher import list_available_job_files, load_job_data
+
+    try:
+        cfg = resolve(stage=STAGE)
+    except ConfigError as exc:
+        print('❌ 配置错误：\n%s' % exc)
+        return 1
+    workers = workers or cfg.concurrency
+
+    # ── 加载岗位池 ──
+    job_files = list_available_job_files()
+    if not job_files:
+        print('❌ 未找到岗位数据文件（assets/post_data/ 下无 CSV）')
+        return 1
+    jobs = load_job_data([jf['path'] for jf in job_files])
+
+    # ── 增量筛选待抽集合 ──
+    cached = load_all()
+    todo = []
+    for job in jobs:
+        if not (job.get('岗位要求和职责') or '').strip():
+            continue                            # 无 JD 则无从抽，评分回退卡片
+        link = (job.get('link') or '').strip()
+        if not link:
+            continue
+        if all_ or not cached.get(link):
+            todo.append(job)
+
+    with_jd = sum(1 for j in jobs if (j.get('岗位要求和职责') or '').strip())
+    suffix = '（--all 无条件）' if all_ else '（增量：跳过已缓存）'
+    print(f'岗位 {len(jobs)} 个；含 JD 可抽 {with_jd} 个；本次将抽 {len(todo)} 个 {suffix}')
+
+    if dry_run:
+        print('--dry-run：不发起请求，结束')
+        return 0
+    if not todo:
+        print('✅ 无需抽取（全部已缓存或无 JD），评分将直接用岗位要求')
+        return 0
+
+    def _run(candidate):
+        return extract_job_requirements(candidate.get('岗位要求和职责', ''),
+                                        run_dir=run_dir, cfg=cfg)
+
+    outcomes = map_concurrent(
+        todo, _run, workers=workers,
+        label=lambda job, _i: (job.get('职位') or '') + ' · ' + (job.get('公司') or ''))
+
+    mapping = dict(cached)
+    failures = 0
+    for outcome in outcomes:
+        link = (outcome.item.get('link') or '').strip()
+        if outcome.ok:
+            mapping[link] = outcome.value
+        else:
+            failures += 1
+
+    save_all(mapping)
+    new = len(mapping) - len(cached)
+    print(f'写入缓存 {len(mapping)} 条（新增/更新 {new} 条）')
+    if failures:
+        print(f'⚠️  {failures}/{len(todo)} 个岗位抽取失败，已用旧缓存兜底，评分回退卡片')
+        return 3
+    print('✅ 权威要求抽取完成，评分将按岗位要求判定')
+    return 0
