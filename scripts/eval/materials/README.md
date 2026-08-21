@@ -149,7 +149,33 @@ python scripts/eval/materials/evaluate_materials.py <run_dir> --jobs-existing --
 
 - `<run_dir>` 是你跑爬虫的工作目录。缺 `state/` 会自动搭，**不会覆盖既有数据**。
 - `--resume FILE` 指定简历（md/txt），会写成 `state/resume_text.txt`；不给就复用既有的。**没有简历文本就没法评**（原简历是基准），会直接退 1。
-- 缺省命令（不带 `--offline`）术语分类走 **LLM**（联网配 key，结果缓存）——这是默认行为，不用加 flag。
+- 缺省命令（不带 `--offline`）术语三分类走 **LLM**（联网配 key，结果缓存）——这是默认行为，不用加 flag。
+
+### 参数速查表
+
+| 参数 | 作用 | 触网？ | 说明 |
+|---|---|---|---|
+| `<run_dir>` | 工作目录 | ❌ | 爬虫产物所在目录；缺 `state/` 会自动搭，**不覆盖既有数据** |
+| `--resume FILE` | 指定原简历 | ❌ | md/txt，写成 `state/resume_text.txt`；不给就复用既有的。**没简历文本就没法评**（原简历是基准），会退 1 |
+| `--jobs-existing` | 复用既有岗位 | ❌ | 直接用 `state/qualified_jobs.json`，最省事 |
+| `--jobs-csv FILE` | 岗位读本地 CSV | ❌ | 中文列岗位表，离线可用；自动筛已失效、按 link 去重 |
+| `--jobs-ai N` | AI 造 N 个岗位 | ✅ | 让模型编 N 个多样岗位；`--offline` 下自动降级复用既有，不偷偷联网 |
+| `--jobs-ai-spec TEXT` | 造岗多样性补充 | ✅ | 搭配 `--jobs-ai` 用 |
+| `--generate` | 先生成材料再评估 | 视模式 | 先跑 `gen_greeting`/`gen_resume`；`--offline` 下换成确定性 stub（干净对照） |
+| `--offline` | 全程不触网 | ❌ | 生成→stub；术语分类→只读缓存/规则兜底；`--llm-recommend` 会跳过并报冲突 |
+| `--stub-registry PATH` | stub 产物落盘 | ❌ | 存成 registry 文件可回放/对拍 |
+| `--llm-recommend` | 追加整份点评 | ✅ | 评估完再调模型总结一段话健康度；失败不致命，只少这一块 |
+| `-w / --workers N` | 生成并发线程数 | — | 默认 4 |
+| `--terms-llm` | 术语分类走 LLM | ✅ | **已默认**——只有 `--offline` 才强制离线；保留这个开关只是为了兼容旧命令 |
+| `--force-llm-terms` | 忽略分类缓存强刷 | ✅ | 强制重新调 LLM 分类，不读缓存 |
+| `--no-subjective` | 关「客观性/夸大」维 | ❌ | 不想看能力升级/绝对化提示就加 |
+| `--out-dir D` | 报告输出目录 | — | 默认 `<run_dir>/eval/` |
+| `--model / --base-url / --api-key` | 覆盖模型配置 | ✅ | 临时指定 LLM 配置，优先于 `.env` |
+
+**几个易混点：**
+- `--offline` = 把「钱的调用」全关掉：生成、造岗、术语分类、点评都不碰网。剩下六维那五维本来就纯算数。
+- `--llm-recommend` 和 `--terms-llm` 是**两回事**：前者给一段整份点评，后者把术语三分类换成 AI 判词。`--offline --llm-recommend` 会**报冲突退 2**（因为点评必须调模型）。
+- 术语分类默认走 LLM 是「开」的，`--offline` 才关；所以想省事不联网，就在命令里明确写 `--offline`。
 
 **常见组合：**
 
@@ -175,7 +201,7 @@ python scripts/eval/materials/evaluate_materials.py <run_dir> \
 
 - `0` 全好
 - `1` 致命（没简历文本 / 没岗位来源 / 报告写不出来）
-- `2` 旗子打架（`--offline` 撞上 `--llm-recommend`——点评必须调模型；`--terms-llm` 在 `--offline` 下会自动弱化成「只读缓存、没缓存回退规则」，不算打架）
+- `2` 旗子打架（`--offline` 撞上 `--llm-recommend`——点评必须调模型）
 - `3` 部分缺产物（个别岗位没生成出招呼语或简历，报告照常写，那几岗标 `missing`、六维不做判定、也不参与平均值）
 
 ## 报告里能看到啥
