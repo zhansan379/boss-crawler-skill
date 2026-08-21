@@ -176,12 +176,16 @@ def test_availability_dynamic_assembly():
           '我实际的到岗安排（权威来源）' not in p_empty)
     check('空 availability → 到岗数据段措辞不出现', '栏里给了值就照写' not in p_empty)
     check('空 availability → 到岗值不泄露进提示词', '2026-09-01' not in p_empty)
+    check('空 availability → 无任何到岗公式示范',
+          not any(w in p_empty for w in ('下周一', '6个月', '周5天', '可立即到岗', '可全职', '全职实习')))
     check('空 availability → 防编造规则仍保留', '不许编造的三件事' in p_empty)
 
     p_filled = get_greeting_prompt(JOB, resume=_RESUME, match_reasons='技能命中 3 项',
                                    availability=AVAIL_FILL)
     check('有 availability → 到岗段头出现', '我实际的到岗安排（权威来源）' in p_filled)
     check('有 availability → 值进提示词', '2026-09-01' in p_filled and '3天' in p_filled)
+    check('有 availability → 到岗公式示范与正文顺序出现',
+          '可立即到岗' in p_filled and '下周一' in p_filled and '时长 → 出勤' in p_filled)
     check('两种情况都无残留占位',
           '{' not in p_empty and '}' not in p_empty
           and '{' not in p_filled and '}' not in p_filled)

@@ -11,8 +11,8 @@
     //
     // 想让某个配置走自定义 po,用注释里的 --run-dir。
     //
-    // 以下 eval:* 配置调试 scripts/eval/evaluate_materials.py（材料质量评估工具）：
-    // - run_dir 是样例 `assets/2026-08-18_22-10-50`（已有完整 state），按需改成
+    // 以下 eval:* 配置调试 scripts/eval/materials/evaluate_materials.py（材料质量评估工具）：
+    // - run_dir 是样例 `assets/2026-08-20_22-54-33`（已有完整 state，LATEST.txt），按需改成
     //   当前 LATEST.txt 指向的 run；没有该目录时改任意你想让它自动搭 state 的目录。
     // - 评估永远离线（只读产物+纯函数）。差别只在「生成」：真调花钱/触网，
     //   --offline 用的确定性 stub。两个场景共用的岗位都是该 run 已有的 qualified_jobs.json。
@@ -114,10 +114,10 @@
             "name": "eval: 只评估既有产物(离线,不花钱)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "program": "${workspaceFolder}/scripts/eval/materials/evaluate_materials.py",
             "args": [
                 // run_dir：改成当前 LATEST 的 run；复用其既有 qualified_jobs + materials
-                "assets/2026-08-18_22-10-50",
+                "assets/2026-08-20_22-54-33",
                 "--jobs-existing"
             ],
             "cwd": "${workspaceFolder}",
@@ -129,9 +129,9 @@
             "name": "eval: offline 干净对照(stub生成+评估,不触网)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "program": "${workspaceFolder}/scripts/eval/materials/evaluate_materials.py",
             "args": [
-                "assets/2026-08-18_22-10-50",
+                "assets/2026-08-20_22-54-33",
                 "--jobs-existing",
                 "--generate",
                 "--offline"
@@ -145,9 +145,9 @@
             "name": "eval: 真调重新生成+评估(花钱/触网)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/scripts/eval/evaluate_materials.py",
+            "program": "${workspaceFolder}/scripts/eval/materials/evaluate_materials.py",
             "args": [
-                "assets/2026-08-18_22-10-50",
+                "assets/2026-08-20_22-54-33",
                 "--jobs-existing",
                 "--generate"
                 // 想用 AI 造新品岗位就把上面 --jobs-existing 换成 --jobs-ai 6；

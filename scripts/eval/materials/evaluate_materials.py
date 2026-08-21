@@ -171,23 +171,28 @@ def _make_availability(profile):
     return format_availability(profile)
 
 
-def _match_reasons(run_dir, profile, jobs):
-    """每个岗位的匹配理由（招呼语提示词「匹配理由」段要用的）。
+def _match_info(run_dir, profile, jobs):
+    """每个岗位的匹配信息 dict（match_reasons / match_score / missing_items / …）。
 
-    真调路径照流水线传给 gen_greeting 的 match_reasons，否则招呼语提示词只剩
-    JD + 简历，缺「为什么我匹配这个岗」——此前这里 match={} 空传，模板里那段
-    永远是「（无）」。来源按优先级，全部离线（规则纯函数，不触网）：
+    真调路径照流水线把 match 传给 gen_greeting / gen_resume。此前这里只给
+    match_reasons，导致 gen_resume 阶段① resume_optimize_plan.st 里「匹配分析」
+    段（匹配度 / 缺失项 / 可优化点）三个占位符永远是空：match_score 落 0、
+    missing_items/optimization_points 落「（无）」。现在把两个 gen_* 需要的
+    match 字段全补齐，口径与流水线 build_match_index 一致。来源按优先级，
+    全部离线（规则纯函数，不触网）：
 
-      1. state/match_analysis.json（流水线已算好的规则匹配，键=岗位 link）；
+      1. state/match_analysis.json（流水线已算好的规则判定，键=岗位 link，
+         字段名本身就是 match_score / missing_items / optimization_points，照抄）；
       2. 其余岗位现跑规则评分兜底（classify_jobs_advanced 与流水线同一套评分），
          覆盖 --jobs-ai / --jobs-csv 造出来、不在任何匹配产物里的岗位。
 
-    返回 {link: [reason, ...]}。都拿不到就留空（退化为现状：提示词该段显示「无」）。
+    返回 {link: {match_reasons, match_score, missing_items, optimization_points, …}}。
+    都拿不到的字段留空（退化为现状：提示词该段显示「无」）。
     """
     from contextlib import redirect_stdout
     from io import StringIO
 
-    reasons = {}
+    index = {}
     ma = _state_path(run_dir, 'match_analysis.json')
     if os.path.exists(ma):
         try:
@@ -195,12 +200,20 @@ def _match_reasons(run_dir, profile, jobs):
                 data = json.load(f)
             if isinstance(data, dict):
                 for link, m in data.items():
-                    if isinstance(m, dict) and m.get('match_reasons'):
-                        reasons[link] = [str(r) for r in m['match_reasons']]
+                    if not isinstance(m, dict):
+                        continue
+                    slot = index.setdefault(link or '', {})
+                    for key in ('match_reasons', 'match_score', 'missing_items',
+                                'optimization_points', 'matched_skills',
+                                'application_category', 'category', 'difficulty',
+                                'highlight'):
+                        v = m.get(key)
+                        if v:
+                            slot[key] = v
         except (ValueError, OSError):
             pass
 
-    missing = [j for j in jobs if not reasons.get(j.get('link') or '')]
+    missing = [j for j in jobs if not index.get(j.get('link') or '')]
     if missing:
         try:
             from gen_materials import _to_profile_obj
@@ -210,12 +223,22 @@ def _match_reasons(run_dir, profile, jobs):
                 tiers = classify_jobs_advanced(_to_profile_obj(profile), jobs)
             for tier in tiers:
                 for j in (tier or []):
+                    slot = index.setdefault(j.get('link') or '', {})
+                    if slot:
+                        continue                           # 已由 match_analysis 填满，不覆盖
                     if j.get('match_reasons'):
-                        reasons.setdefault(j.get('link') or '',
-                                           [str(r) for r in j['match_reasons']])
+                        slot['match_reasons'] = [str(r) for r in j['match_reasons']]
+                    if j.get('match_score') is not None:
+                        slot['match_score'] = j['match_score']
+                    # 评分器 score_job 的键是 missing_skills，build_match_index 里
+                    # scored_jobs 就是把它映成 missing_items 的；这里照抄同一口径。
+                    if j.get('missing_skills'):
+                        slot['missing_items'] = [str(s) for s in j['missing_skills']]
+                    if j.get('optimization_points'):
+                        slot['optimization_points'] = [str(s) for s in j['optimization_points']]
         except Exception:                       # noqa: BLE001
-            pass                                # 拿不到理由就留空，不挡主流程
-    return reasons
+            pass                                # 拿不到就留空，不挡主流程
+    return index
 
 
 def generate_materials(run_dir, jobs, profile, args, offline):
@@ -258,12 +281,14 @@ def generate_materials(run_dir, jobs, profile, args, offline):
     except ConfigError as exc:
         print('❌ 配置错误：\n%s' % exc)
         return None
-    # 匹配理由一次算好所有岗位共用；gen_greeting 的 {resume}/{match_reasons}
-    # 缺一都不行（缺 resume 提示词里「我的情况」是「未提供」，没个人线索可写）。
-    reasons = _match_reasons(run_dir, profile, jobs)
+    # 匹配信息一次算好所有岗位共用——greeting 取 match_reasons，gen_resume 还取
+    # match_score / missing_items / optimization_points（阶段①「匹配分析」段）。
+    # gen_greeting 的 {resume}/{match_reasons} 缺一都不行（缺 resume 提示词里
+    # 「我的情况」是「未提供」，没个人线索可写）。
+    match_index = _match_info(run_dir, profile, jobs)
     def work(i):
         job = jobs[i - 1]
-        match = {'match_reasons': reasons.get(job.get('link') or '') or []}
+        match = match_index.get(job.get('link') or '') or {}
         g_row = r_row = None
         try:
             g_text, _ = gen_greeting(job, profile, match, cfg_g, run_dir, 'ai',
